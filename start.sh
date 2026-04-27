@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Activate virtual environment
+source venv/bin/activate
+
 LOGS_DIR="./logs"
 SUBDIRS=("record" "runtime" "scan" "upload")
 

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./venv/Scripts/python.exe -m blrec --help)",
+      "Bash(venv/Scripts/python.exe -m blrec --help)",
+      "Bash(tasklist)",
+      "Bash(chmod +x start.sh)"
+    ]
+  }
+}

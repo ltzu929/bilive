@@ -1,25 +1,28 @@
 version = "1.0"
 webhooks = []
-
-# blrec Settings
 [[tasks]]
-room_id = 173551
+room_id = 22966160
 enable_monitor = true
 enable_recorder = true
 
 [[tasks]]
-room_id = 7734200
+room_id = 8792912
 enable_monitor = true
-enable_recorder = true
+enable_recorder = false
+
+[[tasks]]
+room_id = 22384516
+enable_monitor = true
+enable_recorder = false
 
 [output]
-path_template = "{roomid}/{roomid}_{year}{month}{day}-{hour}-{minute}-{second}" # Don't change this
+path_template = "{roomid}/{roomid}_{year}{month}{day}-{hour}-{minute}-{second}"
 filesize_limit = 0
 duration_limit = 1800
-out_dir = "./Videos" # Don't change this
+out_dir = "./Videos"
 
 [logging]
-log_dir = "./logs/record" # Don't change this
+log_dir = "./logs/record"
 console_log_level = "INFO"
 backup_count = 30
 
@@ -48,7 +51,7 @@ fmp4_stream_timeout = 10
 read_timeout = 3
 disconnection_timeout = 600
 buffer_size = 32768
-save_cover = false
+save_cover = true
 cover_save_strategy = "dedup"
 
 [postprocessing]
@@ -59,7 +62,7 @@ delete_source = "auto"
 [space]
 check_interval = 300
 space_threshold = 10737418240
-recycle_records = false
+recycle_records = true
 
 [email_notification]
 began_message_type = "html"
