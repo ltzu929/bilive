@@ -33,7 +33,7 @@ base_play_info_api_urls = [ "https://api.live.bilibili.com",]
 
 [header]
 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36"
-cookie = ""
+cookie = "SESSDATA=1cc42b0a%2C1792848822%2Cf9de5241"
 
 [danmaku]
 danmu_uname = false
@@ -46,7 +46,7 @@ save_raw_danmaku = true
 [recorder]
 stream_format = "flv"
 recording_mode = "standard"
-quality_number = 250
+quality_number = 10000
 fmp4_stream_timeout = 10
 read_timeout = 3
 disconnection_timeout = 600

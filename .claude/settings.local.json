@@ -4,7 +4,13 @@
       "Bash(./venv/Scripts/python.exe -m blrec --help)",
       "Bash(venv/Scripts/python.exe -m blrec --help)",
       "Bash(tasklist)",
-      "Bash(chmod +x start.sh)"
+      "Bash(chmod +x start.sh)",
+      "Read(//c/Users/zk/**)",
+      "Bash(curl -s \"https://api.live.bilibili.com/room/v1/Room/get_info?room_id=22966160\")",
+      "Bash(curl -s \"https://api.live.bilibili.com/room/v1/Room/playInfo?room_id=22966160&quality=10000\" -H \"Cookie: SESSDATA=1cc42b0a%2C1792848822%2Cf9de5241\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('quality_description:', d['data'].get\\('quality_description', 'N/A'\\)\\)\")",
+      "Bash(curl -s \"https://api.live.bilibili.com/room/v1/Room/playInfo?room_id=22966160\" -H \"Cookie: SESSDATA=1cc42b0a%2C1792848822%2Cf9de5241\")",
+      "Bash(curl -s \"https://api.live.bilibili.com/live_room/v1/Room/playUrl?cid=22966160&quality=10000\" -H \"Cookie: SESSDATA=1cc42b0a%2C1792848822%2Cf9de5241\")"
     ]
   }
 }
