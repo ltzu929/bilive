@@ -3,7 +3,7 @@ webhooks = []
 [[tasks]]
 room_id = 22966160
 enable_monitor = true
-enable_recorder = true
+enable_recorder = false
 
 [[tasks]]
 room_id = 8792912
