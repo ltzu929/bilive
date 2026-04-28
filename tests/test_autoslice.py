@@ -75,5 +75,17 @@ class TestAnalysisResult(unittest.TestCase):
         os.remove(output_path)
 
 
+from src.autoslice.mllm_sdk.qwen_omni_sdk import qwen_omni_analyze
+
+
+class TestQwenOmniMain(BaseTest):
+    def test_qwen_omni_analyze(self):
+        result = qwen_omni_analyze(self.file_path, self.artist)
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result.title, str)
+        self.assertGreaterEqual(result.quality_score, 0)
+        self.assertLessEqual(result.quality_score, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
