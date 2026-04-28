@@ -378,3 +378,6 @@ src/subtitle/models/base.pt
 src/subtitle/models/small.pt
 src/burn/mergevideo.txt
 src/db/data.db
+
+# Claude local settings
+.claude/settings.local.json
