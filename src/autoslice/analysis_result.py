@@ -4,6 +4,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import json
+from src.log.logger import scan_log
 
 
 @dataclass
@@ -77,10 +78,21 @@ class AnalysisResult:
         )
 
     @classmethod
-    def from_json(cls, json_str: str) -> "AnalysisResult":
-        """从 JSON 字符串解析"""
-        data = json.loads(json_str)
-        return cls.from_dict(data)
+    def from_json(cls, json_str: str) -> Optional["AnalysisResult"]:
+        """从 JSON 字符串解析
+
+        Args:
+            json_str: JSON 格式的字符串
+
+        Returns:
+            AnalysisResult 对象，解析失败时返回 None
+        """
+        try:
+            data = json.loads(json_str)
+            return cls.from_dict(data)
+        except json.JSONDecodeError as e:
+            scan_log.error(f"Failed to parse JSON string: {e}")
+            return None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -104,7 +116,19 @@ class AnalysisResult:
             } if self.suggested_trim else None
         }
 
-    def to_json_file(self, output_path: str):
-        """保存为 JSON 文件"""
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+    def to_json_file(self, output_path: str) -> bool:
+        """保存为 JSON 文件
+
+        Args:
+            output_path: 输出文件路径
+
+        Returns:
+            保存成功返回 True，失败返回 False
+        """
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+            return True
+        except (IOError, OSError) as e:
+            scan_log.error(f"Failed to write JSON file '{output_path}': {e}")
+            return False
