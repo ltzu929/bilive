@@ -76,6 +76,7 @@ class TestAnalysisResult(unittest.TestCase):
 
 
 from src.autoslice.mllm_sdk.qwen_omni_sdk import qwen_omni_analyze
+from src.autoslice.slice_quality_filter import should_retain_slice
 
 
 class TestQwenOmniMain(BaseTest):
@@ -85,6 +86,39 @@ class TestQwenOmniMain(BaseTest):
         self.assertIsInstance(result.title, str)
         self.assertGreaterEqual(result.quality_score, 0)
         self.assertLessEqual(result.quality_score, 1)
+
+
+class TestSliceQualityFilter(unittest.TestCase):
+    def test_should_retain_high_quality(self):
+        result = AnalysisResult(
+            title="测试",
+            description="内容",
+            quality_score=0.8,
+            retain_recommendation=True
+        )
+        self.assertTrue(should_retain_slice(result, 0.6))
+
+    def test_should_skip_low_quality(self):
+        result = AnalysisResult(
+            title="测试",
+            description="内容",
+            quality_score=0.4,
+            retain_recommendation=True
+        )
+        self.assertFalse(should_retain_slice(result, 0.6))
+
+    def test_should_skip_not_recommended(self):
+        result = AnalysisResult(
+            title="测试",
+            description="内容",
+            quality_score=0.8,
+            retain_recommendation=False,
+            quality_reason="内容空洞"
+        )
+        self.assertFalse(should_retain_slice(result, 0.6))
+
+    def test_should_skip_none_result(self):
+        self.assertFalse(should_retain_slice(None, 0.6))
 
 
 if __name__ == "__main__":
