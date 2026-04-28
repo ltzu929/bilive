@@ -1,4 +1,4 @@
-# pause#!/bin/bash
+#!/bin/bash
 export config=./settings.toml
 
 # Do not use proxy

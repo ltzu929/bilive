@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Set PYTHONPATH for imports
+export PYTHONPATH=./src
+
 # Activate virtual environment
 source venv/bin/activate
 

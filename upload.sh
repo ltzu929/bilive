@@ -1,3 +1,7 @@
+#!/bin/bash
+# Set PYTHONPATH for imports
+export PYTHONPATH=./src
+
 # kill the previous scan and upload process
 kill -9 $(ps aux | grep 'src.burn.scan' | grep -v grep | awk '{print $2}')
 kill -9 $(ps aux | grep '[u]pload' | awk '{print $2}')
