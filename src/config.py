@@ -95,3 +95,9 @@ HIDREAM_API_KEY = config.get("cover", {}).get("hidream_api_key")
 DMX_API_TOKEN = config.get("cover", {}).get("dmx_api_token")
 SLICE_PROMPT = config.get("slice", {}).get("slice_prompt")
 COVER_PROMPT = config.get("cover", {}).get("cover_prompt")
+
+# OMNI 分析配置
+OMNI_ENABLE_QUALITY_FILTER = config.get("slice", {}).get("omni", {}).get("enable_quality_filter", True)
+OMNI_QUALITY_THRESHOLD = config.get("slice", {}).get("omni", {}).get("quality_threshold", 0.6)
+OMNI_ENABLE_DEEP_ANALYSIS = config.get("slice", {}).get("omni", {}).get("enable_deep_analysis", True)
+OMNI_ANALYSIS_PROMPT = config.get("slice", {}).get("omni", {}).get("analysis_prompt", "")

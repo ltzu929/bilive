@@ -36,6 +36,12 @@ zhipu_api_key = "" # Apply for your own GLM-4v-Plus API key at https://www.bigmo
 gemini_api_key = "" # Apply for your own Gemini API key at https://aistudio.google.com/app/apikey
 sensenova_api_key = "" # Apply for your own SenseNova API key at https://console.sensecore.cn/aistudio/management/api-key
 
+[slice.omni]
+enable_quality_filter = true       # 启用质量筛选
+quality_threshold = 0.6            # 质量阈值
+enable_deep_analysis = true        # 启用深度分析（为 MCP 剪辑准备数据）
+analysis_prompt = ""               # 自定义分析 prompt（可选，空则使用默认）
+
 [cover]
 generate_cover = false # whether to generate cover
 cover_prompt = "" # Write your own cover prompt here
