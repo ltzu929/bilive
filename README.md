@@ -39,6 +39,7 @@
   <img src="assets/zhipu-color.svg" alt="Zhipu GLM-4V-PLUS" width="60" height="60" />
   <img src="assets/gemini-brand-color.svg" alt="Google Gemini 1.5 Pro" width="60" height="60" />
   <img src="assets/qwen-color.svg" alt="Qwen-2.5-72B-Instruct" width="60" height="60" />
+  <img src="assets/qwen-omni.svg" alt="Qwen 2.5 Omni" width="60" height="60" />
   <img src="assets/sensenova-brand-color.svg" alt="SenseNova V6 Pro" width="100" height="60" />
 </div>
 
@@ -82,6 +83,7 @@
   - `GLM-4V-PLUS`
   - `Gemini-2.5-flash`
   - `Qwen-2.5-72B-Instruct`
+  - `Qwen-2.5-Omni-7B-Instruct` (多模态分析：标题+描述+标签+质量评分)
   - `SenseNova V6 Pro`
 - **( :tada: NEW)持久化登录/下载/上传视频(支持多p投稿)**：[bilitool](https://github.com/timerring/bilitool) 已经开源，实现持久化登录，下载视频及弹幕(含多p)/上传视频(可分p投稿)，查询投稿状态，查询详细信息等功能，一键pip安装，可以使用命令行 cli 操作，也可以作为api调用。
 - **( :tada: NEW)自动多平台循环直播推流**：该工具已经开源 [looplive](https://github.com/timerring/looplive) 是一个 7 x 24 小时全自动**循环多平台同时推流**直播工具。
@@ -209,10 +211,11 @@ MLLM 模型主要用于自动切片后的切片标题生成，此功能默认关
 
 接下来配置模型有关的 `mllm_model` 参数即对应的 api-key，请自行根据链接注册账号并且申请对应 api key，填写在对应的参数中，请注意以下模型只有你在 `mllm_model` 参数中设置的那个模型会生效。
 
-| Company   |    Alicloud           |       zhipu        |    Google        | SenseNova |
-|----------------|-----------------------|------------------|-------------------|-------------------|
-| Name   | Qwen-2.5-72B-Instruct | GLM-4V-PLUS | Gemini-2.0-flash | SenseNova V6 Pro |
-| `mllm_model`   | `qwen`  | `zhipu` | `gemini` | `sensenova` |
+| Company   |    Alicloud           |       zhipu        |    Google        | SenseNova | Alicloud (OMNI) |
+|----------------|-----------------------|------------------|-------------------|-------------------|-------------------|
+| Name   | Qwen-2.5-72B-Instruct | GLM-4V-PLUS | Gemini-2.0-flash | SenseNova V6 Pro | Qwen-2.5-Omni |
+| `mllm_model`   | `qwen`  | `zhipu` | `gemini` | `sensenova` | `qwen-omni` |
+| 功能 | 仅标题 | 仅标题 | 仅标题 | 仅标题 | 标题+描述+标签+质量评分+MCP数据 |
 | `API key`   | [qwen_api_key](https://bailian.console.aliyun.com/?apiKey=1) | [zhipu_api_key](https://www.bigmodel.cn/invite?icode=shBtZUfNE6FfdMH1R6NybGczbXFgPRGIalpycrEwJ28%3D) | [gemini_api_key](https://aistudio.google.com/app/apikey) | [sensenova_api_key](https://console.sensecore.cn/aistudio/management/api-key) |
 
 
