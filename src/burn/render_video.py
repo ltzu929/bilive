@@ -93,7 +93,36 @@ def render_video(video_path):
             )
             for slice_path in slices_path:
                 try:
-                    slice_title = generate_title(slice_path, artist)
+                    result = generate_title(slice_path, artist)
+
+                    # 处理 OMNI 分析结果
+                    if result is None:
+                        scan_log.error(f"Failed to generate title for {slice_path}")
+                        continue
+
+                    # 检查是否为 OMNI 分析结果对象
+                    from src.autoslice.analysis_result import AnalysisResult
+                    if isinstance(result, AnalysisResult):
+                        # 保存分析结果 JSON（供 MCP 剪辑使用）
+                        from src.config import OMNI_ENABLE_DEEP_ANALYSIS
+                        if OMNI_ENABLE_DEEP_ANALYSIS:
+                            analysis_json_path = slice_path[:-4] + "_analysis.json"
+                            result.to_json_file(analysis_json_path)
+                            scan_log.info(f"Analysis result saved: {analysis_json_path}")
+
+                        # 质量筛选
+                        from src.config import OMNI_ENABLE_QUALITY_FILTER, OMNI_QUALITY_THRESHOLD
+                        from src.autoslice.slice_quality_filter import should_retain_slice
+                        if OMNI_ENABLE_QUALITY_FILTER and not should_retain_slice(result, OMNI_QUALITY_THRESHOLD):
+                            scan_log.info(f"Slice {slice_path} filtered by quality, removing")
+                            os.remove(slice_path)
+                            continue
+
+                        slice_title = result.title
+                    else:
+                        # 传统模型返回标题字符串
+                        slice_title = result
+
                     slice_video_flv_path = slice_path[:-4] + ".flv"
                     inject_metadata(slice_path, slice_title, slice_video_flv_path)
                     os.remove(slice_path)
