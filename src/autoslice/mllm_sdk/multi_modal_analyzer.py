@@ -43,7 +43,7 @@ def combine_analysis(
     """综合视觉和音频分析结果
 
     Args:
-        visual_result: 视觉分析结果
+        visual_result: 视觉分析结果（可能为空）
         audio_result: 音频分析结果
         artist: 主播名称
 
@@ -51,26 +51,31 @@ def combine_analysis(
         Dict: 综合分析结果
     """
     # 提取关键信息
-    visual_quality = visual_result.get("visual_quality", 0.5)
+    visual_quality = visual_result.get("visual_quality", 0.0) if visual_result else 0.0
     audio_quality = audio_result.get("audio_quality", 0.5)
 
-    visual_title = visual_result.get("visual_title", "")
-    visual_tags = visual_result.get("visual_tags", [])
-    visual_highlights = visual_result.get("visual_highlights", [])
+    visual_title = visual_result.get("visual_title", "") if visual_result else ""
+    visual_tags = visual_result.get("visual_tags", []) if visual_result else []
+    visual_highlights = visual_result.get("visual_highlights", []) if visual_result else []
 
-    audio_emotion = audio_result.get("audio_emotion", "neutral")
+    audio_emotion = audio_result.get("emotion", "neutral")
     audio_keywords = audio_result.get("audio_keywords", [])
     transcript = audio_result.get("transcript", "")
 
-    # 综合质量评分（加权平均）
-    quality_score = (visual_quality * 0.6 + audio_quality * 0.4)
+    # 综合质量评分
+    # 纯音频模式：audio_quality * 1.0
+    # 多模态模式：(visual_quality * 0.6 + audio_quality * 0.4)
+    if visual_quality > 0:
+        quality_score = (visual_quality * 0.6 + audio_quality * 0.4)
+    else:
+        quality_score = audio_quality
 
     # 综合标题
     if visual_title:
         title = visual_title
-    elif transcript:
-        # 从转录文本生成标题（取前30字）
-        title = f"{artist}直播-{transcript[:20]}"
+    elif transcript and len(transcript) > 20:
+        # 从转录文本生成标题（取精彩片段）
+        title = f"{artist}直播-{transcript[:25]}"
     else:
         title = f"{artist}精彩片段"
 
@@ -80,19 +85,22 @@ def combine_analysis(
         tags = ["直播", "精彩"]
 
     # 内容类型判断
-    content_type = visual_result.get("content_type", "other")
+    content_type = visual_result.get("content_type", "other") if visual_result else "other"
     if content_type == "other":
-        if audio_emotion == "excited":
+        # 从音频推断内容类型
+        if audio_emotion in ["excited", "angry"]:
             content_type = "gameplay"
         elif "唱歌" in transcript or "sing" in transcript.lower():
             content_type = "singing"
-        elif audio_emotion == "happy":
+        elif audio_emotion in ["happy", "calm"]:
             content_type = "chat"
 
     # 保留建议
     retain_recommendation = quality_score >= 0.5
 
-    quality_reason = f"视觉评分:{visual_quality:.1f}, 音频评分:{audio_quality:.1f}"
+    quality_reason = f"音频评分:{audio_quality:.1f}"
+    if visual_quality > 0:
+        quality_reason = f"视觉评分:{visual_quality:.1f}, 音频评分:{audio_quality:.1f}"
     if audio_emotion != "neutral":
         quality_reason += f", 情绪:{audio_emotion}"
 
@@ -118,7 +126,9 @@ def multi_modal_analyze(
     frame_fps: float = DEFAULT_FRAME_FPS,
     whisper_model: str = DEFAULT_WHISPER_MODEL,
     enable_visual: bool = True,
-    enable_audio: bool = True
+    enable_audio: bool = True,
+    enable_emotion: bool = False,
+    emotion_model: str = "facebook/wav2vec2-base-robust-emotion"
 ) -> AnalysisResult:
     """多模型协作分析视频切片
 
@@ -141,7 +151,24 @@ def multi_modal_analyze(
     audio_result = {}
     frames = []
 
-    # 1. 视觉分析
+    # 1. 音频分析
+    if enable_audio:
+        scan_log.info("Running audio analysis...")
+        audio_result = analyze_audio(
+            video_path,
+            whisper_model,
+            enable_emotion=enable_emotion,
+            emotion_model=emotion_model
+        )
+
+        # 释放 GPU 显存（Whisper 和情感模型）
+        if enable_emotion:
+            from .audio_analyzer import unload_emotion_model
+            unload_emotion_model()
+    else:
+        audio_result = {"transcript": "", "emotion": "neutral"}
+
+    # 2. 视觉分析（可选）
     if enable_visual:
         scan_log.info("Running visual analysis...")
         frames = extract_key_frames(video_path, frame_fps)
@@ -149,26 +176,17 @@ def multi_modal_analyze(
             visual_result = analyze_frames(
                 frames, artist, visual_model_url, visual_model_name
             )
+            # 清理临时帧文件
+            cleanup_frames(frames)
         else:
             scan_log.warning("No frames extracted, skipping visual analysis")
             visual_result = {"visual_quality": 0.3, "error": "no_frames"}
-
-    # 2. 音频分析
-    if enable_audio:
-        scan_log.info("Running audio analysis...")
-        audio_result = analyze_audio(video_path, whisper_model)
-    else:
-        audio_result = {"audio_quality": 0.3, "transcript": ""}
 
     # 3. 综合分析
     scan_log.info("Combining analysis results...")
     combined = combine_analysis(visual_result, audio_result, artist)
 
-    # 4. 清理临时文件
-    if frames:
-        cleanup_frames(frames)
-
-    # 5. 构建 AnalysisResult
+    # 4. 构建 AnalysisResult
     result = AnalysisResult.from_dict(combined)
 
     scan_log.info(

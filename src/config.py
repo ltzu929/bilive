@@ -101,3 +101,15 @@ OMNI_ENABLE_QUALITY_FILTER = config.get("slice", {}).get("omni", {}).get("enable
 OMNI_QUALITY_THRESHOLD = config.get("slice", {}).get("omni", {}).get("quality_threshold", 0.6)
 OMNI_ENABLE_DEEP_ANALYSIS = config.get("slice", {}).get("omni", {}).get("enable_deep_analysis", True)
 OMNI_ANALYSIS_PROMPT = config.get("slice", {}).get("omni", {}).get("analysis_prompt", "")
+
+# 多模型协作配置
+MULTI_MODAL_VISUAL_URL = config.get("slice", {}).get("multi_modal", {}).get("visual_model_url", "http://localhost:1234/v1")
+MULTI_MODAL_VISUAL_NAME = config.get("slice", {}).get("multi_modal", {}).get("visual_model_name", "local-model")
+MULTI_MODAL_WHISPER_MODEL = config.get("slice", {}).get("multi_modal", {}).get("whisper_model", "base")
+MULTI_MODAL_FRAME_FPS = config.get("slice", {}).get("multi_modal", {}).get("frame_fps", 0.5)
+MULTI_MODAL_ENABLE_VISUAL = config.get("slice", {}).get("multi_modal", {}).get("enable_visual", True)
+MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("enable_audio", True)
+
+# 情感分析配置（新增）
+MULTI_MODAL_ENABLE_EMOTION_ANALYSIS = config.get("slice", {}).get("multi_modal", {}).get("enable_emotion_analysis", False)
+MULTI_MODAL_EMOTION_MODEL = config.get("slice", {}).get("multi_modal", {}).get("emotion_model", "facebook/wav2vec2-base-robust-emotion")

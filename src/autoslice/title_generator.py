@@ -33,6 +33,47 @@ def title_generator(model_type):
                 from .mllm_sdk.qwen_omni_sdk import qwen_omni_analyze
                 return qwen_omni_analyze(video_path, artist)
 
+            elif model_type == "multi-modal":
+                from .mllm_sdk.multi_modal_analyzer import multi_modal_analyze
+                from src.config import (
+                    MULTI_MODAL_VISUAL_URL,
+                    MULTI_MODAL_VISUAL_NAME,
+                    MULTI_MODAL_WHISPER_MODEL,
+                    MULTI_MODAL_FRAME_FPS,
+                    MULTI_MODAL_ENABLE_VISUAL,
+                    MULTI_MODAL_ENABLE_AUDIO,
+                    MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
+                    MULTI_MODAL_EMOTION_MODEL
+                )
+                return multi_modal_analyze(
+                    video_path, artist,
+                    visual_model_url=MULTI_MODAL_VISUAL_URL,
+                    visual_model_name=MULTI_MODAL_VISUAL_NAME,
+                    frame_fps=MULTI_MODAL_FRAME_FPS,
+                    whisper_model=MULTI_MODAL_WHISPER_MODEL,
+                    enable_visual=MULTI_MODAL_ENABLE_VISUAL,
+                    enable_audio=MULTI_MODAL_ENABLE_AUDIO,
+                    enable_emotion=MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
+                    emotion_model=MULTI_MODAL_EMOTION_MODEL
+                )
+
+            elif model_type == "local-audio":
+                # 纯音频分析模式（8G 显存适配）
+                from .mllm_sdk.multi_modal_analyzer import multi_modal_analyze
+                from src.config import (
+                    MULTI_MODAL_WHISPER_MODEL,
+                    MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
+                    MULTI_MODAL_EMOTION_MODEL
+                )
+                return multi_modal_analyze(
+                    video_path, artist,
+                    whisper_model=MULTI_MODAL_WHISPER_MODEL,
+                    enable_visual=False,  # 不启用视觉分析
+                    enable_audio=True,
+                    enable_emotion=MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
+                    emotion_model=MULTI_MODAL_EMOTION_MODEL
+                )
+
             else:
                 scan_log.error(f"Unsupported model type: {model_type}")
                 return None

@@ -3,10 +3,16 @@
 # 多模型协作架构 - 音频分析模块
 
 import os
+import gc
 import subprocess
 import tempfile
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from src.log.logger import scan_log
+
+# 全局变量缓存模型，避免重复加载
+_emotion_model = None
+_emotion_processor = None
+_whisper_model = None
 
 AUDIO_ANALYSIS_PROMPT = """基于以下音频转录文本，分析直播内容：
 
@@ -173,12 +179,150 @@ def cleanup_audio(audio_path: str) -> None:
             pass
 
 
-def analyze_audio(video_path: str, whisper_model: str = "base") -> Dict[str, Any]:
+def release_gpu_memory(delay: float = 3.0) -> None:
+    """释放 GPU 显存
+
+    Args:
+        delay: 等待时间（秒），确保显存完全释放
+    """
+    import time
+    try:
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            scan_log.info("GPU memory cache cleared")
+    except ImportError:
+        scan_log.warning("torch not available for GPU memory release")
+
+    time.sleep(delay)
+    scan_log.info(f"GPU memory release completed (waited {delay}s)")
+
+
+def load_emotion_model(model_name: str = "facebook/wav2vec2-base-robust-emotion") -> tuple:
+    """加载音频情感识别模型
+
+    Args:
+        model_name: HuggingFace 模型名称
+            - facebook/wav2vec2-base-robust-emotion (通用情感)
+            - 或其他 wav2vec2 微调版本
+
+    Returns:
+        tuple: (model, processor) 或 (None, None) 失败时
+    """
+    global _emotion_model, _emotion_processor
+
+    if _emotion_model is not None and _emotion_processor is not None:
+        scan_log.info("Using cached emotion model")
+        return _emotion_model, _emotion_processor
+
+    try:
+        from transformers import Wav2Vec2ForSequenceClassification, Wav2Vec2Processor
+
+        scan_log.info(f"Loading emotion model: {model_name}")
+        processor = Wav2Vec2Processor.from_pretrained(model_name)
+        model = Wav2Vec2ForSequenceClassification.from_pretrained(model_name)
+
+        # 缓存模型
+        _emotion_model = model
+        _emotion_processor = processor
+
+        scan_log.info(f"Emotion model loaded successfully")
+        return model, processor
+
+    except ImportError:
+        scan_log.error("transformers not installed. Run: pip install transformers")
+        return None, None
+    except Exception as e:
+        scan_log.error(f"Failed to load emotion model: {e}")
+        return None, None
+
+
+def detect_emotion_with_model(
+    audio_path: str,
+    model_name: str = "facebook/wav2vec2-base-robust-emotion"
+) -> Dict[str, Any]:
+    """使用深度模型检测音频情感
+
+    Args:
+        audio_path: 音频文件路径（WAV 格式，16kHz）
+        model_name: 情感模型名称
+
+    Returns:
+        Dict: 情感分析结果
+    """
+    model, processor = load_emotion_model(model_name)
+
+    if model is None or processor is None:
+        scan_log.warning("Emotion model unavailable, falling back to heuristic")
+        return {"emotion": "neutral", "emotion_confidence": 0.3, "error": "model_unavailable"}
+
+    try:
+        import librosa
+        import torch
+
+        # 加载音频
+        scan_log.info(f"Analyzing emotion for: {audio_path}")
+        audio, sr = librosa.load(audio_path, sr=16000)
+
+        # 预处理
+        inputs = processor(audio, sampling_rate=16000, return_tensors="pt", padding=True)
+
+        # 推理
+        with torch.no_grad():
+            logits = model(**inputs).logits
+            predicted_id = torch.argmax(logits, dim=-1).item()
+
+        # 获取情感标签
+        emotion_label = model.config.id2label.get(predicted_id, "unknown")
+
+        # 计算置信度
+        probs = torch.softmax(logits, dim=-1)
+        confidence = probs[0][predicted_id].item()
+
+        scan_log.info(f"Detected emotion: {emotion_label} (confidence: {confidence:.2f})")
+
+        return {
+            "emotion": emotion_label,
+            "emotion_confidence": confidence,
+            "all_emotions": {model.config.id2label[i]: probs[0][i].item() for i in range(len(probs[0]))}
+        }
+
+    except Exception as e:
+        scan_log.error(f"Emotion detection failed: {e}")
+        return {"emotion": "neutral", "emotion_confidence": 0.3, "error": str(e)}
+
+
+def unload_emotion_model() -> None:
+    """卸载情感模型，释放显存"""
+    global _emotion_model, _emotion_processor
+
+    if _emotion_model is not None:
+        del _emotion_model
+        _emotion_model = None
+
+    if _emotion_processor is not None:
+        del _emotion_processor
+        _emotion_processor = None
+
+    release_gpu_memory()
+    scan_log.info("Emotion model unloaded, GPU memory released")
+
+
+def analyze_audio(
+    video_path: str,
+    whisper_model: str = "base",
+    enable_emotion: bool = False,
+    emotion_model: str = "facebook/wav2vec2-base-robust-emotion"
+) -> Dict[str, Any]:
     """完整的音频分析流程
 
     Args:
         video_path: 视频文件路径
-        whisper_model: Whisper 模型大小
+        whisper_model: Whisper 模型大小 (tiny/base/small/medium/large)
+        enable_emotion: 是否启用深度情感分析
+        emotion_model: 情感识别模型名称
 
     Returns:
         Dict: 音频分析结果
@@ -188,17 +332,27 @@ def analyze_audio(video_path: str, whisper_model: str = "base") -> Dict[str, Any
     if not audio_path:
         return {"error": "audio_extraction_failed"}
 
-    # 2. 转录
-    transcript_result = transcribe_audio_whisper(audio_path, whisper_model)
-    transcript = transcript_result.get("transcript", "")
+    result = {}
 
-    # 3. 分析内容
-    analysis_result = analyze_audio_content(transcript)
+    # 2. Whisper 转录
+    transcript_result = transcribe_audio_whisper(audio_path, whisper_model)
+    result["transcript"] = transcript_result.get("transcript", "")
+    result["segments"] = transcript_result.get("segments", [])
+
+    # 3. 情感分析（可选）
+    if enable_emotion:
+        emotion_result = detect_emotion_with_model(audio_path, emotion_model)
+        result["emotion"] = emotion_result.get("emotion", "neutral")
+        result["emotion_confidence"] = emotion_result.get("emotion_confidence", 0.3)
+        result["all_emotions"] = emotion_result.get("all_emotions", {})
+    else:
+        # 使用启发式情感分析
+        content_analysis = analyze_audio_content(result["transcript"])
+        result["emotion"] = content_analysis.get("audio_emotion", "neutral")
+        result["audio_keywords"] = content_analysis.get("audio_keywords", [])
+        result["audio_quality"] = content_analysis.get("audio_quality", 0.5)
 
     # 4. 清理临时文件
     cleanup_audio(audio_path)
 
-    return {
-        "transcript": transcript,
-        **analysis_result
-    }
+    return result

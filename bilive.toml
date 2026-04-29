@@ -30,7 +30,10 @@ slice_num = 2 # the number of slices
 slice_overlap = 30 # the overlap of slices(seconds) see my package https://github.com/timerring/auto-slice-video for more details
 slice_step = 1 # the step of slices(seconds)
 min_video_size = 200 # The minimum video size to be sliced (MB)
-mllm_model = "qwen" # the multi-model LLMs, can be "qwen" or "gemini" or "zhipu" or "sensenova"
+mllm_model = "qwen" # the multi-model LLMs, can be "qwen" or "gemini" or "zhipu" or "sensenova" or "qwen-omni" or "multi-modal" or "local-audio"
+# local-audio: 纯音频分析模式（8G显存适配，需本地 Whisper）
+# multi-modal: 音频+视觉分析模式（需 LM Studio + Whisper）
+# qwen-omni: OMNI API 模式（需 DashScope API Key）
 qwen_api_key = "" # Apply for your own Qwen API key at https://bailian.console.aliyun.com/?apiKey=1
 zhipu_api_key = "" # Apply for your own GLM-4v-Plus API key at https://www.bigmodel.cn/invite?icode=shBtZUfNE6FfdMH1R6NybGczbXFgPRGIalpycrEwJ28%3D
 gemini_api_key = "" # Apply for your own Gemini API key at https://aistudio.google.com/app/apikey
@@ -41,6 +44,19 @@ enable_quality_filter = true       # 启用质量筛选
 quality_threshold = 0.6            # 质量阈值
 enable_deep_analysis = true        # 启用深度分析（为 MCP 剪辑准备数据）
 analysis_prompt = ""               # 自定义分析 prompt（可选，空则使用默认）
+
+[slice.multi_modal]
+visual_model_url = "http://localhost:1234/v1"  # LM Studio 服务地址
+visual_model_name = "local-model"              # LM Studio 模型名称
+audio_model = "whisper"                        # 音频模型
+whisper_model = "base"                         # Whisper 模型大小 (tiny/base/small/medium/large)
+frame_fps = 0.5                                # 帧提取频率（每2秒提取1帧）
+enable_visual = false                          # 启用视觉分析（8G显存建议关闭）
+enable_audio = true                            # 启用音频分析
+
+# 情感分析配置（新增）
+enable_emotion_analysis = false                # 启用深度情感分析（需安装 transformers）
+emotion_model = "facebook/wav2vec2-base-robust-emotion"  # 情感识别模型
 
 [cover]
 generate_cover = false # whether to generate cover
