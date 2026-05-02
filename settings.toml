@@ -3,7 +3,7 @@ webhooks = []
 [[tasks]]
 room_id = 22966160
 enable_monitor = true
-enable_recorder = false
+enable_recorder = true
 
 [[tasks]]
 room_id = 8792912
@@ -19,7 +19,7 @@ enable_recorder = true
 path_template = "{roomid}/{roomid}_{year}{month}{day}-{hour}-{minute}-{second}"
 filesize_limit = 0
 duration_limit = 1800
-out_dir = "./Videos"
+out_dir = "/mnt/d/alldata/直播视频"
 
 [logging]
 log_dir = "./logs/record"
@@ -61,7 +61,7 @@ delete_source = "auto"
 
 [space]
 check_interval = 300
-space_threshold = 10737418240
+space_threshold = 21474836480
 recycle_records = true
 
 [email_notification]

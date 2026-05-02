@@ -1,5 +1,10 @@
 #!/bin/bash
-export config=./settings.toml
+# Activate virtual environment
+source venv/bin/activate
+
+# Get absolute path of project directory
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+config="$PROJECT_DIR/settings.toml"
 
 # Do not use proxy
 export no_proxy=*
