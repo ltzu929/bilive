@@ -6,6 +6,7 @@ import os
 import gc
 import subprocess
 import tempfile
+import re
 from typing import Dict, Any, Optional
 from src.log.logger import scan_log
 
@@ -26,6 +27,67 @@ AUDIO_ANALYSIS_PROMPT = """基于以下音频转录文本，分析直播内容�
 4. audio_quality: 内容质量评分（0-1），基于对话有趣程度
 5. audio_highlights: 对话中的精彩片段或金句
 """
+
+
+def normalize_transcript(text: str) -> str:
+    """Normalize Whisper output for downstream title/description generation."""
+    if not text:
+        return ""
+
+    try:
+        from zhconv import convert
+
+        text = convert(text, "zh-cn")
+    except Exception:
+        pass
+
+    text = text.replace("\ufffd", "")
+    text = re.sub(r"[\uac00-\ud7af\u3130-\u318f\u1100-\u11ff]+", "", text)
+    text = re.sub(r"[A-Za-z]{2,}", "", text)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"([。！？!?，,、])\1+", r"\1", text)
+    return text.strip()
+
+
+def _has_terminal_punctuation(text: str) -> bool:
+    return bool(text and re.search(r"[。！？!?，,、]$", text))
+
+
+def format_transcript_segments(segments: list, fallback_text: str = "") -> str:
+    """Build a readable Chinese transcript from Whisper segment boundaries."""
+    if not segments:
+        return normalize_transcript(fallback_text)
+
+    parts = []
+    chars_since_sentence = 0
+
+    for index, segment in enumerate(segments):
+        text = normalize_transcript(segment.get("text", ""))
+        if not text:
+            continue
+
+        text = text.rstrip("，,、。！？!?")
+        chars_since_sentence += len(text)
+
+        next_segment = segments[index + 1] if index + 1 < len(segments) else None
+        gap = 0.0
+        if next_segment:
+            gap = float(next_segment.get("start", 0.0) or 0.0) - float(segment.get("end", 0.0) or 0.0)
+
+        if not next_segment:
+            punctuation = "。"
+        elif gap >= 0.8 or chars_since_sentence >= 36:
+            punctuation = "。"
+            chars_since_sentence = 0
+        else:
+            punctuation = "，"
+
+        if _has_terminal_punctuation(text):
+            parts.append(text)
+        else:
+            parts.append(f"{text}{punctuation}")
+
+    return "".join(parts).strip() or normalize_transcript(fallback_text)
 
 
 def extract_audio(video_path: str) -> str:
@@ -86,8 +148,11 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[
         scan_log.info(f"Transcribing audio: {audio_path}")
         result = model.transcribe(audio_path, language="zh")
 
-        transcript = result.get("text", "")
         segments = result.get("segments", [])
+        for segment in segments:
+            if "text" in segment:
+                segment["text"] = normalize_transcript(segment["text"])
+        transcript = format_transcript_segments(segments, result.get("text", ""))
 
         scan_log.info(f"Transcription complete: {len(transcript)} chars, {len(segments)} segments")
 

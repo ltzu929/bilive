@@ -124,8 +124,10 @@ def slice_only(video_path):
             inject_metadata(slice_path, slice_title, slice_video_flv_path)
             os.remove(slice_path)
 
-            # 加入上传队列
-            if not insert_upload_queue(slice_video_flv_path):
+            # 加入上传队列；本地测试时可跳过，避免误传整场调试产物。
+            if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1":
+                scan_log.info(f"Skip upload queue for local test: {slice_video_flv_path}")
+            elif not insert_upload_queue(slice_video_flv_path):
                 scan_log.error(f"Cannot insert slice to upload queue: {slice_video_flv_path}")
             else:
                 scan_log.info(f"Slice ready for upload: {slice_video_flv_path}")
@@ -136,9 +138,12 @@ def slice_only(video_path):
                 os.remove(slice_path)
 
     # 5. 清理原始文件（录制文件 + 弹幕文件）
-    for remove_path in [original_video_path, xml_path, ass_path]:
-        if os.path.exists(remove_path):
-            os.remove(remove_path)
-            scan_log.info(f"Removed: {remove_path}")
+    if os.getenv("BILIVE_KEEP_SOURCE") == "1":
+        scan_log.info("BILIVE_KEEP_SOURCE=1, keep original video/danmaku files.")
+    else:
+        for remove_path in [original_video_path, xml_path, ass_path]:
+            if os.path.exists(remove_path):
+                os.remove(remove_path)
+                scan_log.info(f"Removed: {remove_path}")
 
     scan_log.info(f"Slice-only processing complete for: {original_video_path}")

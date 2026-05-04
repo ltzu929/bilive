@@ -3,6 +3,7 @@
 # 多模型协作架构 - 综合分析模块
 
 import json
+import re
 from typing import Dict, Any
 from src.log.logger import scan_log
 from src.autoslice.analysis_result import AnalysisResult, Highlight, TrimSuggestion
@@ -33,6 +34,43 @@ DEFAULT_VISUAL_MODEL_URL = "http://localhost:1234/v1"
 DEFAULT_VISUAL_MODEL_NAME = "local-model"
 DEFAULT_FRAME_FPS = 0.5
 DEFAULT_WHISPER_MODEL = "base"
+
+
+def _truncate_text(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip("，。！？、,!?")
+
+
+def _truncate_description(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+
+    candidate = text[:max_len]
+    sentence_breaks = [candidate.rfind(mark) for mark in "。！？!?"]
+    break_at = max(sentence_breaks)
+    if break_at >= max_len * 0.55:
+        return candidate[:break_at + 1]
+
+    return candidate.rstrip("，。！？、,!?") + "。"
+
+
+def _build_audio_title(artist: str, keywords: list, transcript: str) -> str:
+    """Build a conservative title without copying raw ASR noise verbatim."""
+    clean_keywords = []
+    for keyword in keywords:
+        keyword = re.sub(r"\s+", "", str(keyword))
+        if 2 <= len(keyword) <= 6 and keyword not in clean_keywords:
+            clean_keywords.append(keyword)
+
+    if clean_keywords:
+        title = f"{artist}直播高能：{'、'.join(clean_keywords[:2])}"
+    elif transcript:
+        title = f"{artist}直播高能片段"
+    else:
+        title = f"{artist}精彩片段"
+
+    return _truncate_text(title, 30)
 
 
 def combine_analysis(
@@ -72,12 +110,9 @@ def combine_analysis(
 
     # 综合标题
     if visual_title:
-        title = visual_title
-    elif transcript and len(transcript) > 20:
-        # 从转录文本生成标题（取精彩片段）
-        title = f"{artist}直播-{transcript[:25]}"
+        title = _truncate_text(visual_title, 30)
     else:
-        title = f"{artist}精彩片段"
+        title = _build_audio_title(artist, audio_keywords, transcript)
 
     # 综合标签
     tags = list(set(visual_tags + audio_keywords))[:5]
@@ -106,7 +141,7 @@ def combine_analysis(
 
     return {
         "title": title,
-        "description": transcript[:100] if transcript else "精彩直播片段",
+        "description": _truncate_description(transcript, 100) if transcript else "精彩直播片段",
         "tags": tags,
         "content_type": content_type,
         "quality_score": quality_score,

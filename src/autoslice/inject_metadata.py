@@ -9,6 +9,7 @@ def inject_metadata(video_path, generate_title, output_path):
     """Slice the video using ffmpeg."""
     command = [
         "ffmpeg",
+        "-y",
         "-i",
         video_path,
         "-metadata:g",
