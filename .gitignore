@@ -375,6 +375,7 @@ cookies.json
 
 # Ignore settings with sensitive cookies
 settings.toml
+.secrets/
 
 # The model files exceeds the size limit 100MB of github, so download them separately.
 src/subtitle/models/base.pt

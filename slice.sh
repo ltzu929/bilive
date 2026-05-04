@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start the normal render/scan pipeline and uploader.
+# Start slice-only scanning and uploader.
 
 set -e
 
@@ -12,10 +12,11 @@ export PYTHONPATH=./src
 mkdir -p ./logs/runtime ./logs/scan ./logs/upload
 
 kill -9 $(ps aux | grep 'src.burn.scan' | grep -v grep | awk '{print $2}') 2>/dev/null || true
+kill -9 $(ps aux | grep 'src.burn.scan_slice' | grep -v grep | awk '{print $2}') 2>/dev/null || true
 kill -9 $(ps aux | grep '[u]pload' | awk '{print $2}') 2>/dev/null || true
 
-nohup python -m src.burn.scan > ./logs/runtime/scan-$(date +%Y%m%d-%H%M%S).log 2>&1 &
+nohup python -m src.burn.scan_slice > ./logs/runtime/slice-$(date +%Y%m%d-%H%M%S).log 2>&1 &
 nohup python -m src.upload.upload > ./logs/runtime/upload-$(date +%Y%m%d-%H%M%S).log 2>&1 &
 
-echo "Upload pipeline started."
+echo "Slice-only pipeline started."
 echo "Logs: ./logs/runtime"
