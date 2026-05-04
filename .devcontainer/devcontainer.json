@@ -1,4 +1,41 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/universal:2",
-  "features": {}
+  "name": "bilive",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.10-bookworm",
+  "features": {},
+  "containerEnv": {
+    "TZ": "Asia/Shanghai",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.vscode-python-envs",
+        "ms-ceintl.vscode-language-pack-zh-hans",
+        "ms-azuretools.vscode-containers",
+        "shd101wyy.markdown-preview-enhanced",
+        "yzhang.markdown-all-in-one"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": [
+          "tests"
+        ]
+      }
+    }
+  },
+  "forwardPorts": [
+    2233
+  ],
+  "portsAttributes": {
+    "2233": {
+      "label": "bilive",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "git submodule update --init --recursive && sudo apt-get update && sudo apt-get install -y ffmpeg procps lsof curl vim gcc fonts-noto-cjk fontconfig && sudo install -D -m 0644 assets/msyh.ttf /usr/share/fonts/msyh.ttf && sudo fc-cache -f && python -m pip install --upgrade pip && python -m pip install --no-cache-dir -r requirements.txt"
 }
