@@ -385,3 +385,6 @@ src/db/data.db
 
 # Claude local settings
 .claude/settings.local.json
+
+# Local git worktrees
+.worktrees/
