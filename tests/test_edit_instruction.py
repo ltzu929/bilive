@@ -14,6 +14,7 @@ from src.autoslice.edit_instruction import (
     TrimInstruction,
     UploadSuggestion,
 )
+from src.autoslice.prompt_packager import build_prompt_markdown, write_prompt_package
 
 
 def test_edit_instruction_round_trip_dict():
@@ -181,3 +182,40 @@ def test_read_srt_evidence_limits_items(tmp_path):
     assert evidence[0].start == 1.0
     assert evidence[0].end == 3.0
     assert evidence[0].text == "first line"
+
+
+def test_build_prompt_markdown_contains_instruction_json():
+    instruction = EditInstruction(
+        source_video="source.mp4",
+        slice_video="12s_source.mp4",
+        decision="keep",
+        confidence=0.9,
+        subtitle_evidence=[
+            SubtitleEvidence(start=1.0, end=3.0, text="important transcript")
+        ],
+    )
+
+    prompt = build_prompt_markdown(instruction, artist="Streamer")
+
+    assert "# Slice Editing Follow-up Prompt" in prompt
+    assert "Streamer" in prompt
+    assert '"decision": "keep"' in prompt
+    assert "important transcript" in prompt
+    assert "Return JSON only" in prompt
+
+
+def test_write_prompt_package(tmp_path):
+    edit_path = tmp_path / "clip_edit.json"
+    instruction = EditInstruction(
+        source_video="source.mp4",
+        slice_video="clip.mp4",
+        decision="review",
+        confidence=0.5,
+    )
+    instruction.to_json_file(edit_path)
+
+    prompt_path = write_prompt_package(edit_path, artist="Streamer")
+
+    assert prompt_path == str(tmp_path / "clip_prompt.md")
+    assert (tmp_path / "clip_prompt.md").is_file()
+    assert "clip.mp4" in (tmp_path / "clip_prompt.md").read_text(encoding="utf-8")
