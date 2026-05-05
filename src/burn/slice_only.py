@@ -114,6 +114,26 @@ def slice_only(video_path):
                     os.remove(slice_path)
                     continue
 
+                from src.config import (
+                    EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+                    EDIT_ENABLE_INSTRUCTION,
+                    EDIT_ENABLE_PROMPT_PACKAGE,
+                    EDIT_MAX_SUBTITLE_EVIDENCE,
+                )
+                from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
+
+                maybe_write_edit_outputs(
+                    analysis=result,
+                    source_video=original_video_path,
+                    slice_video=slice_path,
+                    artist=artist,
+                    slice_duration=SLICE_DURATION,
+                    enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
+                    enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
+                    max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
+                    default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+                )
+
                 slice_title = result.title
             else:
                 # 传统模型返回标题字符串

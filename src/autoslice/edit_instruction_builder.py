@@ -36,6 +36,8 @@ def clamp_time(value: float, duration: float) -> float:
 def read_srt_evidence(
     srt_path: str | Path,
     max_items: int = 6,
+    start_offset: float = 0.0,
+    duration: float | None = None,
 ) -> List[SubtitleEvidence]:
     path = Path(srt_path)
     if not path.is_file():
@@ -52,10 +54,18 @@ def read_srt_evidence(
         text = " ".join(str(item.text).split())
         if not text:
             continue
+        start = item.start.ordinal / 1000
+        end = item.end.ordinal / 1000
+        if duration is not None:
+            window_end = start_offset + duration
+            if end <= start_offset or start >= window_end:
+                continue
+            start = max(start, start_offset) - start_offset
+            end = min(end, window_end) - start_offset
         evidence.append(
             SubtitleEvidence(
-                start=item.start.ordinal / 1000,
-                end=item.end.ordinal / 1000,
+                start=start,
+                end=end,
                 text=text,
             )
         )
@@ -197,7 +207,12 @@ def build_and_write_edit_instruction(
 ) -> str | None:
     subtitle_evidence = []
     if subtitle_path:
-        subtitle_evidence = read_srt_evidence(subtitle_path, max_subtitle_evidence)
+        subtitle_evidence = read_srt_evidence(
+            subtitle_path,
+            max_items=max_subtitle_evidence,
+            start_offset=infer_slice_start_seconds(slice_video),
+            duration=slice_duration,
+        )
 
     instruction = build_edit_instruction(
         analysis=analysis,
@@ -212,3 +227,38 @@ def build_and_write_edit_instruction(
         scan_log.info(f"Edit instruction saved: {output_path}")
         return output_path
     return None
+
+
+def maybe_write_edit_outputs(
+    analysis: AnalysisResult,
+    source_video: str,
+    slice_video: str,
+    artist: str,
+    slice_duration: float,
+    subtitle_path: str | Path | None = None,
+    enable_edit_instruction: bool = True,
+    enable_prompt_package: bool = False,
+    max_subtitle_evidence: int = 6,
+    default_highlight_window: float = DEFAULT_HIGHLIGHT_WINDOW_SECONDS,
+) -> str | None:
+    if not enable_edit_instruction:
+        return None
+
+    try:
+        edit_path = build_and_write_edit_instruction(
+            analysis=analysis,
+            source_video=source_video,
+            slice_video=slice_video,
+            slice_duration=slice_duration,
+            subtitle_path=subtitle_path,
+            max_subtitle_evidence=max_subtitle_evidence,
+            default_highlight_window=default_highlight_window,
+        )
+        if edit_path and enable_prompt_package:
+            from src.autoslice.prompt_packager import write_prompt_package
+
+            write_prompt_package(edit_path, artist=artist)
+        return edit_path
+    except Exception as exc:
+        scan_log.error(f"Failed to generate edit outputs for {slice_video}: {exc}")
+        return None

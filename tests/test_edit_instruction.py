@@ -4,6 +4,7 @@ from src.autoslice.analysis_result import AnalysisResult, Highlight, TrimSuggest
 from src.autoslice.edit_instruction_builder import (
     build_edit_instruction,
     infer_slice_start_seconds,
+    maybe_write_edit_outputs,
     read_srt_evidence,
 )
 from src.autoslice.edit_instruction import (
@@ -184,6 +185,37 @@ def test_read_srt_evidence_limits_items(tmp_path):
     assert evidence[0].text == "first line"
 
 
+def test_read_srt_evidence_filters_source_timeline_to_slice_window(tmp_path):
+    srt_path = tmp_path / "source.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:01:00,000 --> 00:01:02,000\n"
+        "before slice\n\n"
+        "2\n"
+        "00:02:03,000 --> 00:02:05,000\n"
+        "inside slice\n\n"
+        "3\n"
+        "00:02:20,000 --> 00:02:22,000\n"
+        "also inside\n\n",
+        encoding="utf-8",
+    )
+
+    evidence = read_srt_evidence(
+        srt_path,
+        max_items=2,
+        start_offset=123.0,
+        duration=60.0,
+    )
+
+    assert len(evidence) == 2
+    assert evidence[0].start == 0.0
+    assert evidence[0].end == 2.0
+    assert evidence[0].text == "inside slice"
+    assert evidence[1].start == 17.0
+    assert evidence[1].end == 19.0
+    assert evidence[1].text == "also inside"
+
+
 def test_build_prompt_markdown_contains_instruction_json():
     instruction = EditInstruction(
         source_video="source.mp4",
@@ -227,3 +259,28 @@ def test_autoslice_exports_edit_instruction_types():
 
     assert ExportedEditInstruction is EditInstruction
     assert exported_builder is build_edit_instruction
+
+
+def test_maybe_write_edit_outputs_respects_disabled_flag(tmp_path):
+    result = AnalysisResult(
+        title="Clip",
+        description="Description",
+        quality_score=0.8,
+        retain_recommendation=True,
+    )
+    slice_path = tmp_path / "0s_source.mp4"
+    slice_path.write_bytes(b"fake")
+
+    output = maybe_write_edit_outputs(
+        analysis=result,
+        source_video="source.mp4",
+        slice_video=str(slice_path),
+        artist="Streamer",
+        slice_duration=60,
+        enable_edit_instruction=False,
+        enable_prompt_package=True,
+    )
+
+    assert output is None
+    assert not (tmp_path / "0s_source_edit.json").exists()
+    assert not (tmp_path / "0s_source_prompt.md").exists()
