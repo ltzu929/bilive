@@ -1,5 +1,11 @@
 import json
 
+from src.autoslice.analysis_result import AnalysisResult, Highlight, TrimSuggestion
+from src.autoslice.edit_instruction_builder import (
+    build_edit_instruction,
+    infer_slice_start_seconds,
+    read_srt_evidence,
+)
 from src.autoslice.edit_instruction import (
     DanmakuEvidence,
     EditInstruction,
@@ -82,3 +88,96 @@ def test_invalid_decision_falls_back_to_review():
 
     assert instruction.decision == "review"
     assert instruction.confidence == 1.0
+
+
+def test_infer_slice_start_seconds_from_autosv_name():
+    assert infer_slice_start_seconds("/Videos/room/123s_record.mp4") == 123.0
+    assert infer_slice_start_seconds("/Videos/room/0s_record.mp4") == 0.0
+    assert infer_slice_start_seconds("/Videos/room/record.mp4") == 0.0
+
+
+def test_build_edit_instruction_from_highlights_and_trim():
+    result = AnalysisResult(
+        title="Clip title",
+        description="Clip description",
+        tags=["tag1", "tag2"],
+        quality_score=0.84,
+        retain_recommendation=True,
+        quality_reason="good reaction",
+        highlights=[
+            Highlight(start=7.0, end=15.0, score=0.92, desc="best moment")
+        ],
+        emotion_peak_time=11.0,
+        suggested_trim=TrimSuggestion(
+            trim_start=2.0,
+            trim_end=55.0,
+            reason="remove quiet edges",
+        ),
+    )
+
+    instruction = build_edit_instruction(
+        analysis=result,
+        source_video="/Videos/room/record.mp4",
+        slice_video="/Videos/room/123s_record.mp4",
+        slice_duration=60.0,
+        subtitle_evidence=[],
+    )
+
+    assert instruction.decision == "keep"
+    assert instruction.confidence == 0.84
+    assert instruction.trim.start == 2.0
+    assert instruction.trim.end == 55.0
+    assert instruction.segments[0].start == 7.0
+    assert instruction.segments[0].end == 15.0
+    assert instruction.segments[0].reason == "best moment"
+    assert instruction.danmaku_evidence.peak_time == 11.0
+    assert instruction.upload_suggestion.title == "Clip title"
+    assert "Keep 7.0-15.0 as the main highlight" in instruction.edit_actions
+
+
+def test_build_edit_instruction_degrades_without_subtitles():
+    result = AnalysisResult(
+        title="Needs review",
+        description="A transcript-like description",
+        quality_score=0.52,
+        retain_recommendation=True,
+        quality_reason="audio only",
+        emotion_peak_time=0.0,
+    )
+
+    instruction = build_edit_instruction(
+        analysis=result,
+        source_video="source.mp4",
+        slice_video="0s_source.mp4",
+        slice_duration=60.0,
+        subtitle_evidence=[],
+    )
+
+    assert instruction.decision == "keep"
+    assert instruction.segments[0].start == 0.0
+    assert instruction.segments[0].end == 12.0
+    assert instruction.subtitle_evidence == []
+    assert (
+        "Subtitle evidence is missing; review transcript manually"
+        in instruction.edit_actions
+    )
+
+
+def test_read_srt_evidence_limits_items(tmp_path):
+    srt_path = tmp_path / "clip.srt"
+    srt_path.write_text(
+        "1\n"
+        "00:00:01,000 --> 00:00:03,000\n"
+        "first line\n\n"
+        "2\n"
+        "00:00:04,000 --> 00:00:06,000\n"
+        "second line\n\n",
+        encoding="utf-8",
+    )
+
+    evidence = read_srt_evidence(srt_path, max_items=1)
+
+    assert len(evidence) == 1
+    assert evidence[0].start == 1.0
+    assert evidence[0].end == 3.0
+    assert evidence[0].text == "first line"
