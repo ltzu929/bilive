@@ -58,6 +58,12 @@ enable_audio = true                            # 启用音频分析
 enable_emotion_analysis = false                # 启用深度情感分析（需安装 transformers）
 emotion_model = "facebook/wav2vec2-base-robust-emotion"  # 情感识别模型
 
+[slice.edit]
+enable_edit_instruction = true
+enable_prompt_package = false
+max_subtitle_evidence = 6
+default_highlight_window = 12
+
 [cover]
 generate_cover = false # whether to generate cover
 cover_prompt = "" # Write your own cover prompt here

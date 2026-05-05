@@ -7,6 +7,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .auto_slice_video.autosv import slice_video_by_danmaku
 from .analysis_result import AnalysisResult, Highlight, TrimSuggestion
 from .slice_quality_filter import should_retain_slice
+from .edit_instruction import (
+    DanmakuEvidence,
+    EditInstruction,
+    EditSegment,
+    SubtitleEvidence,
+    TrimInstruction,
+    UploadSuggestion,
+)
+from .edit_instruction_builder import (
+    build_and_write_edit_instruction,
+    build_edit_instruction,
+)
+from .prompt_packager import build_prompt_markdown, write_prompt_package
 
 __all__ = [
     "slice_video_by_danmaku",
@@ -14,4 +27,14 @@ __all__ = [
     "Highlight",
     "TrimSuggestion",
     "should_retain_slice",
+    "DanmakuEvidence",
+    "EditInstruction",
+    "EditSegment",
+    "SubtitleEvidence",
+    "TrimInstruction",
+    "UploadSuggestion",
+    "build_edit_instruction",
+    "build_and_write_edit_instruction",
+    "build_prompt_markdown",
+    "write_prompt_package",
 ]

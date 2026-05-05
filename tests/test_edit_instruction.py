@@ -219,3 +219,11 @@ def test_write_prompt_package(tmp_path):
     assert prompt_path == str(tmp_path / "clip_prompt.md")
     assert (tmp_path / "clip_prompt.md").is_file()
     assert "clip.mp4" in (tmp_path / "clip_prompt.md").read_text(encoding="utf-8")
+
+
+def test_autoslice_exports_edit_instruction_types():
+    from src.autoslice import EditInstruction as ExportedEditInstruction
+    from src.autoslice import build_edit_instruction as exported_builder
+
+    assert ExportedEditInstruction is EditInstruction
+    assert exported_builder is build_edit_instruction

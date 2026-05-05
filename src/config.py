@@ -113,3 +113,9 @@ MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("e
 # 情感分析配置（新增）
 MULTI_MODAL_ENABLE_EMOTION_ANALYSIS = config.get("slice", {}).get("multi_modal", {}).get("enable_emotion_analysis", False)
 MULTI_MODAL_EMOTION_MODEL = config.get("slice", {}).get("multi_modal", {}).get("emotion_model", "facebook/wav2vec2-base-robust-emotion")
+
+# Edit instruction configuration
+EDIT_ENABLE_INSTRUCTION = config.get("slice", {}).get("edit", {}).get("enable_edit_instruction", True)
+EDIT_ENABLE_PROMPT_PACKAGE = config.get("slice", {}).get("edit", {}).get("enable_prompt_package", False)
+EDIT_MAX_SUBTITLE_EVIDENCE = config.get("slice", {}).get("edit", {}).get("max_subtitle_evidence", 6)
+EDIT_DEFAULT_HIGHLIGHT_WINDOW = config.get("slice", {}).get("edit", {}).get("default_highlight_window", 12)
