@@ -25,6 +25,14 @@ class TrimSuggestion:
 
 
 @dataclass
+class TranscriptSegment:
+    """Whisper 字幕片段"""
+    start: float
+    end: float
+    text: str
+
+
+@dataclass
 class AnalysisResult:
     """OMNI 分析结果数据类"""
     # 上传必需字段
@@ -42,6 +50,8 @@ class AnalysisResult:
     highlights: List[Highlight] = field(default_factory=list)
     emotion_peak_time: float = 0.0
     suggested_trim: Optional[TrimSuggestion] = None
+    transcript: str = ""
+    transcript_segments: List[TranscriptSegment] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AnalysisResult":
@@ -64,6 +74,14 @@ class AnalysisResult:
                 reason=trim_data.get("reason", "")
             )
 
+        transcript_segments = []
+        for segment in data.get("transcript_segments", []):
+            transcript_segments.append(TranscriptSegment(
+                start=segment.get("start", 0.0),
+                end=segment.get("end", 0.0),
+                text=segment.get("text", "")
+            ))
+
         return cls(
             title=data.get("title", ""),
             description=data.get("description", ""),
@@ -74,7 +92,9 @@ class AnalysisResult:
             quality_reason=data.get("quality_reason", ""),
             highlights=highlights,
             emotion_peak_time=data.get("emotion_peak_time", 0.0),
-            suggested_trim=suggested_trim
+            suggested_trim=suggested_trim,
+            transcript=data.get("transcript", ""),
+            transcript_segments=transcript_segments,
         )
 
     @classmethod
@@ -113,7 +133,12 @@ class AnalysisResult:
                 "trim_start": self.suggested_trim.trim_start,
                 "trim_end": self.suggested_trim.trim_end,
                 "reason": self.suggested_trim.reason
-            } if self.suggested_trim else None
+            } if self.suggested_trim else None,
+            "transcript": self.transcript,
+            "transcript_segments": [
+                {"start": s.start, "end": s.end, "text": s.text}
+                for s in self.transcript_segments
+            ],
         }
 
     def to_json_file(self, output_path: str) -> bool:

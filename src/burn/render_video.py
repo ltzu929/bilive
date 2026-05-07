@@ -118,6 +118,13 @@ def render_video(video_path):
                             os.remove(slice_path)
                             continue
 
+                        slice_title = result.title
+                    else:
+                        # 传统模型返回标题字符串
+                        slice_title = result
+
+                    slice_video_flv_path = slice_path[:-4] + ".flv"
+                    if isinstance(result, AnalysisResult):
                         from src.config import (
                             EDIT_DEFAULT_HIGHLIGHT_WINDOW,
                             EDIT_ENABLE_INSTRUCTION,
@@ -133,18 +140,13 @@ def render_video(video_path):
                             artist=artist,
                             slice_duration=SLICE_DURATION,
                             subtitle_path=srt_path if os.path.exists(srt_path) else None,
+                            output_video=slice_video_flv_path,
                             enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
                             enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
                             max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
                             default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
                         )
 
-                        slice_title = result.title
-                    else:
-                        # 传统模型返回标题字符串
-                        slice_title = result
-
-                    slice_video_flv_path = slice_path[:-4] + ".flv"
                     inject_metadata(slice_path, slice_title, slice_video_flv_path)
                     os.remove(slice_path)
                     if not insert_upload_queue(slice_video_flv_path):

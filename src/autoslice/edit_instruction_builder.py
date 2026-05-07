@@ -171,6 +171,12 @@ def build_edit_instruction(
     default_highlight_window: float = DEFAULT_HIGHLIGHT_WINDOW_SECONDS,
 ) -> EditInstruction:
     subtitle_evidence = subtitle_evidence or []
+    if not subtitle_evidence and analysis.transcript_segments:
+        subtitle_evidence = [
+            SubtitleEvidence(start=segment.start, end=segment.end, text=segment.text)
+            for segment in analysis.transcript_segments
+            if segment.text
+        ]
     segments = build_segments(analysis, slice_duration, default_highlight_window)
     trim = build_trim(analysis, slice_duration)
     decision = "keep" if analysis.retain_recommendation else "drop"
@@ -236,6 +242,7 @@ def maybe_write_edit_outputs(
     artist: str,
     slice_duration: float,
     subtitle_path: str | Path | None = None,
+    output_video: str | None = None,
     enable_edit_instruction: bool = True,
     enable_prompt_package: bool = False,
     max_subtitle_evidence: int = 6,
@@ -248,7 +255,7 @@ def maybe_write_edit_outputs(
         edit_path = build_and_write_edit_instruction(
             analysis=analysis,
             source_video=source_video,
-            slice_video=slice_video,
+            slice_video=output_video or slice_video,
             slice_duration=slice_duration,
             subtitle_path=subtitle_path,
             max_subtitle_evidence=max_subtitle_evidence,

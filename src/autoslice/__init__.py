@@ -5,7 +5,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .auto_slice_video.autosv import slice_video_by_danmaku
-from .analysis_result import AnalysisResult, Highlight, TrimSuggestion
+from .analysis_result import AnalysisResult, Highlight, TranscriptSegment, TrimSuggestion
 from .slice_quality_filter import should_retain_slice
 from .edit_instruction import (
     DanmakuEvidence,
@@ -25,6 +25,7 @@ __all__ = [
     "slice_video_by_danmaku",
     "AnalysisResult",
     "Highlight",
+    "TranscriptSegment",
     "TrimSuggestion",
     "should_retain_slice",
     "DanmakuEvidence",

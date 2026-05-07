@@ -1,6 +1,11 @@
 import json
 
-from src.autoslice.analysis_result import AnalysisResult, Highlight, TrimSuggestion
+from src.autoslice.analysis_result import (
+    AnalysisResult,
+    Highlight,
+    TranscriptSegment,
+    TrimSuggestion,
+)
 from src.autoslice.edit_instruction_builder import (
     build_edit_instruction,
     infer_slice_start_seconds,
@@ -92,6 +97,26 @@ def test_invalid_decision_falls_back_to_review():
     assert instruction.confidence == 1.0
 
 
+def test_analysis_result_preserves_transcript_segments():
+    result = AnalysisResult.from_dict(
+        {
+            "title": "Clip",
+            "description": "Description",
+            "transcript": "完整字幕文本",
+            "transcript_segments": [
+                {"start": 1.2, "end": 3.4, "text": "第一句"},
+                {"start": 4.0, "end": 6.5, "text": "第二句"},
+            ],
+        }
+    )
+
+    assert result.transcript == "完整字幕文本"
+    assert result.transcript_segments[0].start == 1.2
+    assert result.transcript_segments[0].end == 3.4
+    assert result.transcript_segments[0].text == "第一句"
+    assert result.to_dict()["transcript_segments"][1]["text"] == "第二句"
+
+
 def test_infer_slice_start_seconds_from_autosv_name():
     assert infer_slice_start_seconds("/Videos/room/123s_record.mp4") == 123.0
     assert infer_slice_start_seconds("/Videos/room/0s_record.mp4") == 0.0
@@ -163,6 +188,34 @@ def test_build_edit_instruction_degrades_without_subtitles():
         "Subtitle evidence is missing; review transcript manually"
         in instruction.edit_actions
     )
+
+
+def test_build_edit_instruction_uses_analysis_transcript_segments():
+    result = AnalysisResult(
+        title="Clip",
+        description="Description",
+        quality_score=0.8,
+        retain_recommendation=True,
+        transcript="第一句。第二句。",
+        transcript_segments=[
+            TranscriptSegment(start=3.0, end=5.5, text="第一句"),
+            TranscriptSegment(start=8.0, end=10.0, text="第二句"),
+        ],
+    )
+
+    instruction = build_edit_instruction(
+        analysis=result,
+        source_video="source.mp4",
+        slice_video="123s_source.mp4",
+        slice_duration=60.0,
+        subtitle_evidence=[],
+    )
+
+    assert len(instruction.subtitle_evidence) == 2
+    assert instruction.subtitle_evidence[0].start == 3.0
+    assert instruction.subtitle_evidence[0].end == 5.5
+    assert instruction.subtitle_evidence[0].text == "第一句"
+    assert "Subtitle evidence is missing" not in "\n".join(instruction.edit_actions)
 
 
 def test_read_srt_evidence_limits_items(tmp_path):
@@ -255,9 +308,11 @@ def test_write_prompt_package(tmp_path):
 
 def test_autoslice_exports_edit_instruction_types():
     from src.autoslice import EditInstruction as ExportedEditInstruction
+    from src.autoslice import TranscriptSegment as ExportedTranscriptSegment
     from src.autoslice import build_edit_instruction as exported_builder
 
     assert ExportedEditInstruction is EditInstruction
+    assert ExportedTranscriptSegment is TranscriptSegment
     assert exported_builder is build_edit_instruction
 
 
@@ -284,3 +339,54 @@ def test_maybe_write_edit_outputs_respects_disabled_flag(tmp_path):
     assert output is None
     assert not (tmp_path / "0s_source_edit.json").exists()
     assert not (tmp_path / "0s_source_prompt.md").exists()
+
+
+def test_maybe_write_edit_outputs_points_to_final_output_video(tmp_path):
+    result = AnalysisResult(
+        title="Clip",
+        description="Description",
+        quality_score=0.8,
+        retain_recommendation=True,
+    )
+    raw_slice = tmp_path / "0s_source.mp4"
+    final_slice = tmp_path / "0s_source.flv"
+    raw_slice.write_bytes(b"fake")
+
+    output = maybe_write_edit_outputs(
+        analysis=result,
+        source_video="source.mp4",
+        slice_video=str(raw_slice),
+        output_video=str(final_slice),
+        artist="Streamer",
+        slice_duration=60,
+        enable_edit_instruction=True,
+    )
+
+    assert output == str(tmp_path / "0s_source_edit.json")
+    data = json.loads((tmp_path / "0s_source_edit.json").read_text(encoding="utf-8"))
+    assert data["slice_video"] == str(final_slice)
+
+
+def test_combine_analysis_preserves_whisper_segments():
+    from src.autoslice.mllm_sdk.multi_modal_analyzer import combine_analysis
+
+    combined = combine_analysis(
+        visual_result={},
+        audio_result={
+            "transcript": "第一句。第二句。",
+            "segments": [
+                {"start": 1.0, "end": 2.5, "text": "第一句"},
+                {"start": 3.0, "end": 4.5, "text": "第二句"},
+            ],
+            "audio_keywords": ["第一句"],
+            "audio_quality": 0.7,
+            "emotion": "happy",
+        },
+        artist="主播",
+    )
+
+    result = AnalysisResult.from_dict(combined)
+
+    assert result.transcript == "第一句。第二句。"
+    assert result.transcript_segments[0].start == 1.0
+    assert result.transcript_segments[1].text == "第二句"

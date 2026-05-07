@@ -99,6 +99,7 @@ def combine_analysis(
     audio_emotion = audio_result.get("emotion", "neutral")
     audio_keywords = audio_result.get("audio_keywords", [])
     transcript = audio_result.get("transcript", "")
+    transcript_segments = audio_result.get("segments", [])
 
     # 综合质量评分
     # 纯音频模式：audio_quality * 1.0
@@ -149,7 +150,9 @@ def combine_analysis(
         "quality_reason": quality_reason,
         "highlights": [],
         "emotion_peak_time": 0.0,
-        "suggested_trim": None
+        "suggested_trim": None,
+        "transcript": transcript,
+        "transcript_segments": transcript_segments,
     }
 
 
