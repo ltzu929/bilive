@@ -3,10 +3,16 @@
 
 set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="${BILIVE_RUNTIME_DIR:-$SCRIPT_DIR}"
 cd "$PROJECT_DIR"
 
-source venv/bin/activate
+VENV_DIR="${BILIVE_VENV_DIR:-$PROJECT_DIR/venv}"
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo "Python venv not found: $VENV_DIR"
+    exit 1
+fi
+source "$VENV_DIR/bin/activate"
 
 if [ ${#RECORD_KEY} -lt 8 ] || [ ${#RECORD_KEY} -gt 80 ]; then
     echo "RECORD_KEY must be 8-80 characters. Set it before starting:"
@@ -135,8 +141,8 @@ kill -15 $(ps aux | grep '[b]lrec' | awk '{print $2}') 2>/dev/null || true
 sleep 2
 
 export no_proxy=*
-host=0.0.0.0
-port=2233
+host="${BLREC_HOST:-0.0.0.0}"
+port="${BLREC_PORT:-2233}"
 
 echo "Starting blrec..."
 nohup blrec -c settings.toml --host $host --port $port --api-key "$RECORD_KEY" > ./logs/record/blrec-$(date +%Y%m%d-%H%M%S).log 2>&1 &
