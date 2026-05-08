@@ -17,6 +17,7 @@ from src.autoslice.edit_instruction import (
     EditInstruction,
     EditSegment,
     SubtitleEvidence,
+    TimeRange,
     TrimInstruction,
     UploadSuggestion,
 )
@@ -42,6 +43,8 @@ def test_edit_instruction_round_trip_dict():
         subtitle_evidence=[
             SubtitleEvidence(start=7.2, end=10.8, text="important transcript")
         ],
+        density_core=TimeRange(start=3130.0, end=3190.0),
+        context_window=TimeRange(start=3100.0, end=3230.0),
         danmaku_evidence=DanmakuEvidence(
             peak_time=12.0,
             density_reason="slice selected by danmaku density",
@@ -61,6 +64,10 @@ def test_edit_instruction_round_trip_dict():
     assert restored.decision == "keep"
     assert restored.confidence == 0.82
     assert restored.trim.start == 2.5
+    assert restored.density_core.start == 3130.0
+    assert restored.density_core.end == 3190.0
+    assert restored.context_window.start == 3100.0
+    assert restored.context_window.end == 3230.0
     assert restored.segments[0].reason == "danmaku peak and useful transcript"
     assert restored.subtitle_evidence[0].text == "important transcript"
     assert restored.upload_suggestion.tags == ["live", "highlight"]
@@ -145,9 +152,11 @@ def test_build_edit_instruction_from_highlights_and_trim():
     instruction = build_edit_instruction(
         analysis=result,
         source_video="/Videos/room/record.mp4",
-        slice_video="/Videos/room/123s_record.mp4",
-        slice_duration=60.0,
+        slice_video="/Videos/room/93s_record.mp4",
+        slice_duration=130.0,
         subtitle_evidence=[],
+        density_core=TimeRange(start=123.0, end=183.0),
+        context_window=TimeRange(start=93.0, end=223.0),
     )
 
     assert instruction.decision == "keep"
@@ -158,8 +167,36 @@ def test_build_edit_instruction_from_highlights_and_trim():
     assert instruction.segments[0].end == 15.0
     assert instruction.segments[0].reason == "best moment"
     assert instruction.danmaku_evidence.peak_time == 11.0
+    assert instruction.density_core.start == 123.0
+    assert instruction.density_core.end == 183.0
+    assert instruction.context_window.start == 93.0
+    assert instruction.context_window.end == 223.0
     assert instruction.upload_suggestion.title == "Clip title"
     assert "Keep 7.0-15.0 as the main highlight" in instruction.edit_actions
+
+
+def test_build_edit_instruction_warns_when_transcript_tail_is_unfinished():
+    result = AnalysisResult(
+        title="Needs extension",
+        description="Description",
+        quality_score=0.8,
+        retain_recommendation=True,
+        transcript_segments=[
+            TranscriptSegment(start=123.0, end=129.7, text="然后我们今天这个事情")
+        ],
+    )
+
+    instruction = build_edit_instruction(
+        analysis=result,
+        source_video="source.mp4",
+        slice_video="3100s_source.mp4",
+        slice_duration=130.0,
+        subtitle_evidence=[],
+        density_core=TimeRange(start=3130.0, end=3190.0),
+        context_window=TimeRange(start=3100.0, end=3230.0),
+    )
+
+    assert any("Transcript near the end appears unfinished" in action for action in instruction.edit_actions)
 
 
 def test_build_edit_instruction_degrades_without_subtitles():

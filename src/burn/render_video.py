@@ -12,6 +12,8 @@ from src.config import (
     VIDEOS_DIR,
     SLICE_NUM,
     SLICE_OVERLAP,
+    SLICE_POST_CONTEXT,
+    SLICE_PRE_CONTEXT,
     SLICE_STEP,
 )
 from src.danmaku.generate_danmakus import get_resolution, process_danmakus
@@ -90,8 +92,12 @@ def render_video(video_path):
                 SLICE_NUM,
                 SLICE_OVERLAP,
                 SLICE_STEP,
+                pre_context=SLICE_PRE_CONTEXT,
+                post_context=SLICE_POST_CONTEXT,
+                return_metadata=True,
             )
-            for slice_path in slices_path:
+            for generated_slice in slices_path:
+                slice_path = generated_slice.path
                 try:
                     result = generate_title(slice_path, artist)
 
@@ -132,19 +138,28 @@ def render_video(video_path):
                             EDIT_MAX_SUBTITLE_EVIDENCE,
                         )
                         from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
+                        from src.autoslice.edit_instruction import TimeRange
 
                         maybe_write_edit_outputs(
                             analysis=result,
                             source_video=format_video_path,
                             slice_video=slice_path,
                             artist=artist,
-                            slice_duration=SLICE_DURATION,
+                            slice_duration=generated_slice.duration,
                             subtitle_path=srt_path if os.path.exists(srt_path) else None,
                             output_video=slice_video_flv_path,
                             enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
                             enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
                             max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
                             default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+                            density_core=TimeRange(
+                                start=generated_slice.density_core_start,
+                                end=generated_slice.density_core_end,
+                            ),
+                            context_window=TimeRange(
+                                start=generated_slice.context_start,
+                                end=generated_slice.context_end,
+                            ),
                         )
 
                     inject_metadata(slice_path, slice_title, slice_video_flv_path)

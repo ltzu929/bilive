@@ -45,6 +45,22 @@ class TrimInstruction:
 
 
 @dataclass
+class TimeRange:
+    start: float = 0.0
+    end: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TimeRange":
+        return cls(
+            start=_as_float(data.get("start", 0.0)),
+            end=_as_float(data.get("end", 0.0)),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"start": self.start, "end": self.end}
+
+
+@dataclass
 class EditSegment:
     start: float = 0.0
     end: float = 0.0
@@ -143,6 +159,8 @@ class EditInstruction:
     trim: TrimInstruction = field(default_factory=TrimInstruction)
     segments: List[EditSegment] = field(default_factory=list)
     subtitle_evidence: List[SubtitleEvidence] = field(default_factory=list)
+    density_core: TimeRange = field(default_factory=TimeRange)
+    context_window: TimeRange = field(default_factory=TimeRange)
     danmaku_evidence: DanmakuEvidence = field(default_factory=DanmakuEvidence)
     edit_actions: List[str] = field(default_factory=list)
     upload_suggestion: UploadSuggestion = field(default_factory=UploadSuggestion)
@@ -170,6 +188,8 @@ class EditInstruction:
                 for item in data.get("subtitle_evidence", [])
                 if isinstance(item, dict)
             ],
+            density_core=TimeRange.from_dict(data.get("density_core", {}) or {}),
+            context_window=TimeRange.from_dict(data.get("context_window", {}) or {}),
             danmaku_evidence=DanmakuEvidence.from_dict(
                 data.get("danmaku_evidence", {}) or {}
             ),
@@ -201,6 +221,8 @@ class EditInstruction:
             "subtitle_evidence": [
                 evidence.to_dict() for evidence in self.subtitle_evidence
             ],
+            "density_core": self.density_core.to_dict(),
+            "context_window": self.context_window.to_dict(),
             "danmaku_evidence": self.danmaku_evidence.to_dict(),
             "edit_actions": self.edit_actions,
             "upload_suggestion": self.upload_suggestion.to_dict(),
