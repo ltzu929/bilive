@@ -137,7 +137,15 @@ settings_path.write_text(text, encoding="utf-8")
 PY
 
 echo "Stopping existing blrec..."
-kill -15 $(ps aux | grep '[b]lrec' | awk '{print $2}') 2>/dev/null || true
+while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" = "$$" ] && continue
+
+    process_cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+    if [ "$process_cwd" = "$PROJECT_DIR" ]; then
+        kill -15 "$pid" 2>/dev/null || true
+    fi
+done < <(pgrep -f '[b]lrec' 2>/dev/null || true)
 sleep 2
 
 export no_proxy=*
@@ -145,7 +153,7 @@ host="${BLREC_HOST:-0.0.0.0}"
 port="${BLREC_PORT:-2233}"
 
 echo "Starting blrec..."
-nohup blrec -c settings.toml --host $host --port $port --api-key "$RECORD_KEY" > ./logs/record/blrec-$(date +%Y%m%d-%H%M%S).log 2>&1 &
+nohup blrec -c settings.toml --host "$host" --port "$port" --api-key "$RECORD_KEY" > ./logs/record/blrec-$(date +%Y%m%d-%H%M%S).log 2>&1 &
 sleep 3
 
 if python - "$port" <<'PY'

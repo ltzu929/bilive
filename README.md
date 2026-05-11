@@ -48,6 +48,7 @@
 ├── record.sh                    # 录制启动入口
 ├── upload.sh                    # 普通扫描 + 上传入口
 ├── slice.sh                     # 独立切片 + 上传入口
+├── refine_feedback.sh           # 人工反馈驱动的精切 + 入上传队列入口
 ├── src/
 │   ├── burn/                    # 扫描、渲染、切片处理
 │   ├── autoslice/               # 切片标题、多模态分析、质量筛选
@@ -242,6 +243,30 @@ export BILIVE_SKIP_UPLOAD_QUEUE=1
 ```
 
 这样会保留原始文件，并跳过写入上传队列，避免误传。
+
+### 人工反馈精切流
+
+如果使用 dashboard 先人工判断候选，推荐把独立切片流先作为候选生成器：
+
+```bash
+export BILIVE_KEEP_SOURCE=1
+export BILIVE_SKIP_UPLOAD_QUEUE=1
+./slice.sh
+```
+
+在 `http://127.0.0.1:2233/tasks` 标注候选后，再运行：
+
+```bash
+./refine_feedback.sh
+```
+
+这个入口会扫描 `Videos/**/*_feedback.json`：
+
+- `drop`：跳过，不入上传队列。
+- `review`：保留继续人工判断，不入上传队列。
+- `keep`：生成新的 `_refined.flv` 和 `_refined_edit.json`，再把精切结果写入上传队列。
+
+精切范围优先使用 dashboard 保存的 `manual_range`。如果没有有效手动范围，则使用 `context_window`；如果两者都没有，会尝试保留完整候选范围。原候选片段不会被覆盖。
 
 ## `bilive.toml` 关键配置
 

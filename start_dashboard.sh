@@ -29,7 +29,7 @@ export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$RUNTIME_DIR/Videos}"
 
 if [ ${#RECORD_KEY} -lt 8 ] || [ ${#RECORD_KEY} -gt 80 ]; then
     echo "RECORD_KEY must be 8-80 characters. Set it before starting:"
-    echo "  export RECORD_KEY=135879abC"
+    echo "  export RECORD_KEY=your_record_password"
     exit 1
 fi
 
