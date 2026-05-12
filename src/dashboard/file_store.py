@@ -119,6 +119,7 @@ class DashboardFileStore:
             item.density_core = feedback.get("density_core")
             item.context_window = feedback.get("context_window")
             item.danmaku_count = feedback.get("danmaku_count")
+            item.refined = feedback.get("refined", False)
         return item
 
     def _read_feedback_file(self, item: SliceItem) -> Dict[str, Any]:

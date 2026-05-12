@@ -3,6 +3,7 @@
 # 多模型协作架构 - 音频分析模块
 
 import os
+import shutil
 import gc
 import subprocess
 import tempfile
@@ -142,11 +143,15 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[
         return {"transcript": "", "error": "whisper_not_installed"}
 
     try:
-        scan_log.info(f"Loading Whisper model: {model_size}")
-        model = whisper.load_model(model_size)
+        global _whisper_model
+        if _whisper_model is None:
+            scan_log.info(f"Loading Whisper model: {model_size}")
+            _whisper_model = whisper.load_model(model_size)
+        else:
+            scan_log.info("Using cached Whisper model")
 
         scan_log.info(f"Transcribing audio: {audio_path}")
-        result = model.transcribe(audio_path, language="zh")
+        result = _whisper_model.transcribe(audio_path, language="zh")
 
         segments = result.get("segments", [])
         for segment in segments:
@@ -167,15 +172,30 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[
         return {"transcript": "", "error": str(e)}
 
 
+_EXCITED_WORDS = re.compile(r"哈哈|好棒|太强了|厉害|牛逼|太好了|开心|666|绝了|好厉害|太牛")
+_FILLER_WORDS = re.compile(r"嗯|额|然后|就是|那个|这个|一下|的话|对吧")
+
+
+def _emotion_density(text: str) -> float:
+    if not text:
+        return 0.0
+    matches = len(_EXCITED_WORDS.findall(text))
+    return min(matches / max(len(text) / 10, 1), 1.0)
+
+
+def _filler_density(text: str) -> float:
+    if not text:
+        return 0.0
+    matches = len(_FILLER_WORDS.findall(text))
+    return min(matches / max(len(text) / 10, 1), 1.0)
+
+
+def _info_density(text: str) -> float:
+    clean = re.sub(r"[嗯额的了在着过又很都也还，。！？、,!?]", "", text)
+    return len(clean) / max(len(text), 1)
+
+
 def analyze_audio_content(transcript: str) -> Dict[str, Any]:
-    """分析转录内容
-
-    Args:
-        transcript: 转录文本
-
-    Returns:
-        Dict: 分析结果
-    """
     if not transcript or len(transcript) < 10:
         scan_log.warning("Transcript too short for analysis")
         return {
@@ -186,32 +206,48 @@ def analyze_audio_content(transcript: str) -> Dict[str, Any]:
             "audio_highlights": []
         }
 
-    # 简单关键词分析
     keywords = extract_keywords(transcript)
-
-    # 情感分析（简单启发式）
     emotion = detect_emotion(transcript)
+
+    em_density = _emotion_density(transcript)
+    fl_density = _filler_density(transcript)
+    inf_density = _info_density(transcript)
+
+    quality = 0.5 + em_density * 0.3 - fl_density * 0.3
+    quality = max(0.1, min(1.0, quality))
+
+    if inf_density < 0.3:
+        quality = min(quality, 0.4)
 
     return {
         "audio_theme": "直播内容",
         "audio_emotion": emotion,
         "audio_keywords": keywords,
-        "audio_quality": 0.5,
+        "audio_quality": quality,
         "audio_highlights": []
     }
 
 
-def extract_keywords(text: str, max_keywords: int = 5) -> list:
-    """提取关键词（简单实现）"""
-    # 基于词频的简单提取
-    import re
-    words = re.findall(r'\b[一-龥]{2,4}\b', text)
-    word_freq = {}
-    for word in words:
-        word_freq[word] = word_freq.get(word, 0) + 1
+_STOPWORDS = set("的了是在我你他她它们这那个一不要会就能着过又很都也还让被把向从与而为及但虽却")
 
-    sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
-    return [w[0] for w in sorted_words[:max_keywords]]
+
+def extract_keywords(text: str, max_keywords: int = 5) -> list:
+    from collections import Counter
+    phrases = Counter()
+    for n in range(2, 5):
+        for i in range(len(text) - n + 1):
+            w = text[i:i + n]
+            if re.match(r'^[一-龥]+$', w) and not any(c in _STOPWORDS for c in w):
+                phrases[w] += 1
+    seen = set()
+    result = []
+    for w, _ in phrases.most_common():
+        if not any(w in s for s in seen):
+            seen.add(w)
+            result.append(w)
+        if len(result) >= max_keywords:
+            break
+    return result
 
 
 def detect_emotion(text: str) -> str:
@@ -233,13 +269,11 @@ def detect_emotion(text: str) -> str:
 
 
 def cleanup_audio(audio_path: str) -> None:
-    """清理临时音频文件"""
     if audio_path and os.path.exists(audio_path):
         temp_dir = os.path.dirname(audio_path)
         try:
-            os.remove(audio_path)
-            os.rmdir(temp_dir)
-            scan_log.info("Cleaned up temporary audio file")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            scan_log.info("Cleaned up temporary audio directory")
         except OSError:
             pass
 
@@ -373,6 +407,15 @@ def unload_emotion_model() -> None:
 
     release_gpu_memory()
     scan_log.info("Emotion model unloaded, GPU memory released")
+
+
+def unload_whisper_model() -> None:
+    global _whisper_model
+    if _whisper_model is not None:
+        del _whisper_model
+        _whisper_model = None
+    release_gpu_memory()
+    scan_log.info("Whisper model unloaded, GPU memory released")
 
 
 def analyze_audio(

@@ -25,6 +25,7 @@ class SliceItem:
     density_core: Optional[Dict[str, Any]] = None
     context_window: Optional[Dict[str, Any]] = None
     danmaku_count: Optional[int] = None
+    refined: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

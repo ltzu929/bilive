@@ -121,5 +121,47 @@ class TestSliceQualityFilter(unittest.TestCase):
         self.assertFalse(should_retain_slice(None, 0.6))
 
 
+class TestKeywordExtraction(unittest.TestCase):
+    def test_extracts_chinese_keywords(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import extract_keywords
+        result = extract_keywords("今天打了一把排位赛，真的太厉害了！哈哈，好棒！")
+        self.assertTrue(any("排位" in w or "厉害" in w for w in result))
+        self.assertTrue(len(result) > 0)
+
+    def test_filters_stopwords(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import extract_keywords
+        result = extract_keywords("的那个就是在嗯")
+        self.assertEqual(result, [])
+
+    def test_max_keywords(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import extract_keywords
+        result = extract_keywords("排位赛厉害好棒太强了牛逼绝了", max_keywords=3)
+        self.assertLessEqual(len(result), 3)
+
+
+class TestQualityScoring(unittest.TestCase):
+    def test_excited_content_scores_higher(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import analyze_audio_content
+        high = analyze_audio_content("哈哈好厉害！太强了这波操作！666！牛逼！绝了！")
+        low = analyze_audio_content("嗯好的然后就是然后那个就是嗯对")
+        self.assertGreater(high["audio_quality"], low["audio_quality"])
+
+    def test_short_transcript_returns_low_quality(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import analyze_audio_content
+        result = analyze_audio_content("嗯")
+        self.assertLessEqual(result["audio_quality"], 0.3)
+
+    def test_filler_heavy_gets_penalized(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import analyze_audio_content
+        result = analyze_audio_content("嗯额然后就是那个嗯额然后就是那个")
+        self.assertLess(result["audio_quality"], 0.5)
+
+    def test_quality_score_in_range(self):
+        from src.autoslice.mllm_sdk.audio_analyzer import analyze_audio_content
+        result = analyze_audio_content("今天我们来打排位赛，这把打得还行吧")
+        self.assertGreaterEqual(result["audio_quality"], 0.1)
+        self.assertLessEqual(result["audio_quality"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

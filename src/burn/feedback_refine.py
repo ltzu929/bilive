@@ -138,6 +138,7 @@ def process_feedback_file(
     feedback.update(
         {
             "decision": decision,
+            "refined": True,
             "generated_refined_clip": str(refined_clip),
             "generated_refined_edit_json": str(edit_json),
             "refined_range": {

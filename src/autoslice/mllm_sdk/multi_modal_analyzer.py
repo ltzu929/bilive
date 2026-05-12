@@ -63,10 +63,17 @@ def _build_audio_title(artist: str, keywords: list, transcript: str) -> str:
         if 2 <= len(keyword) <= 6 and keyword not in clean_keywords:
             clean_keywords.append(keyword)
 
+    template = (
+        "直播高能"
+        if any(k in transcript for k in ("哈哈", "厉害", "牛逼", "太强", "666"))
+        else "直播片段"
+    )
+
     if clean_keywords:
-        title = f"{artist}直播高能：{'、'.join(clean_keywords[:2])}"
+        title = f"{artist}{template}：{'、'.join(clean_keywords[:2])}"
     elif transcript:
-        title = f"{artist}直播高能片段"
+        snippet = re.sub(r"[，。！？、,!?嗯额然后就是那个]", "", transcript)[:12]
+        title = f"{artist}{template}：{snippet}" if snippet else f"{artist}{template}"
     else:
         title = f"{artist}精彩片段"
 
@@ -131,8 +138,11 @@ def combine_analysis(
         elif audio_emotion in ["happy", "calm"]:
             content_type = "chat"
 
-    # 保留建议
-    retain_recommendation = quality_score >= 0.5
+    # 保留建议：高分直接保留，边界分数需要情绪信号支撑
+    retain_recommendation = (
+        quality_score >= 0.6
+        or (quality_score >= 0.5 and audio_emotion in ("excited", "happy", "angry", "calm"))
+    )
 
     quality_reason = f"音频评分:{audio_quality:.1f}"
     if visual_quality > 0:

@@ -311,3 +311,13 @@ a.nav-item {
   text-decoration: none;
   box-sizing: border-box;
 }
+.refined-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #e0f2e9;
+  color: #1a7f37;
+  font-size: 11px;
+  font-weight: 600;
+}

@@ -101,6 +101,7 @@ def test_process_feedback_file_refines_keep_manual_range_and_queues(
     assert feedback_data["generated_refined_clip"] == str(expected_clip)
     assert feedback_data["generated_refined_edit_json"] == str(expected_edit)
     assert feedback_data["upload_status"] == "queued"
+    assert feedback_data["refined"] is True
 
 
 def test_process_feedback_file_uses_context_window_when_manual_range_is_invalid(

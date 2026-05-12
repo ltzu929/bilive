@@ -86,6 +86,12 @@ function renderList() {
       <span class="slice-meta"></span>
     `;
     button.querySelector(".slice-name").textContent = item.name;
+    if (item.refined) {
+      const badge = document.createElement("span");
+      badge.className = "refined-badge";
+      badge.textContent = "已精切";
+      button.querySelector(".slice-name").appendChild(badge);
+    }
     button.querySelector(".slice-meta").textContent =
       `${item.room_id} · ${formatBytes(item.size_bytes)} · ${item.decision}`;
     button.addEventListener("click", () => {
@@ -197,3 +203,15 @@ for (const button of elements.decisionButtons) {
 }
 
 refresh();
+
+setInterval(() => {
+  if (document.visibilityState === "visible") {
+    refresh();
+  }
+}, 30000);
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refresh();
+  }
+});
