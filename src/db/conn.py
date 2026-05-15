@@ -1,7 +1,11 @@
 import sqlite3
 import os
 
-DATA_BASE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.db")
+# 支持通过环境变量覆盖数据库路径（分布式部署时 DB 在 NFS 共享盘上）
+DATA_BASE_FILE = os.environ.get(
+    "BILIVE_DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.db"),
+)
 
 
 def connect():

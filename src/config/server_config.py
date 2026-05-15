@@ -1,33 +1,48 @@
-# Copyright (c) 2024 bilive.
+# src/config/server_config.py
+# PC 端完整配置 — 包含所有模型、GPU、ASR、切片等配置
+#
+# GPU 检测使用 lazy import，在无 torch 环境下不会崩溃（返回 False）
 
 import os
-from pathlib import Path
-from datetime import datetime
 import configparser
-import torch
-import toml
-from db.conn import create_table
+from pathlib import Path
+from .base import load_config_from_toml, SRC_DIR, BILIVE_DIR, VIDEOS_DIR, LOG_DIR, DB_PATH
 
 
-def load_config_from_toml(file_path):
-    """
-    load config from toml file and update global variables
-    """
+# ── GPU 检测 — lazy import，无 torch 时返回 False ──
+def _check_gpu():
     try:
-        with open(file_path, "r", encoding="utf-8") as file:
-            config = toml.load(file)
-            return config
-    except FileNotFoundError:
-        print(f"cannot find {file_path}", flush=True)
-    except toml.TomlDecodeError as e:
-        print(f"cannot parse {file_path} as a valid toml file, error: {e}", flush=True)
-    except Exception as e:
-        print(f"unknown error when loading config file, error: {e}", flush=True)
-    return None
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+# ── 加载配置文件 ──
+_config_path = os.environ.get("BILIVE_CONFIG", os.path.join(BILIVE_DIR, "bilive-server.toml"))
+config = load_config_from_toml(_config_path)
+if config is None:
+    print("failed to load server config file, please check bilive-server.toml", flush=True)
+    exit(1)
+
+# ── 初始化数据库 ──
+if not os.path.exists(DB_PATH):
+    print("Initialize the database", flush=True)
+    from db.conn import create_table
+    create_table()
+
+
+# ── 模型配置 ──
+GPU_EXIST = _check_gpu()
+MODEL_TYPE = config.get("model", {}).get("model_type")
+
+# ── ASR 配置 ──
+ASR_METHOD = config.get("asr", {}).get("asr_method")
+WHISPER_API_KEY = config.get("asr", {}).get("whisper_api_key")
+INFERENCE_MODEL = config.get("asr", {}).get("inference_model")
 
 
 def get_model_path():
-    SRC_DIR = str(Path(os.path.abspath(__file__)).parent)
     model_dir = os.path.join(SRC_DIR, "subtitle", "models")
     model_path = os.path.join(model_dir, f"{INFERENCE_MODEL}.pt")
     return model_path
@@ -41,31 +56,15 @@ def get_interface_config():
     return interface_config
 
 
-SRC_DIR = str(Path(os.path.abspath(__file__)).parent)
-BILIVE_DIR = str(Path(SRC_DIR).parent)
-LOG_DIR = os.path.join(BILIVE_DIR, "logs")
-VIDEOS_DIR = os.path.join(BILIVE_DIR, "Videos")
-if not os.path.exists(SRC_DIR + "/db/data.db"):
-    print("Initialize the database", flush=True)
-    create_table()
-
-config = load_config_from_toml(os.path.join(BILIVE_DIR, "bilive.toml"))
-if config is None:
-    print("failed to load config file, please check twice", flush=True)
-    exit(1)
-
-GPU_EXIST = torch.cuda.is_available()
-MODEL_TYPE = config.get("model", {}).get("model_type")
-ASR_METHOD = config.get("asr", {}).get("asr_method")
-WHISPER_API_KEY = config.get("asr", {}).get("whisper_api_key")
-INFERENCE_MODEL = config.get("asr", {}).get("inference_model")
-
+# ── 视频配置 ──
 TITLE = config.get("video", {}).get("title")
 DESC = config.get("video", {}).get("description")
 TID = config.get("video", {}).get("tid")
 GIFT_PRICE_FILTER = config.get("video", {}).get("gift_price_filter")
 RESERVE_FOR_FIXING = config.get("video", {}).get("reserve_for_fixing")
 UPLOAD_LINE = config.get("video", {}).get("upload_line")
+
+# ── 切片配置 ──
 AUTO_SLICE = config.get("slice", {}).get("auto_slice")
 SLICE_DURATION = config.get("slice", {}).get("slice_duration")
 SLICE_NUM = config.get("slice", {}).get("slice_num")
@@ -80,6 +79,7 @@ GEMINI_API_KEY = config.get("slice", {}).get("gemini_api_key")
 QWEN_API_KEY = config.get("slice", {}).get("qwen_api_key")
 SENSENOVA_API_KEY = config.get("slice", {}).get("sensenova_api_key")
 
+# ── 封面配置 ──
 GENERATE_COVER = config.get("cover", {}).get("generate_cover")
 IMAGE_GEN_MODEL = config.get("cover", {}).get("image_gen_model")
 MINIMAX_API_KEY = config.get("cover", {}).get("minimax_api_key")
@@ -98,13 +98,13 @@ DMX_API_TOKEN = config.get("cover", {}).get("dmx_api_token")
 SLICE_PROMPT = config.get("slice", {}).get("slice_prompt")
 COVER_PROMPT = config.get("cover", {}).get("cover_prompt")
 
-# OMNI 分析配置
+# ── OMNI 分析配置 ──
 OMNI_ENABLE_QUALITY_FILTER = config.get("slice", {}).get("omni", {}).get("enable_quality_filter", True)
 OMNI_QUALITY_THRESHOLD = config.get("slice", {}).get("omni", {}).get("quality_threshold", 0.6)
 OMNI_ENABLE_DEEP_ANALYSIS = config.get("slice", {}).get("omni", {}).get("enable_deep_analysis", True)
 OMNI_ANALYSIS_PROMPT = config.get("slice", {}).get("omni", {}).get("analysis_prompt", "")
 
-# 多模型协作配置
+# ── 多模型协作配置 ──
 MULTI_MODAL_VISUAL_URL = config.get("slice", {}).get("multi_modal", {}).get("visual_model_url", "http://localhost:1234/v1")
 MULTI_MODAL_VISUAL_NAME = config.get("slice", {}).get("multi_modal", {}).get("visual_model_name", "local-model")
 MULTI_MODAL_WHISPER_MODEL = config.get("slice", {}).get("multi_modal", {}).get("whisper_model", "base")
@@ -112,11 +112,11 @@ MULTI_MODAL_FRAME_FPS = config.get("slice", {}).get("multi_modal", {}).get("fram
 MULTI_MODAL_ENABLE_VISUAL = config.get("slice", {}).get("multi_modal", {}).get("enable_visual", True)
 MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("enable_audio", True)
 
-# 情感分析配置（新增）
+# ── 情感分析配置 ──
 MULTI_MODAL_ENABLE_EMOTION_ANALYSIS = config.get("slice", {}).get("multi_modal", {}).get("enable_emotion_analysis", False)
 MULTI_MODAL_EMOTION_MODEL = config.get("slice", {}).get("multi_modal", {}).get("emotion_model", "facebook/wav2vec2-base-robust-emotion")
 
-# Edit instruction configuration
+# ── Edit instruction 配置 ──
 EDIT_ENABLE_INSTRUCTION = config.get("slice", {}).get("edit", {}).get("enable_edit_instruction", True)
 EDIT_ENABLE_PROMPT_PACKAGE = config.get("slice", {}).get("edit", {}).get("enable_prompt_package", False)
 EDIT_MAX_SUBTITLE_EVIDENCE = config.get("slice", {}).get("edit", {}).get("max_subtitle_evidence", 6)
