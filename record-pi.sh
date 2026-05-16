@@ -27,14 +27,19 @@ LOG_DIR="${BILIVE_LOG_DIR:-/mnt/bilive/logs}"
 
 mkdir -p "$VIDEOS_DIR" "$LOG_DIR/record"
 
-# ── 激活虚拟环境 ──
-VENV_DIR="${BILIVE_VENV_DIR:-$PROJECT_DIR/venv}"
-if [ ! -f "$VENV_DIR/bin/activate" ]; then
-    echo "Python venv not found: $VENV_DIR"
-    echo "On Pi, create a minimal venv: python3 -m venv venv && source venv/bin/activate && pip install -r requirements-agent.txt"
-    exit 1
+# ── 激活 Python 环境：优先 conda，回退 venv ──
+CONDA_SH="$HOME/miniforge/etc/profile.d/conda.sh"
+if [ -f "$CONDA_SH" ]; then
+    source "$CONDA_SH" && conda activate bilive
+else
+    VENV_DIR="${BILIVE_VENV_DIR:-$PROJECT_DIR/venv}"
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+        source "$VENV_DIR/bin/activate"
+    else
+        echo "No Python environment found. Install conda or create venv."
+        exit 1
+    fi
 fi
-source "$VENV_DIR/bin/activate"
 
 # ── 检查 RECORD_KEY ──
 if [ -z "$RECORD_KEY" ] || [ ${#RECORD_KEY} -lt 8 ] || [ ${#RECORD_KEY} -gt 80 ]; then

@@ -16,14 +16,19 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
-# 激活虚拟环境（Pi 端轻量 venv，不含 torch 等重型依赖）
-VENV_DIR="${BILIVE_VENV_DIR:-$PROJECT_DIR/venv}"
-if [ ! -f "$VENV_DIR/bin/activate" ]; then
-    echo "Python venv not found: $VENV_DIR"
-    echo "On Pi, create a minimal venv: python3 -m venv venv && source venv/bin/activate && pip install -r requirements-agent.txt"
-    exit 1
+# 激活 Python 环境：优先 conda，回退 venv
+CONDA_SH="$HOME/miniforge/etc/profile.d/conda.sh"
+if [ -f "$CONDA_SH" ]; then
+    source "$CONDA_SH" && conda activate bilive
+else
+    VENV_DIR="${BILIVE_VENV_DIR:-$PROJECT_DIR/venv}"
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+        source "$VENV_DIR/bin/activate"
+    else
+        echo "No Python environment found. Install conda or create venv."
+        exit 1
+    fi
 fi
-source "$VENV_DIR/bin/activate"
 
 export PYTHONPATH=./src
 export BILIVE_CONFIG="${BILIVE_CONFIG:-$PROJECT_DIR/bilive-agent.toml}"
