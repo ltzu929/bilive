@@ -14,6 +14,7 @@ from src.config import (
 )
 from src.danmaku.generate_danmakus import get_resolution, process_danmakus
 from autoslice import slice_video_by_danmaku
+from src.autoslice.danmaku_slice import extract_danmaku_text
 from src.autoslice.inject_metadata import inject_metadata
 from src.autoslice.title_generator import generate_title
 from src.upload.extract_video_info import get_video_info
@@ -91,11 +92,17 @@ def slice_only(video_path):
         scan_log.error(f"Error in slice_video_by_danmaku: {e}")
         return
 
-    # 4. 处理每个切片：标题生成 + 质量筛选 + 上传
+    # 4. 处理每个切片：标题生成 + 上传
     for generated_slice in slices_path:
         slice_path = generated_slice.path
         try:
-            result = generate_title(slice_path, artist)
+            # 提取切片时段内的弹幕文本
+            danmaku_text = extract_danmaku_text(
+                xml_path,
+                generated_slice.context_start,
+                generated_slice.context_end,
+            )
+            result = generate_title(slice_path, artist, danmaku_text=danmaku_text)
 
             if result is None:
                 scan_log.error(f"Failed to generate title for {slice_path}")
@@ -111,14 +118,6 @@ def slice_only(video_path):
                     analysis_json_path = slice_path[:-4] + "_analysis.json"
                     result.to_json_file(analysis_json_path)
                     scan_log.info(f"Analysis result saved: {analysis_json_path}")
-
-                # 质量筛选
-                from src.config import OMNI_ENABLE_QUALITY_FILTER, OMNI_QUALITY_THRESHOLD
-                from src.autoslice.slice_quality_filter import should_retain_slice
-                if OMNI_ENABLE_QUALITY_FILTER and not should_retain_slice(result, OMNI_QUALITY_THRESHOLD):
-                    scan_log.info(f"Slice filtered by quality (score={result.quality_score}), removing: {slice_path}")
-                    os.remove(slice_path)
-                    continue
 
                 slice_title = result.title
             else:

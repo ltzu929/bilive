@@ -12,7 +12,7 @@ def title_generator(model_type):
     """
 
     def decorator(func):
-        def wrapper(video_path, artist):
+        def wrapper(video_path, artist, danmaku_text=""):
             if model_type == "zhipu":
                 from .mllm_sdk.zhipu_sdk import zhipu_glm_4v_plus_generate_title
                 return zhipu_glm_4v_plus_generate_title(video_path, artist)
@@ -54,7 +54,8 @@ def title_generator(model_type):
                     enable_visual=MULTI_MODAL_ENABLE_VISUAL,
                     enable_audio=MULTI_MODAL_ENABLE_AUDIO,
                     enable_emotion=MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
-                    emotion_model=MULTI_MODAL_EMOTION_MODEL
+                    emotion_model=MULTI_MODAL_EMOTION_MODEL,
+                    danmaku_text=danmaku_text,
                 )
 
             elif model_type == "local-audio":
@@ -63,7 +64,9 @@ def title_generator(model_type):
                 from src.config import (
                     MULTI_MODAL_WHISPER_MODEL,
                     MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
-                    MULTI_MODAL_EMOTION_MODEL
+                    MULTI_MODAL_EMOTION_MODEL,
+                    MULTI_MODAL_VISUAL_URL,
+                    MULTI_MODAL_VISUAL_NAME,
                 )
                 return multi_modal_analyze(
                     video_path, artist,
@@ -71,7 +74,10 @@ def title_generator(model_type):
                     enable_visual=False,  # 不启用视觉分析
                     enable_audio=True,
                     enable_emotion=MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
-                    emotion_model=MULTI_MODAL_EMOTION_MODEL
+                    emotion_model=MULTI_MODAL_EMOTION_MODEL,
+                    visual_model_url=MULTI_MODAL_VISUAL_URL,
+                    visual_model_name=MULTI_MODAL_VISUAL_NAME,
+                    danmaku_text=danmaku_text,
                 )
 
             else:

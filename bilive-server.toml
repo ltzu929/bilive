@@ -71,8 +71,8 @@ enable_deep_analysis = true
 analysis_prompt = ""
 
 [slice.multi_modal]
-visual_model_url = "http://localhost:1234/v1"
-visual_model_name = "local-model"
+visual_model_url = "http://100.118.141.26:6542/v1"
+visual_model_name = "qwen/qwen3.5-9b"
 audio_model = "whisper"
 whisper_model = "large-v3"
 frame_fps = 0.5

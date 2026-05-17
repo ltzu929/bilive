@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import os
+import re
+from xml.etree import ElementTree
 
 from .auto_slice_video.autosv.autosv import extract_timestamps
 from .auto_slice_video.autosv.calculate.selection import find_dense_periods
@@ -86,4 +88,48 @@ def slice_video_by_danmaku(
             slices_path.append(output_name)
 
     return slices_path
+
+
+def extract_danmaku_text(xml_path: str, start: float, end: float,
+                         max_chars: int = 500) -> str:
+    """Extract danmaku messages within a time window from a Bilibili XML file.
+
+    Args:
+        xml_path: Path to the .xml danmaku file.
+        start: Start time in seconds.
+        end: End time in seconds.
+        max_chars: Maximum total characters to return (truncates oldest first).
+
+    Returns:
+        Space-joined danmaku text within the time window.
+    """
+    if not os.path.exists(xml_path):
+        return ""
+
+    messages = []
+    try:
+        for event, elem in ElementTree.iterparse(xml_path):
+            if elem.tag != "d":
+                continue
+            p_attr = elem.attrib.get("p", "")
+            if not p_attr:
+                continue
+            try:
+                timestamp = float(p_attr.split(",")[0])
+            except (ValueError, IndexError):
+                continue
+            if start <= timestamp <= end:
+                text = (elem.text or "").strip()
+                if text:
+                    messages.append(text)
+            elem.clear()
+    except Exception:
+        return ""
+
+    # Truncate to max_chars (remove oldest first to keep recent context)
+    result = " ".join(messages)
+    if len(result) > max_chars:
+        result = result[-max_chars:]
+
+    return result
 

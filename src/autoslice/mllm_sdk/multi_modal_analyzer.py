@@ -4,7 +4,8 @@
 
 import json
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from openai import OpenAI
 from src.log.logger import scan_log
 from src.autoslice.analysis_result import AnalysisResult, Highlight, TrimSuggestion
 from .visual_analyzer import extract_key_frames, analyze_frames, cleanup_frames
@@ -80,10 +81,64 @@ def _build_audio_title(artist: str, keywords: list, transcript: str) -> str:
     return _truncate_text(title, 30)
 
 
+TITLE_PROMPT = """基于以下直播切片信息，生成标题和简介。
+
+主播：{artist}
+弹幕内容（观众反应）：{danmaku_text}
+主播讲话（Whisper转录）：{transcript}
+
+要求：
+1. title: 吸引人的标题（不超过30字），体现这段切片的亮点
+2. description: 内容简介（不超过100字），概括这段直播的主要内容
+
+直接返回JSON格式，不要其他文字：
+{{"title": "...", "description": "..."}}"""
+
+
+def _llm_generate_title(
+    artist: str,
+    transcript: str,
+    danmaku_text: str,
+    model_url: str = "http://localhost:1234/v1",
+    model_name: str = "local-model",
+    timeout: float = 120.0,
+) -> Optional[Dict[str, str]]:
+    """Call local LLM to generate title and description from danmaku + transcript.
+
+    Returns dict with 'title' and 'description' keys, or None on failure.
+    """
+    prompt = TITLE_PROMPT.format(
+        artist=artist,
+        danmaku_text=danmaku_text or "(无弹幕)",
+        transcript=transcript or "(无转录)",
+    )
+    try:
+        client = OpenAI(base_url=model_url, api_key="lm-studio")
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=2000,
+            timeout=timeout,
+        )
+        raw = completion.choices[0].message.content or ""
+        # Try to extract JSON from the response
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            return json.loads(raw[start:end])
+    except Exception as e:
+        scan_log.warning(f"LLM title generation failed: {e}")
+    return None
+
+
 def combine_analysis(
     visual_result: Dict[str, Any],
     audio_result: Dict[str, Any],
-    artist: str
+    artist: str,
+    danmaku_text: str = "",
+    model_url: str = "http://localhost:1234/v1",
+    model_name: str = "local-model",
 ) -> Dict[str, Any]:
     """综合视觉和音频分析结果
 
@@ -91,6 +146,9 @@ def combine_analysis(
         visual_result: 视觉分析结果（可能为空）
         audio_result: 音频分析结果
         artist: 主播名称
+        danmaku_text: 切片时段内的弹幕文本
+        model_url: 本地 LLM 服务地址
+        model_name: 本地 LLM 模型名称
 
     Returns:
         Dict: 综合分析结果
@@ -116,11 +174,26 @@ def combine_analysis(
     else:
         quality_score = audio_quality
 
-    # 综合标题
-    if visual_title:
-        title = _truncate_text(visual_title, 30)
-    else:
-        title = _build_audio_title(artist, audio_keywords, transcript)
+    # 综合标题：优先 LLM，降级视觉标题，最后模板
+    title = ""
+    description = ""
+
+    if transcript or danmaku_text:
+        llm_result = _llm_generate_title(
+            artist, transcript, danmaku_text, model_url, model_name
+        )
+        if llm_result:
+            title = llm_result.get("title", "")
+            description = llm_result.get("description", "")
+
+    if not title:
+        if visual_title:
+            title = _truncate_text(visual_title, 30)
+        else:
+            title = _build_audio_title(artist, audio_keywords, transcript)
+
+    if not description:
+        description = _truncate_description(transcript, 100) if transcript else "精彩直播片段"
 
     # 综合标签
     tags = list(set(visual_tags + audio_keywords))[:5]
@@ -152,7 +225,7 @@ def combine_analysis(
 
     return {
         "title": title,
-        "description": _truncate_description(transcript, 100) if transcript else "精彩直播片段",
+        "description": description,
         "tags": tags,
         "content_type": content_type,
         "quality_score": quality_score,
@@ -176,7 +249,8 @@ def multi_modal_analyze(
     enable_visual: bool = True,
     enable_audio: bool = True,
     enable_emotion: bool = False,
-    emotion_model: str = "facebook/wav2vec2-base-robust-emotion"
+    emotion_model: str = "facebook/wav2vec2-base-robust-emotion",
+    danmaku_text: str = "",
 ) -> AnalysisResult:
     """多模型协作分析视频切片
 
@@ -189,6 +263,7 @@ def multi_modal_analyze(
         whisper_model: Whisper 模型大小
         enable_visual: 是否启用视觉分析
         enable_audio: 是否启用音频分析
+        danmaku_text: 切片时段内的弹幕文本
 
     Returns:
         AnalysisResult: 综合分析结果
@@ -232,7 +307,12 @@ def multi_modal_analyze(
 
     # 3. 综合分析
     scan_log.info("Combining analysis results...")
-    combined = combine_analysis(visual_result, audio_result, artist)
+    combined = combine_analysis(
+        visual_result, audio_result, artist,
+        danmaku_text=danmaku_text,
+        model_url=visual_model_url,
+        model_name=visual_model_name,
+    )
 
     # 4. 构建 AnalysisResult
     result = AnalysisResult.from_dict(combined)

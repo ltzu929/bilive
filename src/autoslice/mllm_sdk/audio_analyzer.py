@@ -146,7 +146,7 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[
         global _whisper_model
         if _whisper_model is None:
             scan_log.info(f"Loading Whisper model: {model_size}")
-            _whisper_model = whisper.load_model(model_size)
+            _whisper_model = whisper.load_model(model_size, device="cpu")
         else:
             scan_log.info("Using cached Whisper model")
 
