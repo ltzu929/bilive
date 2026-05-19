@@ -118,15 +118,29 @@ def _llm_generate_title(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=2000,
-            timeout=timeout,
         )
-        raw = completion.choices[0].message.content or ""
-        # Try to extract JSON from the response
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start != -1 and end > start:
-            return json.loads(raw[start:end])
+        msg = completion.choices[0].message
+        scan_log.info(f"LLM raw content={msg.content!r}")
+        if hasattr(msg, "reasoning_content"):
+            scan_log.info(f"LLM reasoning_content={msg.reasoning_content!r}")
+
+        # Try content first, fall back to reasoning_content for Qwen 3.5+
+        def _extract_json(text: str) -> Optional[Dict[str, str]]:
+            if not text:
+                return None
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start != -1 and end > start:
+                return json.loads(text[start:end])
+            return None
+
+        result = _extract_json(msg.content or "")
+        if result is None:
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                scan_log.info("Falling back to reasoning_content for title generation")
+                result = _extract_json(reasoning)
+        return result
     except Exception as e:
         scan_log.warning(f"LLM title generation failed: {e}")
     return None
@@ -185,6 +199,11 @@ def combine_analysis(
         if llm_result:
             title = llm_result.get("title", "")
             description = llm_result.get("description", "")
+            scan_log.info(
+                f"LLM title result: title={title!r}, description={description!r}"
+            )
+        else:
+            scan_log.info("LLM title generation returned None, falling back to template")
 
     if not title:
         if visual_title:
