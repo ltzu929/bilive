@@ -3,12 +3,12 @@
 
 [recording]
 # 录制输出目录（NFS 挂载路径，指向 PC 的磁盘）
-# Pi 上: /mnt/bilive/Videos
+# Pi 上: /mnt/win/bilive/Videos
 # 环境变量 BILIVE_VIDEOS_DIR 可覆盖此项
-videos_dir = "/mnt/bilive/Videos"
+videos_dir = "/mnt/win/bilive/Videos"
 
 # 日志目录（也指向 NFS 挂载）
-log_dir = "/mnt/bilive/logs"
+log_dir = "/mnt/win/bilive/logs"
 
 # 扫描配置
 [scan]

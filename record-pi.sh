@@ -9,8 +9,8 @@
 # 环境变量:
 #   BILIVE_RUNTIME_DIR  — 项目根目录 (默认: 脚本所在目录)
 #   BILIVE_VENV_DIR     — Python venv 路径 (默认: ./venv)
-#   BILIVE_VIDEOS_DIR   — 视频输出目录 (默认: /mnt/bilive/Videos)
-#   BILIVE_LOG_DIR      — 日志目录 (默认: /mnt/bilive/logs)
+#   BILIVE_VIDEOS_DIR   — 视频输出目录 (默认: /mnt/win/bilive/Videos)
+#   BILIVE_LOG_DIR      — 日志目录 (默认: /mnt/win/bilive/logs)
 #   RECORD_KEY          — blrec API 密钥 (必须)
 #   BLREC_HOST          — blrec 监听地址 (默认: 0.0.0.0)
 #   BLREC_PORT          — blrec 监听端口 (默认: 2233)
@@ -22,8 +22,8 @@ PROJECT_DIR="${BILIVE_RUNTIME_DIR:-$SCRIPT_DIR}"
 cd "$PROJECT_DIR"
 
 # ── NFS 挂载路径 ──
-VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-/mnt/bilive/Videos}"
-LOG_DIR="${BILIVE_LOG_DIR:-/mnt/bilive/logs}"
+VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-/mnt/win/bilive/Videos}"
+LOG_DIR="${BILIVE_LOG_DIR:-/mnt/win/bilive/logs}"
 
 mkdir -p "$VIDEOS_DIR" "$LOG_DIR/record"
 
@@ -49,7 +49,7 @@ if [ -z "$RECORD_KEY" ] || [ ${#RECORD_KEY} -lt 8 ] || [ ${#RECORD_KEY} -gt 80 ]
 fi
 
 # ── Cookie 处理 ──
-COOKIE_STORE="${BILIVE_COOKIE_FILE:-/mnt/bilive/.secrets/bilibili.cookie}"
+COOKIE_STORE="${BILIVE_COOKIE_FILE:-/mnt/win/bilive/.secrets/bilibili.cookie}"
 export COOKIE_STORE
 
 COOKIE=$(python - <<'PY'
@@ -84,7 +84,7 @@ def read_raw_cookie(path):
         return ""
     return cookie if "SESSDATA=" in cookie else ""
 
-cookie_store = Path(os.environ.get("COOKIE_STORE", "/mnt/bilive/.secrets/bilibili.cookie"))
+cookie_store = Path(os.environ.get("COOKIE_STORE", "/mnt/win/bilive/.secrets/bilibili.cookie"))
 
 for candidate in [
     Path("src/upload/bilitool/bilitool/model/config.json"),
@@ -131,7 +131,7 @@ if not settings_path.is_file():
     raise SystemExit("settings.toml not found.")
 
 cookie = os.environ["COOKIE"]
-videos_dir = os.environ.get("BILIVE_VIDEOS_DIR", "/mnt/bilive/Videos")
+videos_dir = os.environ.get("BILIVE_VIDEOS_DIR", "/mnt/win/bilive/Videos")
 text = settings_path.read_text(encoding="utf-8")
 
 if not re.search(r'^\s*cookie\s*=', text, re.MULTILINE):

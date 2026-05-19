@@ -3,12 +3,12 @@
 #
 # 用法:
 #   ./agent.sh                    # 使用默认配置
-#   BILIVE_VIDEOS_DIR=/mnt/bilive/Videos ./agent.sh  # 指定 NFS 挂载路径
+#   BILIVE_VIDEOS_DIR=/mnt/win/bilive/Videos ./agent.sh  # 指定 NFS 挂载路径
 #
 # 环境变量:
 #   BILIVE_CONFIG      — agent 配置文件路径 (默认: ./bilive-agent.toml)
-#   BILIVE_VIDEOS_DIR  — 视频输出目录 (默认: /mnt/bilive/Videos)
-#   BILIVE_LOG_DIR     — 日志目录 (默认: /mnt/bilive/logs)
+#   BILIVE_VIDEOS_DIR  — 视频输出目录 (默认: /mnt/win/bilive/Videos)
+#   BILIVE_LOG_DIR     — 日志目录 (默认: /mnt/win/bilive/logs)
 #   BILIVE_VENV_DIR    — Python 虚拟环境路径 (默认: ./venv)
 
 set -e
@@ -32,8 +32,8 @@ fi
 
 export PYTHONPATH=./src
 export BILIVE_CONFIG="${BILIVE_CONFIG:-$PROJECT_DIR/bilive-agent.toml}"
-export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-/mnt/bilive/Videos}"
-export BILIVE_LOG_DIR="${BILIVE_LOG_DIR:-/mnt/bilive/logs}"
+export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-/mnt/win/bilive/Videos}"
+export BILIVE_LOG_DIR="${BILIVE_LOG_DIR:-/mnt/win/bilive/logs}"
 
 # 确保输出目录存在（NFS 挂载）
 mkdir -p "$BILIVE_VIDEOS_DIR" "$BILIVE_LOG_DIR/runtime" "$BILIVE_LOG_DIR/scan"
