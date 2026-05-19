@@ -1,0 +1,21 @@
+[Unit]
+Description=Bilive B站直播录制
+After=remote-fs.target network.target
+RequiresMountsFor=/mnt/win
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/mnt/win/bilive
+EnvironmentFile=/mnt/win/bilive/.secrets/env
+Environment=BILIVE_VIDEOS_DIR=/mnt/win/bilive/Videos
+Environment=BILIVE_LOG_DIR=/mnt/win/bilive/logs
+Environment=BILIVE_COOKIE_FILE=/mnt/win/bilive/.secrets/bilibili.cookie
+ExecStart=/home/ubuntu/miniforge/envs/bilive/bin/python -m blrec --host 0.0.0.0 --port 2233 -c /mnt/win/bilive/settings.toml --api-key ${RECORD_KEY}
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
