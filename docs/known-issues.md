@@ -2,7 +2,11 @@
 
 ## scan_slice 跳过逻辑与 blrec `delete_source = "never"` 冲突
 
-**已修复 (2026-05-21)**。原先 `scan_slice.py` 看到任何 `.flv` 就跳过整个文件夹，但 blrec 配置了 `delete_source = "never"`（`settings.toml`），`.flv` 从不删除。修复后只跳过没有配对 `.mp4` 的 `.flv`（正在录制中），同时排除 `_slice` 标记的切片输出文件。
+**已修复 (2026-05-21)**。原先 `scan_slice.py` 看到任何 `.flv` 就跳过整个文件夹。修复了三层逻辑：
+
+1. **切片输出排除**：切片产物命名 `{时间戳}s_{房间号}_{日期}.flv`（如 `2816s_`），不含 `_slice` 但也不应被当作录制文件
+2. **已完成录制识别**：原片 `.flv` 无配对 `.mp4` 但有 `.jsonl`→录制已完成，mp4 已被切片流程清理
+3. **活跃录制检测**：`.flv` 既无 `.mp4` 也无 `.jsonl`→正在录制中，跳过
 
 代码：`src/burn/scan_slice.py` → `process_folder_slice_only()`
 
