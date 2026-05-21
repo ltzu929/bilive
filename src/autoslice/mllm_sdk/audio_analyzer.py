@@ -126,16 +126,74 @@ def extract_audio(video_path: str) -> str:
         return ""
 
 
-def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[str, Any]:
-    """使用本地 Whisper 模型转录音频
+def transcribe_audio_whisper(audio_path: str, model_size: str = "base", device: str = "cpu", engine: str = "openai-whisper") -> Dict[str, Any]:
+    """使用 ASR 模型转录音频
 
     Args:
         audio_path: 音频文件路径
-        model_size: Whisper 模型大小 (tiny/base/small/medium/large)
+        model_size: ASR 模型 (whisper: tiny/base/small/medium/large/large-v3/large-v3-turbo; qwen3: HuggingFace ID)
+        device: 推理设备 ("cpu" 或 "cuda")
+        engine: ASR 引擎 ("openai-whisper", "faster-whisper", "qwen3-asr")
 
     Returns:
         Dict: 转录结果，包含文本和元数据
     """
+    if engine == "faster-whisper":
+        return _transcribe_faster_whisper(audio_path, model_size, device)
+    elif engine == "qwen3-asr":
+        return _transcribe_qwen3_asr(audio_path, model_size, device)
+    else:
+        return _transcribe_openai_whisper(audio_path, model_size, device)
+
+
+def _transcribe_faster_whisper(audio_path: str, model_size: str = "large-v3", device: str = "cuda") -> Dict[str, Any]:
+    """使用 faster-whisper (CTranslate2) 转录音频"""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        scan_log.error("faster-whisper not installed. Run: pip install faster-whisper")
+        scan_log.info("Falling back to openai-whisper")
+        return _transcribe_openai_whisper(audio_path, model_size, device)
+
+    try:
+        global _whisper_model
+        # int8_float16 avoids cuBLAS dependency on CUDA 13.x while still using GPU
+        compute_type = "int8" if device == "cpu" else "int8_float16"
+        if _whisper_model is None or not hasattr(_whisper_model, '_faster_whisper'):
+            scan_log.info(f"Loading faster-whisper model: {model_size}, device={device}, compute_type={compute_type}")
+            _whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            _whisper_model._faster_whisper = True
+        else:
+            scan_log.info("Using cached faster-whisper model")
+
+        scan_log.info(f"Transcribing audio (faster-whisper): {audio_path}")
+        segments_iter, info = _whisper_model.transcribe(audio_path, language="zh")
+
+        segments = []
+        for segment in segments_iter:
+            segments.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": normalize_transcript(segment.text),
+            })
+
+        transcript = format_transcript_segments(segments, "")
+
+        scan_log.info(f"Transcription complete (faster-whisper): {len(transcript)} chars, {len(segments)} segments")
+
+        return {
+            "transcript": transcript,
+            "segments": segments,
+            "language": info.language if info else "zh"
+        }
+
+    except Exception as e:
+        scan_log.error(f"Faster-whisper transcription failed: {e}")
+        return {"transcript": "", "error": str(e)}
+
+
+def _transcribe_openai_whisper(audio_path: str, model_size: str = "base", device: str = "cpu") -> Dict[str, Any]:
+    """使用 openai-whisper 转录音频（旧引擎，作为 fallback）"""
     try:
         import whisper
     except ImportError:
@@ -144,13 +202,13 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[
 
     try:
         global _whisper_model
-        if _whisper_model is None:
+        if _whisper_model is None or hasattr(_whisper_model, '_faster_whisper'):
             scan_log.info(f"Loading Whisper model: {model_size}")
-            _whisper_model = whisper.load_model(model_size, device="cpu")
+            _whisper_model = whisper.load_model(model_size, device=device)
         else:
             scan_log.info("Using cached Whisper model")
 
-        scan_log.info(f"Transcribing audio: {audio_path}")
+        scan_log.info(f"Transcribing audio (openai-whisper): {audio_path}")
         result = _whisper_model.transcribe(audio_path, language="zh")
 
         segments = result.get("segments", [])
@@ -169,6 +227,86 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base") -> Dict[
 
     except Exception as e:
         scan_log.error(f"Whisper transcription failed: {e}")
+        return {"transcript": "", "error": str(e)}
+
+
+# ── Qwen3-ASR ──
+_qwen3_asr_model = None
+
+
+def _transcribe_qwen3_asr(audio_path: str, model_size: str = "Qwen/Qwen3-ASR-1.7B", device: str = "cuda") -> Dict[str, Any]:
+    """使用 Qwen3-ASR 转录音频（2026 年最新，中文 SOTA）
+
+    Args:
+        audio_path: WAV 音频文件路径
+        model_size: HuggingFace 模型 ID
+        device: 推理设备 ("cuda" 或 "cpu")
+
+    Returns:
+        Dict: {"transcript": str, "segments": [...], "language": str}
+    """
+    global _qwen3_asr_model
+
+    try:
+        from qwen_asr import Qwen3ASRModel
+    except ImportError:
+        scan_log.error("qwen-asr not installed. Run: pip install qwen-asr")
+        return {"transcript": "", "error": "qwen_asr_not_installed"}
+
+    try:
+        import torch
+
+        if _qwen3_asr_model is None:
+            scan_log.info(f"Loading Qwen3-ASR model: {model_size}, device={device}")
+            _qwen3_asr_model = Qwen3ASRModel.from_pretrained(
+                model_size,
+                dtype=torch.bfloat16,
+                device_map=device,
+                max_new_tokens=1024,
+            )
+        else:
+            scan_log.info("Using cached Qwen3-ASR model")
+
+        # Qwen3-ASR 自动检测语言，也可指定
+        scan_log.info(f"Transcribing audio (Qwen3-ASR): {audio_path}")
+        results = _qwen3_asr_model.transcribe(
+            audio=[audio_path],
+            language=[None],  # auto-detect
+        )
+
+        if not results:
+            scan_log.warning("Qwen3-ASR returned empty results")
+            return {"transcript": "", "segments": [], "language": "zh"}
+
+        r = results[0]
+        transcript = normalize_transcript(r.text) if r.text else ""
+
+        # 构建 segments（如果有时间戳）
+        segments = []
+        if hasattr(r, 'time_stamps') and r.time_stamps:
+            for ts in r.time_stamps:
+                segments.append({
+                    "start": ts.get("start", 0) if isinstance(ts, dict) else getattr(ts, "start", 0),
+                    "end": ts.get("end", 0) if isinstance(ts, dict) else getattr(ts, "end", 0),
+                    "text": normalize_transcript(
+                        ts.get("text", "") if isinstance(ts, dict) else getattr(ts, "text", "")
+                    ),
+                })
+
+        language = r.language if hasattr(r, 'language') and r.language else "zh"
+        scan_log.info(
+            f"Transcription complete (Qwen3-ASR): {len(transcript)} chars, "
+            f"{len(segments)} segments, lang={language}"
+        )
+
+        return {
+            "transcript": transcript,
+            "segments": segments,
+            "language": language,
+        }
+
+    except Exception as e:
+        scan_log.error(f"Qwen3-ASR transcription failed: {e}")
         return {"transcript": "", "error": str(e)}
 
 
@@ -422,15 +560,19 @@ def analyze_audio(
     video_path: str,
     whisper_model: str = "base",
     enable_emotion: bool = False,
-    emotion_model: str = "facebook/wav2vec2-base-robust-emotion"
+    emotion_model: str = "facebook/wav2vec2-base-robust-emotion",
+    whisper_engine: str = "openai-whisper",
+    whisper_device: str = "cpu",
 ) -> Dict[str, Any]:
     """完整的音频分析流程
 
     Args:
         video_path: 视频文件路径
-        whisper_model: Whisper 模型大小 (tiny/base/small/medium/large)
+        whisper_model: Whisper 模型大小 (tiny/base/small/medium/large/large-v3)
         enable_emotion: 是否启用深度情感分析
         emotion_model: 情感识别模型名称
+        whisper_engine: Whisper 引擎 ("openai-whisper" 或 "faster-whisper")
+        whisper_device: 推理设备 ("cpu" 或 "cuda")
 
     Returns:
         Dict: 音频分析结果
@@ -443,7 +585,9 @@ def analyze_audio(
     result = {}
 
     # 2. Whisper 转录
-    transcript_result = transcribe_audio_whisper(audio_path, whisper_model)
+    transcript_result = transcribe_audio_whisper(
+        audio_path, whisper_model, device=whisper_device, engine=whisper_engine
+    )
     result["transcript"] = transcript_result.get("transcript", "")
     result["segments"] = transcript_result.get("segments", [])
 
@@ -454,11 +598,10 @@ def analyze_audio(
         result["emotion_confidence"] = emotion_result.get("emotion_confidence", 0.3)
         result["all_emotions"] = emotion_result.get("all_emotions", {})
     else:
-        # 使用启发式情感分析
-        content_analysis = analyze_audio_content(result["transcript"])
-        result["emotion"] = content_analysis.get("audio_emotion", "neutral")
-        result["audio_keywords"] = content_analysis.get("audio_keywords", [])
-        result["audio_quality"] = content_analysis.get("audio_quality", 0.5)
+        # local-audio 模式不再使用启发式评分，空占位
+        result["emotion"] = "neutral"
+        result["audio_keywords"] = []
+        result["audio_quality"] = 0.5
 
     # 4. 清理临时文件
     cleanup_audio(audio_path)

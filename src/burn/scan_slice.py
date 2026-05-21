@@ -21,11 +21,23 @@ def process_folder_slice_only(folder_path):
     3. 检查是否有对应的 xml 弹幕文件
     4. 调用 slice_only() 处理
     """
-    # 不处理正在录制的文件夹
-    flv_files = list(Path(folder_path).glob("*.flv"))
+    # 不处理正在录制的文件夹（.flv 存在但无配对 .mp4）
+    # 排除切片输出的 .flv 文件（含 _slice 标记）
+    flv_files = [
+        f for f in Path(folder_path).glob("*.flv")
+        if "_slice" not in f.name
+    ]
     if flv_files:
-        scan_log.info(f"Found recording files in {folder_path}, skipping.")
-        return
+        # 检查是否有活跃录制：.flv 无匹配 .mp4 表示仍在录制中
+        active_recording = False
+        for flv in flv_files:
+            mp4_pair = flv.with_suffix(".mp4")
+            if not mp4_pair.exists():
+                scan_log.info(f"Active recording detected: {flv.name}, skipping folder.")
+                active_recording = True
+                break
+        if active_recording:
+            return
 
     # 处理已完成的 mp4 文件（排除已处理的 "-.mp4" 和切片文件）
     mp4_files = [

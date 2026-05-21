@@ -32,19 +32,27 @@ upload_line = "auto"
 
 [slice]
 auto_slice = false
+slice_method = "burst"               # "density"(旧) 或 "burst"(新 - 弹幕突增检测)
 slice_prompt = ""
-slice_duration = 60
-slice_pre_context = 30
-slice_post_context = 40
-slice_num = 2
-slice_overlap = 30
-slice_step = 1
+slice_duration = 60                  # density 模式用
+slice_pre_context = 30               # density 模式用
+slice_post_context = 40               # density 模式用
+slice_num = 2                         # density 模式用
+slice_overlap = 30                    # density 模式用
+slice_step = 1                        # density 模式用
 min_video_size = 20
 mllm_model = "local-audio"
 qwen_api_key = ""
 zhipu_api_key = ""
 gemini_api_key = ""
 sensenova_api_key = ""
+
+[slice.burst]
+burst_ratio = 3.0                    # 突增阈值：局部密度/背景密度 ≥ 此值
+burst_window = 10                     # 突增检测窗口（秒）
+burst_context = 60                    # 峰值前后各取的秒数（切片总长 = 2 × context）
+burst_merge_gap = 5                   # 相邻突增合并间隔（秒）
+burst_top_n = 3                       # 最多选几个突增事件
 
 [cover]
 generate_cover = false
@@ -74,7 +82,10 @@ analysis_prompt = ""
 visual_model_url = "http://100.118.141.26:6542/v1"
 visual_model_name = "qwen/qwen3.5-9b"
 audio_model = "whisper"
-whisper_model = "large-v3"
+whisper_model = "Qwen/Qwen3-ASR-1.7B"   # Qwen3-ASR 模型 ID (HuggingFace); whisper: large-v3 / large-v3-turbo
+whisper_engine = "qwen3-asr"             # "qwen3-asr"(推荐，2026 中文 SOTA) / "openai-whisper" / "faster-whisper"
+whisper_device = "cuda"                  # "cuda"(GPU) 或 "cpu"
+whisper_compute_type = "int8"            # Qwen3-ASR 忽略此项（自动 bfloat16）；Whisper 专用
 frame_fps = 0.5
 enable_visual = false
 enable_audio = true
