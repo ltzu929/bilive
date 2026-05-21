@@ -85,8 +85,8 @@ Pi 只跑 blrec。conda 环境 `bilive`，代码路径 `/mnt/win/bilive/`（CIFS
 | 文档 | 内容 |
 |------|------|
 | `docs/known-issues.md` | 已知 bug 及修复状态 |
-| `docs/asr-engines.md` | ASR 引擎对比、安装、预下载 |
-| `docs/scan.md` | 切片管线详细流程 |
-| `docs/upload.md` | 上传流程、cookie 认证问题 |
-| `docs/setup.md` | PC/Pi 首次部署步骤 |
-| `docs/models.md` | 模型选择与性能对比 |
+| `docs/asr-engines.md` | ASR 引擎对比、Qwen3-ASR、faster-whisper |
+| `docs/scan.md` | 切片管线完整流程 + 代码索引 |
+| `docs/upload.md` | 上传流程、cookie 认证、code=-101 问题 |
+| `docs/plans/` | 架构设计与实施计划 |
+| `docs/specs/` | 切片管线优化设计文档 |
