@@ -50,7 +50,7 @@ def merge_command(in_final_video, title, artist, date, merge_list):
     ]
     try:
         scan_log.info("Begin merging videos...")
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
         scan_log.debug(f"FFmpeg output: {result.stdout}")
         if result.stderr:
             scan_log.debug(f"FFmpeg debug: {result.stderr}")

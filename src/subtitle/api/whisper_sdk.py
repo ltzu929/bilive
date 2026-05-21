@@ -54,7 +54,7 @@ def check_file_format(filename):
             "libmp3lame",
             mp3filename,
         ]
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
         return mp3filename
     else:
         return filename

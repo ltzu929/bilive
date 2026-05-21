@@ -241,7 +241,7 @@ def _write_refined_clip(
         "copy",
         str(output_path),
     ]
-    subprocess.run(command, check=True, capture_output=True, text=True)
+    subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
 
 
 def _build_refined_instruction(
