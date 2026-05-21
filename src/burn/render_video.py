@@ -15,6 +15,12 @@ from src.config import (
     SLICE_POST_CONTEXT,
     SLICE_PRE_CONTEXT,
     SLICE_STEP,
+    SLICE_METHOD,
+    BURST_RATIO,
+    BURST_WINDOW,
+    BURST_CONTEXT,
+    BURST_MERGE_GAP,
+    BURST_TOP_N,
 )
 from src.danmaku.generate_danmakus import get_resolution, process_danmakus
 from src.subtitle.subtitle_generator import generate_subtitle
@@ -95,6 +101,12 @@ def render_video(video_path):
                 pre_context=SLICE_PRE_CONTEXT,
                 post_context=SLICE_POST_CONTEXT,
                 return_metadata=True,
+                slice_method=SLICE_METHOD,
+                burst_ratio=BURST_RATIO,
+                burst_window=BURST_WINDOW,
+                burst_context=BURST_CONTEXT,
+                burst_merge_gap=BURST_MERGE_GAP,
+                burst_top_n=BURST_TOP_N,
             )
             for generated_slice in slices_path:
                 slice_path = generated_slice.path

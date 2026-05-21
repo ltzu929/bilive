@@ -67,6 +67,8 @@ def title_generator(model_type):
                     MULTI_MODAL_EMOTION_MODEL,
                     MULTI_MODAL_VISUAL_URL,
                     MULTI_MODAL_VISUAL_NAME,
+                    WHISPER_ENGINE,
+                    WHISPER_DEVICE,
                 )
                 return multi_modal_analyze(
                     video_path, artist,
@@ -78,6 +80,8 @@ def title_generator(model_type):
                     visual_model_url=MULTI_MODAL_VISUAL_URL,
                     visual_model_name=MULTI_MODAL_VISUAL_NAME,
                     danmaku_text=danmaku_text,
+                    whisper_engine=WHISPER_ENGINE,
+                    whisper_device=WHISPER_DEVICE,
                 )
 
             else:

@@ -111,10 +111,21 @@ MULTI_MODAL_WHISPER_MODEL = config.get("slice", {}).get("multi_modal", {}).get("
 MULTI_MODAL_FRAME_FPS = config.get("slice", {}).get("multi_modal", {}).get("frame_fps", 0.5)
 MULTI_MODAL_ENABLE_VISUAL = config.get("slice", {}).get("multi_modal", {}).get("enable_visual", True)
 MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("enable_audio", True)
+WHISPER_ENGINE = config.get("slice", {}).get("multi_modal", {}).get("whisper_engine", "openai-whisper")
+WHISPER_DEVICE = config.get("slice", {}).get("multi_modal", {}).get("whisper_device", "cpu")
+WHISPER_COMPUTE_TYPE = config.get("slice", {}).get("multi_modal", {}).get("whisper_compute_type", "int8")
 
 # ── 情感分析配置 ──
 MULTI_MODAL_ENABLE_EMOTION_ANALYSIS = config.get("slice", {}).get("multi_modal", {}).get("enable_emotion_analysis", False)
 MULTI_MODAL_EMOTION_MODEL = config.get("slice", {}).get("multi_modal", {}).get("emotion_model", "facebook/wav2vec2-base-robust-emotion")
+
+# ── 切片方法配置 ──
+SLICE_METHOD = config.get("slice", {}).get("slice_method", "density")  # "density" 或 "burst"
+BURST_RATIO = config.get("slice", {}).get("burst", {}).get("burst_ratio", 3.0)
+BURST_WINDOW = config.get("slice", {}).get("burst", {}).get("burst_window", 10)
+BURST_CONTEXT = config.get("slice", {}).get("burst", {}).get("burst_context", 60)
+BURST_MERGE_GAP = config.get("slice", {}).get("burst", {}).get("burst_merge_gap", 5)
+BURST_TOP_N = config.get("slice", {}).get("burst", {}).get("burst_top_n", 3)
 
 # ── Edit instruction 配置 ──
 EDIT_ENABLE_INSTRUCTION = config.get("slice", {}).get("edit", {}).get("enable_edit_instruction", True)

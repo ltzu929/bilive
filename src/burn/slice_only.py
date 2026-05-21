@@ -11,6 +11,12 @@ from src.config import (
     SLICE_POST_CONTEXT,
     SLICE_PRE_CONTEXT,
     SLICE_STEP,
+    SLICE_METHOD,
+    BURST_RATIO,
+    BURST_WINDOW,
+    BURST_CONTEXT,
+    BURST_MERGE_GAP,
+    BURST_TOP_N,
 )
 from src.danmaku.generate_danmakus import get_resolution, process_danmakus
 from autoslice import slice_video_by_danmaku
@@ -74,7 +80,7 @@ def slice_only(video_path):
     # 2. 获取主播信息（用于生成标题）
     title, artist, date = get_video_info(original_video_path)
 
-    # 3. 弹幕密度切片（使用原始视频，不渲染）
+    # 3. 弹幕密度/突增切片（使用原始视频，不渲染）
     try:
         slices_path = slice_video_by_danmaku(
             ass_path,
@@ -86,6 +92,13 @@ def slice_only(video_path):
             pre_context=SLICE_PRE_CONTEXT,
             post_context=SLICE_POST_CONTEXT,
             return_metadata=True,
+            # burst 模式参数
+            slice_method=SLICE_METHOD,
+            burst_ratio=BURST_RATIO,
+            burst_window=BURST_WINDOW,
+            burst_context=BURST_CONTEXT,
+            burst_merge_gap=BURST_MERGE_GAP,
+            burst_top_n=BURST_TOP_N,
         )
         scan_log.info(f"Generated {len(slices_path)} slices")
     except Exception as e:
@@ -112,6 +125,15 @@ def slice_only(video_path):
             # 检查是否为 AnalysisResult 对象（local-audio/omni 模式）
             from src.autoslice.analysis_result import AnalysisResult
             if isinstance(result, AnalysisResult):
+                # LLM 质量判断：retain=False 则跳过此切片
+                if not result.retain_recommendation:
+                    scan_log.info(
+                        f"Slice {slice_path} filtered by LLM judge: "
+                        f"retain=False, reason={result.quality_reason}"
+                    )
+                    os.remove(slice_path)
+                    continue
+
                 # 保存分析结果 JSON（供 MCP 剪辑使用）
                 from src.config import OMNI_ENABLE_DEEP_ANALYSIS
                 if OMNI_ENABLE_DEEP_ANALYSIS:

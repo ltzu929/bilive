@@ -10,6 +10,7 @@ from src.log.logger import scan_log
 from src.autoslice.analysis_result import AnalysisResult, Highlight, TrimSuggestion
 from .visual_analyzer import extract_key_frames, analyze_frames, cleanup_frames
 from .audio_analyzer import analyze_audio
+from .judge import judge_and_title, JudgeResult
 
 
 COMBINE_ANALYSIS_PROMPT = """基于以下视觉和音频分析结果，综合生成直播切片的分析结果：
@@ -270,6 +271,8 @@ def multi_modal_analyze(
     enable_emotion: bool = False,
     emotion_model: str = "facebook/wav2vec2-base-robust-emotion",
     danmaku_text: str = "",
+    whisper_engine: str = "openai-whisper",
+    whisper_device: str = "cpu",
 ) -> AnalysisResult:
     """多模型协作分析视频切片
 
@@ -300,7 +303,9 @@ def multi_modal_analyze(
             video_path,
             whisper_model,
             enable_emotion=enable_emotion,
-            emotion_model=emotion_model
+            emotion_model=emotion_model,
+            whisper_engine=whisper_engine,
+            whisper_device=whisper_device,
         )
 
         # 释放 GPU 显存（Whisper 和情感模型）
@@ -325,16 +330,36 @@ def multi_modal_analyze(
             visual_result = {"visual_quality": 0.3, "error": "no_frames"}
 
     # 3. 综合分析
-    scan_log.info("Combining analysis results...")
-    combined = combine_analysis(
-        visual_result, audio_result, artist,
-        danmaku_text=danmaku_text,
-        model_url=visual_model_url,
-        model_name=visual_model_name,
-    )
-
-    # 4. 构建 AnalysisResult
-    result = AnalysisResult.from_dict(combined)
+    if enable_visual:
+        # 多模态模式：使用 combine_analysis 综合视觉+音频
+        scan_log.info("Combining analysis results (multi-modal)...")
+        combined = combine_analysis(
+            visual_result, audio_result, artist,
+            danmaku_text=danmaku_text,
+            model_url=visual_model_url,
+            model_name=visual_model_name,
+        )
+        result = AnalysisResult.from_dict(combined)
+    else:
+        # local-audio 模式：使用 LLM judge 直接判断保留+生成标题
+        scan_log.info("Running LLM judge for retain/title decision...")
+        transcript = audio_result.get("transcript", "") if audio_result else ""
+        judge_result = judge_and_title(
+            artist=artist,
+            danmaku_text=danmaku_text,
+            transcript=transcript,
+            model_url=visual_model_url,
+            model_name=visual_model_name,
+        )
+        result = judge_result.to_analysis_result()
+        # 补充转录信息
+        result.transcript = transcript
+        segments = audio_result.get("segments", []) if audio_result else []
+        from src.autoslice.analysis_result import TranscriptSegment
+        result.transcript_segments = [
+            TranscriptSegment(start=s.get("start", 0), end=s.get("end", 0), text=s.get("text", ""))
+            for s in segments
+        ]
 
     scan_log.info(
         f"Multi-modal analysis complete: title={result.title}, "
