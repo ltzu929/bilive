@@ -1,3 +1,6 @@
+import json
+import time
+
 import httpx
 import pytest
 
@@ -176,6 +179,72 @@ async def test_app_uses_videos_root_from_env(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()[0]["name"] == "3100s_8792912_20260506-18-56-51.mp4"
+
+
+@pytest.mark.anyio
+async def test_slice_progress_api_returns_idle_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-progress")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "idle"
+
+
+@pytest.mark.anyio
+async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
+    progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
+    progress_path.parent.mkdir(parents=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "phase": "slice",
+                "phase_label": "切片中",
+                "current_slice_percent": 42.5,
+                "updated_at": time.time(),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-progress")
+
+    assert response.status_code == 200
+    assert response.json()["phase_label"] == "切片中"
+    assert response.json()["current_slice_percent"] == 42.5
+
+
+@pytest.mark.anyio
+async def test_slice_progress_api_marks_stale(tmp_path, monkeypatch):
+    progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
+    progress_path.parent.mkdir(parents=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "phase": "slice",
+                "updated_at": time.time() - 600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-progress")
+
+    assert response.status_code == 200
+    assert response.json()["stale"] is True
 
 
 @pytest.mark.anyio

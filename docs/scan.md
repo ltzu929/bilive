@@ -40,6 +40,10 @@ scan_slice.py 每 120s 轮询 Videos/ 目录
 | 元数据注入 | `src/autoslice/inject_metadata.py` | `inject_metadata()` |
 | 上传队列 | `src/db/conn.py` | SQLite `upload_queue` 表 |
 
+## 切片进度状态
+
+自动切片会把当前流水线阶段和 ffmpeg 切片百分比写入 `logs/runtime/slice-progress.json`，Dashboard 通过 `GET /api/slice-progress` 读取并在 `/tasks` 页面的切片进度面板中展示。进度文件位于项目运行目录的 `logs/runtime/` 下，避免频繁写入 Pi SD 卡。
+
 ## 两条管线
 
 | 特性 | `scan.py` (完整) | `scan_slice.py` (切片专用) |

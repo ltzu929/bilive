@@ -61,6 +61,7 @@ def slice_video_by_danmaku(
     burst_context=60,
     burst_merge_gap=5,
     burst_top_n=3,
+    progress_callback=None,
 ):
     """Slice by danmaku density or burst detection.
 
@@ -85,6 +86,7 @@ def slice_video_by_danmaku(
             merge_gap=burst_merge_gap,
             top_n=burst_top_n,
             return_metadata=return_metadata,
+            progress_callback=progress_callback,
         )
 
     # 旧算法：density 模式
@@ -97,15 +99,16 @@ def slice_video_by_danmaku(
 
     autosv_log.info("The dense periods and their count are:")
     slices_path = []
-    for period in dense_periods:
+    total_slices = len(dense_periods)
+    for index, period in enumerate(dense_periods, start=1):
         density_start = float(period[0])
         density_end = density_start + float(duration)
         context_start = max(0.0, density_start - float(pre_context))
         context_end = density_end + float(post_context)
         context_duration = context_end - context_start
-        output_name = (
-            f"{output_folder}/"
-            f"{format_seconds_for_filename(context_start)}s_{video_name}"
+        output_name = os.path.join(
+            output_folder,
+            f"{format_seconds_for_filename(context_start)}s_{video_name}",
         )
 
         autosv_log.info(
@@ -113,7 +116,43 @@ def slice_video_by_danmaku(
             f"with the count is {period[1]}; "
             f"context from {context_start:g} to {context_end:g} seconds"
         )
-        slice_video(video_path, output_name, context_start, context_duration)
+        _emit_slice_progress(
+            progress_callback,
+            "slice_start",
+            index,
+            total_slices,
+            output_name,
+            0.0,
+        )
+
+        def on_ffmpeg_progress(percent, idx=index, total=total_slices, path=output_name):
+            _emit_slice_progress(
+                progress_callback,
+                "slice_progress",
+                idx,
+                total,
+                path,
+                percent,
+            )
+
+        if progress_callback:
+            slice_video(
+                video_path,
+                output_name,
+                context_start,
+                context_duration,
+                progress_callback=on_ffmpeg_progress,
+            )
+        else:
+            slice_video(video_path, output_name, context_start, context_duration)
+        _emit_slice_progress(
+            progress_callback,
+            "slice_complete",
+            index,
+            total_slices,
+            output_name,
+            100.0,
+        )
         autosv_log.info(f"Slice the {output_name} done.")
 
         if return_metadata:
@@ -145,6 +184,7 @@ def _slice_by_burst(
     merge_gap=5,
     top_n=3,
     return_metadata=False,
+    progress_callback=None,
 ):
     """突增检测模式：基于弹幕突增率找切片点"""
     from src.log.logger import scan_log
@@ -169,12 +209,47 @@ def _slice_by_burst(
         return []
 
     slices_path = []
+    total_slices = len(events)
     for i, event in enumerate(events):
+        index = i + 1
         output_name = (
             f"{output_folder}/"
             f"{format_seconds_for_filename(event.start)}s_{video_name}"
         )
-        slice_video(video_path, output_name, event.start, event.duration)
+        _emit_slice_progress(
+            progress_callback,
+            "slice_start",
+            index,
+            total_slices,
+            output_name,
+            0.0,
+        )
+
+        def on_ffmpeg_progress(percent, idx=index, total=total_slices, path=output_name):
+            _emit_slice_progress(
+                progress_callback,
+                "slice_progress",
+                idx,
+                total,
+                path,
+                percent,
+            )
+
+        slice_video(
+            video_path,
+            output_name,
+            event.start,
+            event.duration,
+            progress_callback=on_ffmpeg_progress,
+        )
+        _emit_slice_progress(
+            progress_callback,
+            "slice_complete",
+            index,
+            total_slices,
+            output_name,
+            100.0,
+        )
         scan_log.info(
             f"Burst slice #{i+1}: {output_name} "
             f"[{event.start:.1f}s - {event.end:.1f}s] "
@@ -197,6 +272,27 @@ def _slice_by_burst(
             slices_path.append(output_name)
 
     return slices_path
+
+
+def _emit_slice_progress(
+    progress_callback,
+    event,
+    current_slice,
+    total_slices,
+    output_path,
+    percent,
+):
+    if not progress_callback:
+        return
+    progress_callback(
+        {
+            "event": event,
+            "current_slice": current_slice,
+            "total_slices": total_slices,
+            "output_path": output_path,
+            "percent": percent,
+        }
+    )
 
 
 def extract_danmaku_text(xml_path: str, start: float, end: float,

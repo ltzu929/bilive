@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
+from src.burn.slice_progress import load_progress_state
 
 
 CHUNK_SIZE = 1024 * 1024
@@ -91,8 +92,11 @@ def media_response(
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Content-Length": str(content_length),
     }
-    return StreamingResponse(
-        iter_file_range(path, start, end),
+    with path.open("rb") as file:
+        file.seek(start)
+        content = file.read(content_length)
+    return Response(
+        content,
         status_code=206,
         media_type=response_media_type,
         headers=headers,
@@ -116,6 +120,10 @@ def create_app(
             return [item.to_dict() for item in store.list_slices(room_id)]
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/slice-progress")
+    async def get_slice_progress() -> Dict[str, Any]:
+        return load_progress_state()
 
     @app.patch("/api/slices/{slice_id}/feedback")
     async def update_feedback(
