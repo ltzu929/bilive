@@ -1,53 +1,46 @@
 # Copyright (c) 2024 bilive.
 
-import argparse
 import os
-import subprocess
+
+from autoslice import slice_video_by_danmaku
+from db.conn import insert_upload_queue
+from src.autoslice.danmaku_slice import extract_danmaku_text
+from src.autoslice.title_generator import generate_title
+from src.burn.render_command import render_command
 from src.config import (
-    SRC_DIR,
-    MODEL_TYPE,
     AUTO_SLICE,
-    SLICE_DURATION,
-    MIN_VIDEO_SIZE,
-    VIDEOS_DIR,
-    SLICE_NUM,
-    SLICE_OVERLAP,
-    SLICE_POST_CONTEXT,
-    SLICE_PRE_CONTEXT,
-    SLICE_STEP,
-    SLICE_METHOD,
-    BURST_RATIO,
-    BURST_WINDOW,
     BURST_CONTEXT,
     BURST_MERGE_GAP,
+    BURST_RATIO,
     BURST_TOP_N,
+    BURST_WINDOW,
+    MIN_VIDEO_SIZE,
+    MODEL_TYPE,
 )
 from src.danmaku.generate_danmakus import get_resolution, process_danmakus
-from src.subtitle.subtitle_generator import generate_subtitle
-from src.burn.render_command import render_command
-from autoslice import slice_video_by_danmaku
-from src.autoslice.inject_metadata import inject_metadata
-from src.autoslice.title_generator import generate_title
-from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
-from db.conn import insert_upload_queue
+from src.subtitle.subtitle_generator import generate_subtitle
+from src.upload.extract_video_info import get_video_info
+from src.upload.slice_metadata import (
+    delete_slice_upload_metadata,
+    write_slice_upload_metadata,
+)
 
 
 def normalize_video_path(filepath):
-    """Normalize the video path to upload
-    Args:
-        filepath: str, the path of video
-    """
+    """Normalize the video path to upload."""
     parts = filepath.rsplit("/", 1)[-1].split("_")
     date_time_parts = parts[1].split("-")
-    new_date_time = f"{date_time_parts[0][:4]}-{date_time_parts[0][4:6]}-{date_time_parts[0][6:8]}-{date_time_parts[1]}-{date_time_parts[2]}"
+    new_date_time = (
+        f"{date_time_parts[0][:4]}-{date_time_parts[0][4:6]}-"
+        f"{date_time_parts[0][6:8]}-{date_time_parts[1]}-{date_time_parts[2]}"
+    )
     return filepath.rsplit("/", 1)[0] + "/" + parts[0] + "_" + new_date_time + "-.mp4"
 
 
 def check_file_size(file_path):
     file_size = os.path.getsize(file_path)
-    file_size_mb = file_size / (1024 * 1024)
-    return file_size_mb
+    return file_size / (1024 * 1024)
 
 
 def render_video(video_path):
@@ -63,132 +56,169 @@ def render_video(video_path):
     jsonl_path = original_video_path[:-4] + ".jsonl"
 
     try:
-        # Recoginze the resolution of video
         resolution_x, resolution_y = get_resolution(original_video_path)
-        # Process the danmakus to ass and remove emojis
         subtitle_font_size, subtitle_margin_v = process_danmakus(
-            xml_path, resolution_x, resolution_y
+            xml_path,
+            resolution_x,
+            resolution_y,
         )
-    # except TypeError as e:
-    #     scan_log.error(f"TypeError: {e} - Check the return value of process_danmakus")
-    # except FileNotFoundError as e:
-    #     scan_log.error(f"FileNotFoundError: {e} - Check if the file exists")
     except Exception as e:
         scan_log.error(f"Error in process_danmakus: {e}")
         subtitle_font_size = "16"
         subtitle_margin_v = "60"
 
-    # Generate the srt file via whisper model
     if MODEL_TYPE != "pipeline":
         generate_subtitle(original_video_path)
 
-    # Burn danmaku or subtitles into the videos
     render_command(
-        original_video_path, format_video_path, subtitle_font_size, subtitle_margin_v
+        original_video_path,
+        format_video_path,
+        subtitle_font_size,
+        subtitle_margin_v,
     )
-    scan_log.info("Complete danamku burning and wait for uploading!")
+    scan_log.info("Complete danmaku burning and wait for uploading.")
 
-    if AUTO_SLICE:
-        if check_file_size(format_video_path) > MIN_VIDEO_SIZE:
-            title, artist, date = get_video_info(format_video_path)
-            slices_path = slice_video_by_danmaku(
-                ass_path,
-                format_video_path,
-                SLICE_DURATION,
-                SLICE_NUM,
-                SLICE_OVERLAP,
-                SLICE_STEP,
-                pre_context=SLICE_PRE_CONTEXT,
-                post_context=SLICE_POST_CONTEXT,
-                return_metadata=True,
-                slice_method=SLICE_METHOD,
-                burst_ratio=BURST_RATIO,
-                burst_window=BURST_WINDOW,
-                burst_context=BURST_CONTEXT,
-                burst_merge_gap=BURST_MERGE_GAP,
-                burst_top_n=BURST_TOP_N,
-            )
-            for generated_slice in slices_path:
-                slice_path = generated_slice.path
-                try:
-                    result = generate_title(slice_path, artist)
+    if AUTO_SLICE and check_file_size(format_video_path) > MIN_VIDEO_SIZE:
+        _slice_rendered_video(format_video_path, xml_path, srt_path)
 
-                    # 处理 OMNI 分析结果
-                    if result is None:
-                        scan_log.error(f"Failed to generate title for {slice_path}")
-                        continue
-
-                    # 检查是否为 OMNI 分析结果对象
-                    from src.autoslice.analysis_result import AnalysisResult
-                    if isinstance(result, AnalysisResult):
-                        # 保存分析结果 JSON（供 MCP 剪辑使用）
-                        from src.config import OMNI_ENABLE_DEEP_ANALYSIS
-                        if OMNI_ENABLE_DEEP_ANALYSIS:
-                            analysis_json_path = slice_path[:-4] + "_analysis.json"
-                            result.to_json_file(analysis_json_path)
-                            scan_log.info(f"Analysis result saved: {analysis_json_path}")
-
-                        # 质量筛选
-                        from src.config import OMNI_ENABLE_QUALITY_FILTER, OMNI_QUALITY_THRESHOLD
-                        from src.autoslice.slice_quality_filter import should_retain_slice
-                        if OMNI_ENABLE_QUALITY_FILTER and not should_retain_slice(result, OMNI_QUALITY_THRESHOLD):
-                            scan_log.info(f"Slice {slice_path} filtered by quality, removing")
-                            os.remove(slice_path)
-                            continue
-
-                        slice_title = result.title
-                    else:
-                        # 传统模型返回标题字符串
-                        slice_title = result
-
-                    slice_video_flv_path = slice_path[:-4] + ".flv"
-                    if isinstance(result, AnalysisResult):
-                        from src.config import (
-                            EDIT_DEFAULT_HIGHLIGHT_WINDOW,
-                            EDIT_ENABLE_INSTRUCTION,
-                            EDIT_ENABLE_PROMPT_PACKAGE,
-                            EDIT_MAX_SUBTITLE_EVIDENCE,
-                        )
-                        from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
-                        from src.autoslice.edit_instruction import TimeRange
-
-                        maybe_write_edit_outputs(
-                            analysis=result,
-                            source_video=format_video_path,
-                            slice_video=slice_path,
-                            artist=artist,
-                            slice_duration=generated_slice.duration,
-                            subtitle_path=srt_path if os.path.exists(srt_path) else None,
-                            output_video=slice_video_flv_path,
-                            enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
-                            enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
-                            max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
-                            default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
-                            density_core=TimeRange(
-                                start=generated_slice.density_core_start,
-                                end=generated_slice.density_core_end,
-                            ),
-                            context_window=TimeRange(
-                                start=generated_slice.context_start,
-                                end=generated_slice.context_end,
-                            ),
-                        )
-
-                    inject_metadata(slice_path, slice_title, slice_video_flv_path)
-                    os.remove(slice_path)
-                    if not insert_upload_queue(slice_video_flv_path):
-                        scan_log.error("Cannot insert the video to the upload queue")
-                except Exception as e:
-                    scan_log.error(f"Error in {slice_path}: {e}")
-
-    # Delete relative files
     for remove_path in [original_video_path, xml_path, ass_path, srt_path, jsonl_path]:
         if os.path.exists(remove_path):
             os.remove(remove_path)
 
-    # # For test
-    # test_path = original_video_path[:-4]
-    # os.rename(original_video_path, test_path)
-
     if not insert_upload_queue(format_video_path):
         scan_log.error("Cannot insert the video to the upload queue")
+
+
+def _slice_rendered_video(format_video_path: str, xml_path: str, srt_path: str) -> None:
+    _, artist, _ = get_video_info(format_video_path)
+    room_id = os.path.basename(format_video_path).split("_", 1)[0]
+    slices_path = slice_video_by_danmaku(
+        xml_path,
+        format_video_path,
+        return_metadata=True,
+        burst_ratio=BURST_RATIO,
+        burst_window=BURST_WINDOW,
+        burst_context=BURST_CONTEXT,
+        burst_merge_gap=BURST_MERGE_GAP,
+        burst_top_n=BURST_TOP_N,
+    )
+
+    for generated_slice in slices_path:
+        slice_path = generated_slice.path
+        try:
+            _prepare_slice_for_upload(
+                slice_path,
+                generated_slice,
+                xml_path,
+                srt_path,
+                format_video_path,
+                artist,
+                room_id,
+            )
+        except Exception as e:
+            scan_log.error(f"Error in {slice_path}: {e}")
+            delete_slice_upload_metadata(slice_path)
+
+
+def _prepare_slice_for_upload(
+    slice_path,
+    generated_slice,
+    xml_path,
+    srt_path,
+    source_video,
+    artist,
+    room_id,
+):
+    danmaku_text = extract_danmaku_text(
+        xml_path,
+        generated_slice.context_start,
+        generated_slice.context_end,
+    )
+    result = generate_title(slice_path, artist, danmaku_text=danmaku_text)
+    if result is None:
+        scan_log.error(f"Failed to generate title for {slice_path}")
+        if os.path.exists(slice_path):
+            os.remove(slice_path)
+        return
+
+    from src.autoslice.analysis_result import AnalysisResult
+
+    if isinstance(result, AnalysisResult):
+        if not _maybe_save_analysis_and_filter(result, slice_path):
+            return
+        slice_title = result.title
+        slice_desc = result.description
+        slice_tags = result.tags
+        _maybe_write_edit_outputs(result, generated_slice, source_video, slice_path, artist, srt_path)
+    else:
+        slice_title = result
+        slice_desc = "精彩直播片段"
+        slice_tags = ["直播切片"]
+
+    write_slice_upload_metadata(
+        slice_path,
+        title=slice_title,
+        desc=slice_desc,
+        tag=slice_tags,
+        source=f"https://live.bilibili.com/{room_id}",
+    )
+    if not insert_upload_queue(slice_path):
+        scan_log.error("Cannot insert the video to the upload queue")
+
+
+def _maybe_save_analysis_and_filter(result, slice_path) -> bool:
+    from src.autoslice.slice_quality_filter import should_retain_slice
+    from src.config import (
+        OMNI_ENABLE_DEEP_ANALYSIS,
+        OMNI_ENABLE_QUALITY_FILTER,
+        OMNI_QUALITY_THRESHOLD,
+    )
+
+    if OMNI_ENABLE_DEEP_ANALYSIS:
+        analysis_json_path = slice_path[:-4] + "_analysis.json"
+        result.to_json_file(analysis_json_path)
+        scan_log.info(f"Analysis result saved: {analysis_json_path}")
+
+    if OMNI_ENABLE_QUALITY_FILTER and not should_retain_slice(
+        result,
+        OMNI_QUALITY_THRESHOLD,
+    ):
+        scan_log.info(f"Slice {slice_path} filtered by quality, removing")
+        os.remove(slice_path)
+        delete_slice_upload_metadata(slice_path)
+        return False
+
+    return True
+
+
+def _maybe_write_edit_outputs(result, generated_slice, source_video, slice_path, artist, srt_path):
+    from src.autoslice.edit_instruction import TimeRange
+    from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
+    from src.config import (
+        EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+        EDIT_ENABLE_INSTRUCTION,
+        EDIT_ENABLE_PROMPT_PACKAGE,
+        EDIT_MAX_SUBTITLE_EVIDENCE,
+    )
+
+    maybe_write_edit_outputs(
+        analysis=result,
+        source_video=source_video,
+        slice_video=slice_path,
+        artist=artist,
+        slice_duration=generated_slice.duration,
+        subtitle_path=srt_path if os.path.exists(srt_path) else None,
+        output_video=slice_path,
+        enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
+        enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
+        max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
+        default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+        density_core=TimeRange(
+            start=generated_slice.density_core_start,
+            end=generated_slice.density_core_end,
+        ),
+        context_window=TimeRange(
+            start=generated_slice.context_start,
+            end=generated_slice.context_end,
+        ),
+    )

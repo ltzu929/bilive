@@ -18,6 +18,11 @@ from src.autoslice.edit_instruction import (
 from src.autoslice.edit_instruction_builder import infer_slice_start_seconds
 from src.db.conn import insert_upload_queue
 from src.log.logger import scan_log
+from src.upload.slice_metadata import (
+    delete_slice_upload_metadata,
+    read_slice_upload_metadata,
+    write_slice_upload_metadata,
+)
 
 
 VALID_DECISIONS = {"keep", "drop", "review"}
@@ -118,7 +123,15 @@ def process_feedback_file(
             feedback=feedback,
         )
         refined_instruction.to_json_file(edit_json)
+        write_slice_upload_metadata(
+            refined_clip,
+            title=refined_instruction.upload_suggestion.title or title,
+            desc=refined_instruction.upload_suggestion.description,
+            tag=refined_instruction.upload_suggestion.tags,
+            source=_select_upload_source(feedback),
+        )
     except Exception as exc:
+        delete_slice_upload_metadata(refined_clip)
         scan_log.error(f"Failed to refine feedback {feedback_path}: {exc}")
         return FeedbackRefineResult(
             feedback_path=str(feedback_path),
@@ -233,8 +246,6 @@ def _write_refined_clip(
         str(selected_range.input_path),
         "-t",
         _format_seconds(selected_range.duration),
-        "-metadata:g",
-        f"generate={title}",
         "-c:v",
         "copy",
         "-c:a",
@@ -343,7 +354,7 @@ def _refined_clip_path(
         f"{_format_seconds(selected_range.source_start)}s_"
         f"{source_stem}_refined"
     )
-    return slice_path.with_name(f"{output_stem}.flv")
+    return slice_path.with_name(f"{output_stem}.mp4")
 
 
 def _has_distinct_source(source_path: Path, slice_path: Path) -> bool:
@@ -369,10 +380,21 @@ def _select_upload_title(
     if instruction is not None and instruction.upload_suggestion.title.strip():
         return instruction.upload_suggestion.title.strip()
 
+    metadata = read_slice_upload_metadata(slice_path)
+    if metadata and str(metadata.get("title", "")).strip():
+        return str(metadata["title"]).strip()
+
     title = _read_generate_metadata(slice_path)
     if title:
         return title
     return slice_path.stem
+
+
+def _select_upload_source(feedback: dict[str, Any]) -> str:
+    room_id = str(feedback.get("room_id") or "").strip()
+    if room_id:
+        return f"https://live.bilibili.com/{room_id}"
+    return "https://live.bilibili.com/"
 
 
 def _read_generate_metadata(path: Path) -> str:

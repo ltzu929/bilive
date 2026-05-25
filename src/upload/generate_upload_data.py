@@ -1,18 +1,17 @@
 # Copyright (c) 2024 bilive.
 
-import os
-import time
-import codecs
-from datetime import datetime
-from src.upload.extract_video_info import (
-    generate_title,
-    generate_desc,
-    generate_tag,
-    generate_source,
-)
-import subprocess
 import json
+import subprocess
+
 from src.config import TID
+from src.log.logger import scan_log
+from src.upload.extract_video_info import (
+    generate_desc,
+    generate_source,
+    generate_tag,
+    generate_title,
+)
+from src.upload.slice_metadata import read_slice_upload_metadata
 
 
 def generate_video_data(video_path):
@@ -27,6 +26,16 @@ def generate_video_data(video_path):
 
 
 def generate_slice_data(video_path):
+    metadata = read_slice_upload_metadata(video_path)
+    if metadata:
+        title = metadata.get("title") or "直播切片"
+        desc = metadata.get("desc") or "精彩直播片段"
+        tag = metadata.get("tag") or "直播切片"
+        source = metadata.get("source") or "https://live.bilibili.com/"
+        cover = metadata.get("cover") or ""
+        dynamic = metadata.get("dynamic") or ""
+        return title, desc, TID, tag, source, cover, dynamic
+
     try:
         command = [
             "ffprobe",
@@ -42,13 +51,12 @@ def generate_slice_data(video_path):
         )
         parsed_output = json.loads(output)
         title = parsed_output["format"]["tags"]["generate"]
-        tid = TID
         tag = "直播切片"
         source = "https://live.bilibili.com/"
-        return title, tid, tag, source
+        return title, "", TID, tag, source, "", ""
     except Exception as e:
         scan_log.error(f"Error in generate_slice_data: {e}")
-        return None, None, None, None
+        return None, None, None, None, None, None, None
 
 
 if __name__ == "__main__":

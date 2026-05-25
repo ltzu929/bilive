@@ -5,26 +5,20 @@ import os
 from pathlib import Path
 
 from src.config import (
-    AUTO_SLICE,
-    SLICE_DURATION,
     MIN_VIDEO_SIZE,
-    SLICE_NUM,
-    SLICE_OVERLAP,
-    SLICE_POST_CONTEXT,
-    SLICE_PRE_CONTEXT,
-    SLICE_STEP,
-    SLICE_METHOD,
     BURST_RATIO,
     BURST_WINDOW,
     BURST_CONTEXT,
     BURST_MERGE_GAP,
     BURST_TOP_N,
 )
-from src.danmaku.generate_danmakus import get_resolution, process_danmakus
 from autoslice import slice_video_by_danmaku
 from src.autoslice.danmaku_slice import extract_danmaku_text
-from src.autoslice.inject_metadata import inject_metadata
 from src.autoslice.title_generator import generate_title
+from src.upload.slice_metadata import (
+    delete_slice_upload_metadata,
+    write_slice_upload_metadata,
+)
 from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
 from src.burn.slice_progress import SliceProgressWriter
@@ -38,6 +32,26 @@ def check_file_size(file_path):
     return file_size_mb
 
 
+def unload_local_audio_models_after_batch() -> None:
+    """Release local ASR/emotion models after one recording batch is done."""
+    import src.config as runtime_config
+
+    if getattr(runtime_config, "MLLM_MODEL", "") not in {"multi-modal", "local-audio"}:
+        return
+    if not getattr(runtime_config, "MULTI_MODAL_UNLOAD_AUDIO_MODEL", True):
+        return
+
+    from src.autoslice.mllm_sdk.audio_analyzer import (
+        unload_asr_models,
+        unload_emotion_model,
+    )
+
+    scan_log.info("Unloading local audio models after slice batch")
+    unload_asr_models()
+    if getattr(runtime_config, "MULTI_MODAL_ENABLE_EMOTION_ANALYSIS", False):
+        unload_emotion_model()
+
+
 def slice_only(video_path):
     """Run the standalone slice pipeline for one completed recording."""
     if not os.path.exists(video_path):
@@ -49,10 +63,9 @@ def slice_only(video_path):
     source_name = Path(original_video_path).name
     room_id = Path(original_video_path).parent.name
     xml_path = original_video_path[:-4] + ".xml"
-    ass_path = original_video_path[:-4] + ".ass"
 
     if not os.path.exists(xml_path):
-        scan_log.warning(f"No danmaku file for {video_path}, cannot slice by density.")
+        scan_log.warning(f"No danmaku file for {video_path}, cannot slice by burst.")
         return
 
     if check_file_size(original_video_path) < MIN_VIDEO_SIZE:
@@ -64,9 +77,10 @@ def slice_only(video_path):
 
     scan_log.info(f"Starting slice-only processing: {original_video_path}")
     progress.update(
+        force=True,
         status="running",
         phase="start",
-        phase_label="开始处理",
+        phase_label="准备切片",
         room_id=room_id,
         source_path=original_video_path,
         source_name=source_name,
@@ -74,45 +88,34 @@ def slice_only(video_path):
         total_slices=0,
         current_slice_path="",
         current_slice_percent=0.0,
-        message="正在准备切片任务",
+        message="准备切片任务",
         error="",
     )
 
-    try:
-        progress.update(
-            status="running",
-            phase="danmaku",
-            phase_label="弹幕转换",
-            message="正在转换弹幕",
-        )
-        resolution_x, resolution_y = get_resolution(original_video_path)
-        process_danmakus(xml_path, resolution_x, resolution_y)
-        scan_log.info(f"Danmaku converted: {ass_path}")
-    except Exception as e:
-        scan_log.error(f"Error in process_danmakus: {e}")
-        progress.error(str(e))
-        return
-
     progress.update(
+        force=True,
         status="running",
         phase="info",
         phase_label="读取信息",
-        message="正在读取主播和录制信息",
+        message="读取录制信息",
     )
     title, artist, date = get_video_info(original_video_path)
 
     try:
         progress.update(
+            force=True,
             status="running",
             phase="detect",
-            phase_label="检测片段",
-            message="正在检测高能片段",
+            phase_label="检测高能片段",
+            message="正在检测弹幕突增片段",
         )
 
         def on_slice_progress(event):
             current_slice = event.get("current_slice", 0)
             total_slices = event.get("total_slices", 0)
+            event_name = event.get("event", "slice_progress")
             progress.update(
+                force=event_name in {"slice_start", "slice_complete"},
                 status="running",
                 phase="slice",
                 phase_label="切片中",
@@ -123,21 +126,14 @@ def slice_only(video_path):
                 total_slices=total_slices,
                 current_slice_path=event.get("output_path", ""),
                 current_slice_percent=event.get("percent", 0.0),
-                message=f"正在切第 {current_slice}/{total_slices} 个片段",
+                message=f"正在切片 {current_slice}/{total_slices}",
                 error="",
             )
 
         slices_path = slice_video_by_danmaku(
-            ass_path,
+            xml_path,
             original_video_path,
-            SLICE_DURATION,
-            SLICE_NUM,
-            SLICE_OVERLAP,
-            SLICE_STEP,
-            pre_context=SLICE_PRE_CONTEXT,
-            post_context=SLICE_POST_CONTEXT,
             return_metadata=True,
-            slice_method=SLICE_METHOD,
             burst_ratio=BURST_RATIO,
             burst_window=BURST_WINDOW,
             burst_context=BURST_CONTEXT,
@@ -156,6 +152,7 @@ def slice_only(video_path):
         slice_path = generated_slice.path
         try:
             progress.update(
+                force=True,
                 status="running",
                 phase="analyze",
                 phase_label="分析标题",
@@ -163,7 +160,7 @@ def slice_only(video_path):
                 total_slices=total_slices,
                 current_slice_path=slice_path,
                 current_slice_percent=100.0,
-                message=f"正在分析第 {index}/{total_slices} 个片段",
+                message=f"正在分析切片 {index}/{total_slices}",
                 error="",
             )
             danmaku_text = extract_danmaku_text(
@@ -197,10 +194,12 @@ def slice_only(video_path):
                     scan_log.info(f"Analysis result saved: {analysis_json_path}")
 
                 slice_title = result.title
+                slice_desc = result.description
+                slice_tags = result.tags
             else:
                 slice_title = result
-
-            slice_video_flv_path = slice_path[:-4] + ".flv"
+                slice_desc = "精彩直播片段"
+                slice_tags = ["直播切片"]
 
             if isinstance(result, AnalysisResult):
                 from src.config import (
@@ -218,7 +217,7 @@ def slice_only(video_path):
                     slice_video=slice_path,
                     artist=artist,
                     slice_duration=generated_slice.duration,
-                    output_video=slice_video_flv_path,
+                    output_video=slice_path,
                     enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
                     enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
                     max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
@@ -234,48 +233,61 @@ def slice_only(video_path):
                 )
 
             progress.update(
+                force=True,
                 status="running",
                 phase="metadata",
                 phase_label="写入元数据",
                 current_slice=index,
                 total_slices=total_slices,
                 current_slice_path=slice_path,
-                message="正在注入标题元数据",
+                message="正在写入上传参数",
             )
-            inject_metadata(slice_path, slice_title, slice_video_flv_path)
-            os.remove(slice_path)
+            write_slice_upload_metadata(
+                slice_path,
+                title=slice_title,
+                desc=slice_desc,
+                tag=slice_tags,
+                source=f"https://live.bilibili.com/{room_id}",
+            )
 
             progress.update(
+                force=True,
                 status="running",
                 phase="queue",
-                phase_label="入上传队列",
+                phase_label="加入上传队列",
                 current_slice=index,
                 total_slices=total_slices,
-                current_slice_path=slice_video_flv_path,
+                current_slice_path=slice_path,
                 message="正在加入上传队列",
             )
             if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1":
-                scan_log.info(f"Skip upload queue for local test: {slice_video_flv_path}")
-            elif not insert_upload_queue(slice_video_flv_path):
-                scan_log.error(f"Cannot insert slice to upload queue: {slice_video_flv_path}")
+                scan_log.info(f"Skip upload queue for local test: {slice_path}")
+            elif not insert_upload_queue(slice_path):
+                scan_log.error(f"Cannot insert slice to upload queue: {slice_path}")
             else:
-                scan_log.info(f"Slice ready for upload: {slice_video_flv_path}")
+                scan_log.info(f"Slice ready for upload: {slice_path}")
 
         except Exception as e:
             scan_log.error(f"Error processing slice {slice_path}: {e}")
+            progress.error(str(e), current_slice=index, total_slices=total_slices)
             if os.path.exists(slice_path):
                 os.remove(slice_path)
+            delete_slice_upload_metadata(slice_path)
+
+    if total_slices:
+        unload_local_audio_models_after_batch()
 
     if os.getenv("BILIVE_KEEP_SOURCE") == "1":
         scan_log.info("BILIVE_KEEP_SOURCE=1, keep original video/danmaku files.")
     else:
         progress.update(
+            force=True,
             status="running",
             phase="cleanup",
             phase_label="清理源文件",
             message="正在清理源文件",
         )
-        for remove_path in [original_video_path, xml_path, ass_path]:
+        for remove_path in [original_video_path, xml_path]:
             if os.path.exists(remove_path):
                 os.remove(remove_path)
                 scan_log.info(f"Removed: {remove_path}")

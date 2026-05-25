@@ -547,13 +547,23 @@ def unload_emotion_model() -> None:
     scan_log.info("Emotion model unloaded, GPU memory released")
 
 
-def unload_whisper_model() -> None:
-    global _whisper_model
+def unload_asr_models() -> None:
+    global _whisper_model, _qwen3_asr_model
+
     if _whisper_model is not None:
         del _whisper_model
         _whisper_model = None
+
+    if _qwen3_asr_model is not None:
+        del _qwen3_asr_model
+        _qwen3_asr_model = None
+
     release_gpu_memory()
-    scan_log.info("Whisper model unloaded, GPU memory released")
+    scan_log.info("ASR models unloaded, GPU memory released")
+
+
+def unload_whisper_model() -> None:
+    unload_asr_models()
 
 
 def analyze_audio(

@@ -46,7 +46,7 @@ def build_density_series(
     return density, float(duration)
 
 
-def compute_baseline(density: List[int], skip_head: int = 30, skip_tail: int = 30) -> float:
+def compute_baseline(density: List[int], skip_head: int = 300, skip_tail: int = 300) -> float:
     """计算背景密度基线（中位数）
 
     跳过开头和结尾各 skip_head/skip_tail 秒，避免异常值。

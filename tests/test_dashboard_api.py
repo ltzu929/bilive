@@ -34,7 +34,7 @@ async def test_feedback_api_updates_sidecar(tmp_path):
         slice_id = (await client.get("/api/slices?room_id=8792912")).json()[0]["id"]
         response = await client.patch(
             f"/api/slices/{slice_id}/feedback",
-            json={"decision": "keep", "quality_reason": "值得精切"},
+            json={"decision": "keep", "quality_reason": "worth keeping"},
         )
 
     assert response.status_code == 200
@@ -145,7 +145,12 @@ async def test_preview_media_api_remuxes_flv_to_cached_mp4(tmp_path, monkeypatch
     assert response.content == b"mp4-preview"
     assert response.headers["content-type"].startswith("video/mp4")
     assert commands
-    assert commands[0][:4] == ["ffmpeg", "-y", "-i", room / "3130s_8792912_20260506-18-56-51.flv"]
+    assert commands[0][:4] == [
+        "ffmpeg",
+        "-y",
+        "-i",
+        room / "3130s_8792912_20260506-18-56-51.flv",
+    ]
 
 
 @pytest.mark.anyio
@@ -194,6 +199,51 @@ async def test_slice_progress_api_returns_idle_when_missing(tmp_path, monkeypatc
 
 
 @pytest.mark.anyio
+async def test_start_slice_api_invokes_slice_starter(tmp_path):
+    calls = []
+
+    def fake_start_slice():
+        calls.append("start")
+        return {
+            "status": "started",
+            "pid": 1234,
+            "log_path": str(tmp_path / "logs" / "runtime" / "slice.log"),
+        }
+
+    transport = httpx.ASGITransport(
+        app=create_app(
+            videos_root=tmp_path / "Videos",
+            slice_starter=fake_start_slice,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/slice/start")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert response.json()["pid"] == 1234
+    assert calls == ["start"]
+
+
+@pytest.mark.anyio
+async def test_start_slice_api_reports_start_errors(tmp_path):
+    def fake_start_slice():
+        raise RuntimeError("slice scanner failed")
+
+    transport = httpx.ASGITransport(
+        app=create_app(
+            videos_root=tmp_path / "Videos",
+            slice_starter=fake_start_slice,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/slice/start")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "slice scanner failed"
+
+
+@pytest.mark.anyio
 async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
@@ -205,8 +255,7 @@ async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
                 "phase_label": "切片中",
                 "current_slice_percent": 42.5,
                 "updated_at": time.time(),
-            },
-            ensure_ascii=False,
+            }
         ),
         encoding="utf-8",
     )
@@ -245,6 +294,29 @@ async def test_slice_progress_api_marks_stale(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["stale"] is True
+
+
+@pytest.mark.anyio
+async def test_slice_progress_api_reports_pending_queue(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "8792912"
+    room.mkdir(parents=True)
+    (room / "8792912_20260524-13-06-05.mp4.pending").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-progress")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["phase_label"] == "已排队"
+    assert response.json()["message"] == "等待本机 PC 切片 worker 处理"
+    assert response.json()["pending_tasks"] == 1
 
 
 @pytest.mark.anyio

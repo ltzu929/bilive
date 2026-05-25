@@ -42,11 +42,35 @@ def test_frontend_contains_slice_progress_panel():
     assert 'id="slice-progress-percent"' in text
 
 
+def test_frontend_contains_start_slice_button():
+    text = FRONTEND_HTML.read_text(encoding="utf-8")
+    assert 'id="start-slice-button"' in text
+    assert "启动切片" in text
+
+
 def test_frontend_polls_slice_progress_endpoint():
     text = FRONTEND_JS.read_text(encoding="utf-8")
     assert 'request("/api/slice-progress")' in text
     assert "renderSliceProgress" in text
     assert "setInterval" in text
+    assert "进度已过期，请检查切片进程" in text
+    assert "进度不可用" in text
+    assert "暂无切片任务" in text
+
+
+def test_frontend_posts_start_slice_request():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert 'request("/api/slice/start", {' in text
+    assert 'method: "POST"' in text
+    assert "startSlicing" in text
+
+
+def test_frontend_triggers_local_pc_worker_once():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert "PC_WORKER_RUN_ONCE_URL" in text
+    assert "http://127.0.0.1:2235/api/worker/run-once" in text
+    assert "startPcWorkerOnce" in text
+    assert "pendingTasks" in text
 
 
 def test_frontend_styles_slice_progress_panel():

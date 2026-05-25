@@ -17,22 +17,22 @@
         <nav>
           <a class="nav-item" href="http://192.168.31.157:2233/tasks">
             <span class="nav-icon" data-icon="record"></span>
-            <span class="nav-text">录播控制台</span>
+            <span class="nav-text">&#24405;&#25773;&#25511;&#21046;&#21488;</span>
           </a>
           <a class="nav-item active" href="/tasks">
             <span class="nav-icon" data-icon="scissor"></span>
-            <span class="nav-text">切片</span>
+            <span class="nav-text">&#20999;&#29255;</span>
           </a>
           <span class="nav-item disabled" aria-disabled="true">
             <span class="nav-icon" data-icon="upload"></span>
-            <span class="nav-text">上传</span>
+            <span class="nav-text">&#19978;&#20256;</span>
           </span>
           <span class="nav-item disabled" aria-disabled="true">
             <span class="nav-icon" data-icon="setting"></span>
-            <span class="nav-text">设置</span>
+            <span class="nav-text">&#35774;&#32622;</span>
           </span>
         </nav>
-        <div class="sider-trigger" id="sider-toggle" role="button" aria-label="折叠侧栏">
+        <div class="sider-trigger" id="sider-toggle" role="button" aria-label="collapse sidebar">
           <span class="nav-icon" data-icon="fold"></span>
         </div>
       </aside>
@@ -43,22 +43,24 @@
               <nav class="breadcrumb" aria-label="breadcrumb">
                 <span class="breadcrumb-item">bilive</span>
                 <span class="breadcrumb-sep">/</span>
-                <span class="breadcrumb-item current">切片</span>
+                <span class="breadcrumb-item current">&#20999;&#29255;</span>
               </nav>
-              <h1>切片</h1>
-              <p>预览候选片段，记录保留、丢弃和待精切判断。</p>
+              <h1>&#20999;&#29255;</h1>
+              <p>&#39044;&#35272;&#20505;&#36873;&#29255;&#27573;&#65292;&#35760;&#24405;&#20445;&#30041;&#12289;&#20002;&#24323;&#21644;&#24453;&#31934;&#20999;&#21028;&#26029;&#12290;</p>
             </div>
             <div class="toolbar-controls">
-              <input id="room-filter" placeholder="房间号" />
+              <input id="room-filter" placeholder="&#25151;&#38388;&#21495;" />
               <select id="status-filter">
-                <option value="all">全部</option>
-                <option value="review">待确认</option>
-                <option value="keep">保留</option>
-                <option value="drop">丢弃</option>
+                <option value="all">&#20840;&#37096;</option>
+                <option value="review">&#24453;&#30830;&#35748;</option>
+                <option value="keep">&#20445;&#30041;</option>
+                <option value="drop">&#20002;&#24323;</option>
               </select>
-              <button id="refresh-button" class="btn-primary" type="button">刷新</button>
+              <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
+              <button id="refresh-button" type="button">&#21047;&#26032;</button>
             </div>
           </header>
+
           <section id="slice-progress-panel" class="progress-panel" aria-live="polite">
             <div class="progress-main">
               <div>
@@ -75,32 +77,33 @@
               <div id="slice-progress-bar" class="progress-fill" style="width: 0%"></div>
             </div>
           </section>
+
           <div id="error" class="error hidden"></div>
           <div class="workbench">
-            <section class="panel slice-list" aria-label="候选切片">
+            <section class="panel slice-list" aria-label="slice candidates">
               <div class="panel-header">
-                <span class="panel-title">候选切片</span>
-                <span class="panel-meta" id="slice-count">0 个候选</span>
+                <span class="panel-title">&#20505;&#36873;&#20999;&#29255;</span>
+                <span class="panel-meta" id="slice-count">0 items</span>
               </div>
               <div class="panel-body" id="slice-list"></div>
             </section>
             <section class="panel preview-panel">
               <div class="panel-header">
-                <span class="panel-title">预览</span>
+                <span class="panel-title">&#39044;&#35272;</span>
                 <span class="panel-meta" id="file-size">-</span>
               </div>
               <div class="panel-body">
                 <video id="preview-video" class="preview-video" controls preload="metadata"></video>
                 <div class="metadata-grid">
-                  <label>来源</label><span id="source-recording">-</span>
-                  <label>密度核心</label><span id="density-core">-</span>
-                  <label>上下文窗口</label><span id="context-window">-</span>
+                  <label>&#26469;&#28304;</label><span id="source-recording">-</span>
+                  <label>&#23494;&#24230;&#26680;&#24515;</label><span id="density-core">-</span>
+                  <label>&#19978;&#19979;&#25991;&#31383;&#21475;</label><span id="context-window">-</span>
                 </div>
               </div>
             </section>
-            <section class="panel feedback-panel" aria-label="人工反馈">
+            <section class="panel feedback-panel" aria-label="manual feedback">
               <div class="panel-header">
-                <span class="panel-title">人工判断</span>
+                <span class="panel-title">&#20154;&#24037;&#21028;&#26029;</span>
               </div>
               <div class="panel-body feedback-body">
                 <div class="decision-group">
@@ -109,14 +112,14 @@
                   <button data-decision="drop" type="button">drop</button>
                 </div>
                 <label class="field">
-                  <span>原因</span>
+                  <span>&#21407;&#22240;</span>
                   <textarea id="quality-reason" rows="5"></textarea>
                 </label>
                 <div class="range-row">
-                  <label class="field"><span>入点</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
-                  <label class="field"><span>出点</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
+                  <label class="field"><span>&#20837;&#28857;</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
+                  <label class="field"><span>&#20986;&#28857;</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
                 </div>
-                <button id="save-button" class="btn-primary" type="button">保存反馈</button>
+                <button id="save-button" class="btn-primary" type="button">&#20445;&#23384;&#21453;&#39304;</button>
               </div>
             </section>
           </div>

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from src.burn.feedback_refine import process_feedback_directory, process_feedback_file
+from src.upload.slice_metadata import read_slice_upload_metadata
 
 
 def _write_candidate(
@@ -79,7 +80,7 @@ def test_process_feedback_file_refines_keep_manual_range_and_queues(
 
     result = process_feedback_file(feedback_path)
 
-    expected_clip = room / "3105s_8792912_20260506-18-56-51_refined.flv"
+    expected_clip = room / "3105s_8792912_20260506-18-56-51_refined.mp4"
     expected_edit = room / "3105s_8792912_20260506-18-56-51_refined_edit.json"
     assert result.status == "queued"
     assert result.refined_clip == str(expected_clip)
@@ -96,6 +97,11 @@ def test_process_feedback_file_refines_keep_manual_range_and_queues(
         "reason": "dashboard manual_range 5.0-18.0 seconds",
     }
     assert edit_data["upload_suggestion"]["title"] == "Good clip"
+    upload_metadata = read_slice_upload_metadata(expected_clip)
+    assert upload_metadata["title"] == "Good clip"
+    assert upload_metadata["desc"] == "A good reviewed clip"
+    assert upload_metadata["tag"] == "live,highlight"
+    assert upload_metadata["source"] == "https://live.bilibili.com/8792912"
 
     feedback_data = json.loads(feedback_path.read_text(encoding="utf-8"))
     assert feedback_data["generated_refined_clip"] == str(expected_clip)
@@ -138,7 +144,7 @@ def test_process_feedback_file_uses_context_window_when_manual_range_is_invalid(
 
     result = process_feedback_file(feedback_path)
 
-    expected_clip = room / "3100s_8792912_20260506-18-56-51_refined.flv"
+    expected_clip = room / "3100s_8792912_20260506-18-56-51_refined.mp4"
     assert result.status == "queued"
     assert result.refined_clip == str(expected_clip)
     assert queued == [str(expected_clip)]

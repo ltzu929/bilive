@@ -1,6 +1,7 @@
 # Copyright (c) 2024 bilive.
 # 独立切片扫描入口：替代 scan.py，只切片不渲染
 
+import argparse
 import os
 import time
 from pathlib import Path
@@ -40,7 +41,7 @@ def process_folder_slice_only(folder_path):
                 active_recording = True
                 break
         if active_recording:
-            return
+            return 0
 
     # 处理已完成的 mp4 文件（排除已处理的 "-.mp4" 和切片文件）
     mp4_files = [
@@ -50,6 +51,7 @@ def process_folder_slice_only(folder_path):
         and not "_slice" in mp4_file.name  # 排除切片文件
     ]
 
+    processed = 0
     for mp4_file in mp4_files:
         # 检查是否有对应的 xml 弹幕文件
         xml_path = str(mp4_file)[:-4] + ".xml"
@@ -65,16 +67,43 @@ def process_folder_slice_only(folder_path):
 
         scan_log.info(f"Begin slice processing: {mp4_file}")
         slice_only(mp4_file)
+        processed += 1
+
+    return processed
+
+
+def scan_slice_once(videos_dir=None):
+    room_folder_path = Path(videos_dir or VIDEOS_DIR)
+    if not room_folder_path.is_dir():
+        scan_log.warning(f"Videos dir not found: {room_folder_path}")
+        return 0
+
+    processed = 0
+    for room_folder in room_folder_path.iterdir():
+        if room_folder.is_dir():
+            processed += process_folder_slice_only(room_folder)
+    return processed
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run slice-only scanning.")
+    parser.add_argument("--once", action="store_true", help="scan once and exit")
+    parser.add_argument("--interval", type=int, default=120, help="seconds between scans")
+    args = parser.parse_args(argv)
+
+    scan_log.info("Starting slice-only scan mode...")
+
+    if args.once:
+        processed = scan_slice_once()
+        scan_log.info(f"Slice scan complete. Processed {processed} video(s).")
+        return 0
+
+    while True:
+        scan_slice_once()
+
+        scan_log.info(f"Slice scan complete. Check again in {args.interval} seconds.")
+        time.sleep(args.interval)
 
 
 if __name__ == "__main__":
-    room_folder_path = VIDEOS_DIR
-    scan_log.info("Starting slice-only scan mode...")
-
-    while True:
-        for room_folder in Path(room_folder_path).iterdir():
-            if room_folder.is_dir():
-                process_folder_slice_only(room_folder)
-
-        scan_log.info("Slice scan complete. Check again in 120 seconds.")
-        time.sleep(120)
+    raise SystemExit(main())

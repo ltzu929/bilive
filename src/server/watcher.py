@@ -8,6 +8,7 @@
 # 4. 成功后将 .pending 改为 .done
 # 5. 失败则保留 .pending，下次重试
 
+import argparse
 import json
 import os
 import time
@@ -89,7 +90,7 @@ def process_pending_videos(videos_dir: str = None) -> int:
     return processed
 
 
-def run_watcher(interval: int = 30):
+def run_watcher(interval: int = 30, videos_dir: str = None):
     """持续监控 .pending 文件。在 PC 上以独立进程运行。
 
     Args:
@@ -99,7 +100,7 @@ def run_watcher(interval: int = 30):
 
     while True:
         try:
-            count = process_pending_videos()
+            count = process_pending_videos(videos_dir)
             if count > 0:
                 scan_log.info(f"Processed {count} video(s)")
         except Exception as e:
@@ -108,5 +109,21 @@ def run_watcher(interval: int = 30):
         time.sleep(interval)
 
 
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Process pending bilive tasks.")
+    parser.add_argument("--once", action="store_true", help="process pending tasks once and exit")
+    parser.add_argument("--interval", type=int, default=30, help="seconds between scans")
+    parser.add_argument("--videos-dir", default=None, help="override videos root")
+    args = parser.parse_args(argv)
+
+    if args.once:
+        count = process_pending_videos(args.videos_dir)
+        scan_log.info(f"One-shot worker complete. Processed {count} video(s).")
+        return 0
+
+    run_watcher(interval=args.interval, videos_dir=args.videos_dir)
+    return 0
+
+
 if __name__ == "__main__":
-    run_watcher()
+    raise SystemExit(main())

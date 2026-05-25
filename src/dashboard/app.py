@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
+from src.dashboard.slice_control import load_pending_queue_state, start_slice_scan
 from src.burn.slice_progress import load_progress_state
 
 
@@ -106,9 +107,11 @@ def media_response(
 def create_app(
     videos_root: str | Path | None = None,
     static_dir: str | Path | None = None,
+    slice_starter=None,
 ) -> FastAPI:
     app = FastAPI(title="bilive dashboard", version="0.1.0")
     store = DashboardFileStore(videos_root or default_videos_root())
+    start_slicing = slice_starter or (lambda: start_slice_scan(store.videos_root))
 
     @app.get("/api/rooms")
     async def list_rooms() -> list[Dict[str, Any]]:
@@ -123,7 +126,30 @@ def create_app(
 
     @app.get("/api/slice-progress")
     async def get_slice_progress() -> Dict[str, Any]:
-        return load_progress_state()
+        progress = load_progress_state()
+        queue_state = load_pending_queue_state(store.videos_root)
+        if queue_state["pending_tasks"] and (
+            progress["status"] == "idle" or progress.get("stale")
+        ):
+            progress.update(
+                status="queued",
+                phase="queued",
+                phase_label="已排队",
+                message="等待本机 PC 切片 worker 处理",
+                current_slice_percent=0.0,
+                stale=False,
+                **queue_state,
+            )
+        else:
+            progress.update(queue_state)
+        return progress
+
+    @app.post("/api/slice/start")
+    async def start_slice() -> Dict[str, Any]:
+        try:
+            return start_slicing()
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.patch("/api/slices/{slice_id}/feedback")
     async def update_feedback(

@@ -13,6 +13,10 @@ from src.config import (
 from datetime import datetime
 from src.upload.generate_upload_data import generate_video_data, generate_slice_data
 from src.upload.extract_video_info import generate_title
+from src.upload.slice_metadata import (
+    delete_slice_upload_metadata,
+    is_slice_upload,
+)
 from src.log.logger import upload_log, scan_log
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -30,13 +34,11 @@ from src.cover.cover_generator import generate_cover
 @Retry(max_retry=3, interval=5).decorator
 def upload_video(upload_path):
     try:
-        if upload_path.endswith(".flv"):
-            title, tid, tag, source = generate_slice_data(upload_path)
+        if is_slice_upload(upload_path):
+            title, desc, tid, tag, source, cover, dynamic = generate_slice_data(upload_path)
             if GENERATE_COVER:
                 cover = generate_cover(upload_path)
-            else:
-                cover = ""
-            yaml, desc, dynamic = ("",) * 3
+            yaml = ""
             if title is None:
                 upload_log.error(
                     "Fail to upload slice video, the files will be locked."
@@ -63,6 +65,7 @@ def upload_video(upload_path):
         if result == True:
             upload_log.info("Upload successfully, then delete the video")
             os.remove(upload_path)
+            delete_slice_upload_metadata(upload_path)
             if cover:
                 os.remove(cover)
             delete_upload_queue(upload_path)
@@ -105,7 +108,7 @@ def append_upload(upload_path, bv_result):
 
 
 def video_gate(video_path):
-    if video_path.endswith(".flv"):  # slice video tag
+    if is_slice_upload(video_path):
         # upload slice video
         upload_video(video_path)
     else:
@@ -140,7 +143,7 @@ def read_append_and_delete_lines():
         if upload_queue:
             video_path = upload_queue["video_path"]
             time.sleep(3)  # avoid JIT read error
-            if video_path.endswith(".flv"):
+            if is_slice_upload(video_path):
                 video_gate(video_path)
             else:
                 query = generate_title(video_path)
@@ -167,6 +170,9 @@ def read_append_and_delete_lines():
                 # Interrupted error, the file has been uploaded. But record is not deleted.
                 delete_upload_queue(video_path)  # Directly delete the record
                 continue
+            elif is_slice_upload(video_path):
+                upload_log.info(f"deal with slice {video_path} in lock queue")
+                video_gate(video_path)
             else:
                 query = generate_title(video_path)
                 if query is None:

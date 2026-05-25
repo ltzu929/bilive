@@ -114,13 +114,21 @@ MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("e
 WHISPER_ENGINE = config.get("slice", {}).get("multi_modal", {}).get("whisper_engine", "openai-whisper")
 WHISPER_DEVICE = config.get("slice", {}).get("multi_modal", {}).get("whisper_device", "cpu")
 WHISPER_COMPUTE_TYPE = config.get("slice", {}).get("multi_modal", {}).get("whisper_compute_type", "int8")
+MULTI_MODAL_UNLOAD_AUDIO_MODEL = config.get("slice", {}).get("multi_modal", {}).get("unload_audio_model_after_analysis", True)
+
+# LLM judge provider:
+# - openai-compatible: LM Studio or another /v1 chat completion server.
+# - local-subprocess: run LOCAL_LLM_COMMAND once per clip and read JSON from stdout.
+LLM_JUDGE_PROVIDER = config.get("slice", {}).get("llm_judge", {}).get("provider", "openai-compatible")
+LOCAL_LLM_COMMAND = config.get("slice", {}).get("llm_judge", {}).get("local_command", [])
+LOCAL_LLM_TIMEOUT = config.get("slice", {}).get("llm_judge", {}).get("timeout", 120)
 
 # ── 情感分析配置 ──
 MULTI_MODAL_ENABLE_EMOTION_ANALYSIS = config.get("slice", {}).get("multi_modal", {}).get("enable_emotion_analysis", False)
 MULTI_MODAL_EMOTION_MODEL = config.get("slice", {}).get("multi_modal", {}).get("emotion_model", "facebook/wav2vec2-base-robust-emotion")
 
 # ── 切片方法配置 ──
-SLICE_METHOD = config.get("slice", {}).get("slice_method", "density")  # "density" 或 "burst"
+SLICE_METHOD = "burst"
 BURST_RATIO = config.get("slice", {}).get("burst", {}).get("burst_ratio", 3.0)
 BURST_WINDOW = config.get("slice", {}).get("burst", {}).get("burst_window", 10)
 BURST_CONTEXT = config.get("slice", {}).get("burst", {}).get("burst_context", 60)
