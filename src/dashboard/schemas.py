@@ -26,6 +26,9 @@ class SliceItem:
     context_window: Optional[Dict[str, Any]] = None
     danmaku_count: Optional[int] = None
     refined: bool = False
+    quality_score: Optional[float] = None
+    burst_ratio: Optional[float] = None
+    burst_rank: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -34,6 +37,7 @@ class SliceItem:
 @dataclass
 class RoomItem:
     room_id: str
+    name: str = ""
 
     def to_dict(self) -> Dict[str, str]:
-        return {"room_id": self.room_id}
+        return {"room_id": self.room_id, "name": self.name or self.room_id}

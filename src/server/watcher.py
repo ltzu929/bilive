@@ -5,8 +5,8 @@
 # 1. 扫描 VIDEOS_DIR 下的 *.pending 文件
 # 2. 读取标记中的相对路径，拼接 PC 本地绝对路径
 # 3. 调用现有处理管线 (slice_only / render_video)
-# 4. 成功后将 .pending 改为 .done
-# 5. 失败则保留 .pending，下次重试
+# 4. 成功后将 .pending 改为 .done，写 `.mp4.task.json` 历史
+# 5. 失败则写 `.mp4.task.json` (status=failed)，删除 .pending（不再自动重试）
 
 import argparse
 import json
@@ -16,6 +16,7 @@ from pathlib import Path
 
 from src.config.server_config import VIDEOS_DIR
 from src.log.logger import scan_log
+from src.burn.task_history import write_task_history
 
 
 def process_pending_videos(videos_dir: str = None) -> int:
@@ -35,6 +36,7 @@ def process_pending_videos(videos_dir: str = None) -> int:
 
     processed = 0
     for pending_file in sorted(videos_dir.rglob("*.mp4.pending")):
+        video_path = ""
         try:
             # 读取标记元数据
             with open(pending_file, "r", encoding="utf-8") as f:
@@ -57,15 +59,26 @@ def process_pending_videos(videos_dir: str = None) -> int:
 
             scan_log.info(f"Processing {action}: {video_path}")
 
+            started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            worker_pid = os.getpid()
+
+            # 读标记中的 slice_options（burst 参数覆盖）
+            slice_options = marker.get("slice_options", {}) or {}
+
             # 执行处理管线
+            pipeline_result = {}
             if action == "slice":
                 from src.burn.slice_only import slice_only
-                slice_only(video_path)
+                result = slice_only(video_path, **slice_options)
+                if isinstance(result, dict):
+                    pipeline_result = result
+                if pipeline_result.get("status") == "failed":
+                    raise RuntimeError(pipeline_result.get("error") or "slice pipeline failed")
             elif action == "render":
                 from src.burn.render_video import render_video
                 render_video(video_path)
             else:
-                scan_log.warning(f"Unknown action: {action}, skipping")
+                raise ValueError(f"Unknown action: {action}")
 
             # 处理成功，将 .pending 改为 .done
             done_path = str(pending_file).replace(".pending", ".done")
@@ -80,14 +93,59 @@ def process_pending_videos(videos_dir: str = None) -> int:
             # 删除 .pending
             pending_file.unlink()
 
+            # 写任务历史
+            write_task_history(
+                video_path,
+                status="skipped" if pipeline_result.get("status") == "skipped" else "done",
+                videos_root=videos_dir,
+                started_at=started_at,
+                worker_pid=worker_pid,
+                slice_count=int(pipeline_result.get("slice_count") or 0),
+                output_slices=_relative_output_slices(
+                    pipeline_result.get("output_slices"),
+                    videos_dir,
+                ),
+                diagnostics=pipeline_result.get("diagnostics"),
+            )
+
             processed += 1
             scan_log.info(f"Successfully processed: {video_path}")
 
         except Exception as e:
             scan_log.error(f"Processing failed for {pending_file}: {e}")
-            # .pending 保留，下次重试
+            # 写失败历史并移除 pending（不再自动重试，需手动 requeue）
+            try:
+                if video_path and os.path.exists(video_path):
+                    write_task_history(
+                        video_path,
+                        status="failed",
+                        videos_root=videos_dir,
+                        error=str(e),
+                    )
+            except Exception:
+                pass
+            # 删除 pending，防止无限重试
+            try:
+                pending_file.unlink()
+            except Exception:
+                pass
 
     return processed
+
+
+def _relative_output_slices(output_slices, videos_dir: Path):
+    if not isinstance(output_slices, list):
+        return None
+
+    normalized = []
+    root = Path(videos_dir).resolve()
+    for item in output_slices:
+        path_text = str(item)
+        try:
+            normalized.append(Path(path_text).resolve().relative_to(root).as_posix())
+        except (OSError, ValueError):
+            normalized.append(path_text.replace("\\", "/"))
+    return normalized
 
 
 def run_watcher(interval: int = 30, videos_dir: str = None):

@@ -15,9 +15,12 @@ Pi / Ubuntu / ARM
 Windows / D:\alldata\pi\bilive
   dashboard /tasks 写 .mp4.pending
   worker_api 127.0.0.1:2235
-  src.server.watcher --once 处理 pending 后退出
+  src.server.watcher --once 处理 pending 后退出；失败写 task history 并等待人工重排
   faster-whisper ASR -> SRT -> 字幕烧录
   SQLite 上传队列 -> src.upload.upload
+  任务清单 GET /api/tasks（状态：ready/pending/done/failed）
+  恢复操作 requeue / cancel-pending / mark-done
+  .mp4.task.json 记录处理历史、错误、切片数和输出路径
 ```
 
 ## 关键入口
@@ -26,11 +29,15 @@ Windows / D:\alldata\pi\bilive
 |------|------|
 | `settings.toml` | Pi 端 `blrec` 本地配置，包含录制房间和 cookie，不应提交 |
 | `bilive-server.toml` | PC 端切片/ASR/LLM/上传配置 |
-| `frontend/` | `/tasks` 切片页面，写 pending 并触发 PC worker |
-| `src/dashboard/app.py` | dashboard API，包括切片进度和诊断面板 |
+| `frontend/` | `/tasks` 切片页面，含 worker 状态显示、任务清单和恢复操作 |
+| `src/dashboard/app.py` | dashboard API，包括任务清单、切片进度、诊断面板和恢复操作 |
+| `src/dashboard/file_store.py` | 切片/房间信息读取；房间下拉优先从本地 jsonl 粉丝牌锚点提取 UP 名 |
+| `src/dashboard/task_state.py` | 任务状态模型：统一展示源录播状态（ready/pending/done/failed等） |
 | `src/dashboard/slice_control.py` | 扫描可处理录播，写 `.mp4.pending` 标记 |
-| `src/server/worker_api.py` | 本机 worker API，默认 `127.0.0.1:2235` |
-| `src/server/watcher.py` | 一次性处理 `.mp4.pending`，成功后写 `.mp4.done` |
+| `src/server/worker_api.py` | 本机 worker API，默认 `127.0.0.1:2235`，含 `/api/worker/status` |
+| `src/server/worker_control.py` | worker 生命周期管理，状态含 `started_at`/`command`/`log_path` |
+| `src/server/watcher.py` | 一次性处理 `.mp4.pending`；成功写 `.done` 和历史，失败写 `.task.json` 并移除 `.pending` |
+| `src/burn/task_history.py` | 任务历史侧卡（`.mp4.task.json`），记录成功/失败和切片数 |
 | `src/burn/slice_only.py` | 单个录播的切片主流程 |
 | `src/burn/subtitle_burn.py` | 使用真实 ASR 时间戳生成 SRT 并烧录字幕 |
 | `src/autoslice/mllm_sdk/audio_analyzer.py` | ASR 引擎分发，当前主路径是 `faster-whisper` |
@@ -102,6 +109,7 @@ whisper_compute_type = "int8"
 - 当前切片默认保留原始 `.mp4` 和 `.xml`，方便重跑。
 - 只有显式设置 `BILIVE_DELETE_SOURCE_AFTER_SLICE=1` 时，才会在切片后删除源文件。
 - `.mp4.pending` 表示等待 PC worker；`.mp4.done` 表示该源录播已处理过。
+- `.mp4.task.json` 记录最近一次 worker 结果；失败任务会显示 `failed`，需要从页面或 API 重新排队。
 
 ## 日志排查
 

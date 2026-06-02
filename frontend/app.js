@@ -33,17 +33,20 @@ if (siderToggle) {
 
 const state = {
   slices: [],
+  tasks: [],
   selectedId: "",
   decision: "review",
 };
 
 const PC_WORKER_RUN_ONCE_URL = "http://127.0.0.1:2235/api/worker/run-once";
+const PC_WORKER_STATUS_URL = "http://127.0.0.1:2235/api/worker/status";
 
 const elements = {
   roomFilter: document.querySelector("#room-filter"),
   statusFilter: document.querySelector("#status-filter"),
   startSliceButton: document.querySelector("#start-slice-button"),
   refreshButton: document.querySelector("#refresh-button"),
+  workerBadge: document.querySelector("#worker-badge"),
   sliceCount: document.querySelector("#slice-count"),
   sliceList: document.querySelector("#slice-list"),
   error: document.querySelector("#error"),
@@ -51,6 +54,10 @@ const elements = {
   sourceRecording: document.querySelector("#source-recording"),
   densityCore: document.querySelector("#density-core"),
   contextWindow: document.querySelector("#context-window"),
+  danmakuCount: document.querySelector("#danmaku-count"),
+  burstRank: document.querySelector("#burst-rank"),
+  burstRatio: document.querySelector("#burst-ratio"),
+  qualityScore: document.querySelector("#quality-score"),
   fileSize: document.querySelector("#file-size"),
   qualityReason: document.querySelector("#quality-reason"),
   manualStart: document.querySelector("#manual-start"),
@@ -66,6 +73,8 @@ const elements = {
   progressBar: document.querySelector("#slice-progress-bar"),
   sliceDiagnosticsList: document.querySelector("#slice-diagnostics-list"),
   sliceDiagnosticsSource: document.querySelector("#slice-diagnostics-source"),
+  taskList: document.querySelector("#task-list"),
+  taskCount: document.querySelector("#task-count"),
 };
 
 function mediaUrl(item) {
@@ -124,8 +133,25 @@ const DECISION_TAG = {
   drop: { cls: "tag-red", label: "drop" },
 };
 
+const TASK_STATUS_TAG = {
+  ready: { cls: "tag-blue", label: "ready" },
+  pending: { cls: "tag-orange", label: "pending" },
+  done: { cls: "tag-green", label: "done" },
+  failed: { cls: "tag-red", label: "failed" },
+  skipped: { cls: "tag-orange", label: "skipped" },
+  stale: { cls: "tag-red", label: "stale" },
+};
+
 function decisionTag(decision) {
   const config = DECISION_TAG[decision] || DECISION_TAG.review;
+  const span = document.createElement("span");
+  span.className = `tag ${config.cls}`;
+  span.textContent = config.label;
+  return span;
+}
+
+function taskStatusTag(status) {
+  const config = TASK_STATUS_TAG[status] || { cls: "tag-blue", label: status || "unknown" };
   const span = document.createElement("span");
   span.className = `tag ${config.cls}`;
   span.textContent = config.label;
@@ -182,6 +208,10 @@ function renderDetails() {
     elements.sourceRecording.textContent = "-";
     elements.densityCore.textContent = "-";
     elements.contextWindow.textContent = "-";
+    elements.danmakuCount.textContent = "-";
+    elements.burstRank.textContent = "-";
+    elements.burstRatio.textContent = "-";
+    elements.qualityScore.textContent = "-";
     elements.fileSize.textContent = "-";
     elements.qualityReason.value = "";
     elements.manualStart.value = 0;
@@ -195,6 +225,10 @@ function renderDetails() {
   elements.sourceRecording.textContent = item.source_recording;
   elements.densityCore.textContent = formatRange(item.density_core);
   elements.contextWindow.textContent = formatRange(item.context_window);
+  elements.danmakuCount.textContent = item.danmaku_count != null ? String(item.danmaku_count) : "-";
+  elements.burstRank.textContent = item.burst_rank != null ? `#${item.burst_rank}` : "-";
+  elements.burstRatio.textContent = item.burst_ratio != null ? `${item.burst_ratio}x` : "-";
+  elements.qualityScore.textContent = item.quality_score != null ? `${Math.round(item.quality_score * 100)}%` : "-";
   elements.fileSize.textContent = formatBytes(item.size_bytes);
   elements.qualityReason.value = item.quality_reason || "";
   elements.manualStart.value = Number(item.manual_range?.start || 0);
@@ -282,6 +316,80 @@ function renderSliceDiagnostics(payload) {
   }
 }
 
+function taskActions(task) {
+  const status = task.status || "";
+  const actions = [];
+  if (status === "pending" || status === "stale") {
+    actions.push({ action: "cancel-pending", label: "取消" });
+  }
+  if (status === "ready" || status === "done" || status === "failed") {
+    actions.push({ action: "requeue", label: status === "done" ? "重跑" : "排队" });
+  }
+  if (status !== "done") {
+    actions.push({ action: "mark-done", label: "标记完成" });
+  }
+  return actions;
+}
+
+function renderTaskList(tasks) {
+  if (!elements.taskList || !elements.taskCount) return;
+  elements.taskCount.textContent = `${tasks.length} items`;
+  elements.taskList.innerHTML = "";
+
+  if (!tasks.length) {
+    const empty = document.createElement("div");
+    empty.className = "task-empty";
+    empty.textContent = "暂无任务";
+    elements.taskList.appendChild(empty);
+    return;
+  }
+
+  for (const task of tasks) {
+    const row = document.createElement("article");
+    row.className = `task-row task-${task.status || "unknown"}`;
+
+    const main = document.createElement("div");
+    main.className = "task-main";
+
+    const title = document.createElement("div");
+    title.className = "task-name";
+    title.textContent = task.source_name || task.source_rel_path || "-";
+
+    const meta = document.createElement("div");
+    meta.className = "task-meta";
+    const room = document.createElement("span");
+    room.textContent = task.room_name && task.room_name !== task.room_id
+      ? `${task.room_name} (${task.room_id})`
+      : task.room_id || "-";
+    const size = document.createElement("span");
+    size.textContent = `${Number(task.source_size_mb || 0).toFixed(1)} MB`;
+    meta.append(room, document.createTextNode(" / "), size, taskStatusTag(task.status));
+
+    const message = document.createElement("div");
+    message.className = "task-message";
+    message.textContent = task.message || "";
+
+    main.append(title, meta, message);
+
+    const buttons = document.createElement("div");
+    buttons.className = "task-actions";
+    for (const config of taskActions(task)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.taskAction = config.action;
+      button.textContent = config.label;
+      if (config.action === "cancel-pending") {
+        button.className = "btn-danger";
+      }
+      button.addEventListener("click", () => runTaskAction(task, config.action));
+      buttons.appendChild(button);
+    }
+
+    row.append(main, buttons);
+    elements.taskList.appendChild(row);
+  }
+}
+
 async function refreshSliceProgress() {
   try {
     renderSliceProgress(await request("/api/slice-progress"));
@@ -314,9 +422,26 @@ async function refreshSliceDiagnostics() {
   }
 }
 
+async function refreshTasks() {
+  const roomId = elements.roomFilter.value;
+  const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : "";
+  try {
+    state.tasks = await request(`/api/tasks${query}`);
+    renderTaskList(state.tasks);
+  } catch (error) {
+    if (!elements.taskList || !elements.taskCount) return;
+    elements.taskCount.textContent = "error";
+    elements.taskList.innerHTML = "";
+    const row = document.createElement("div");
+    row.className = "task-empty";
+    row.textContent = `任务状态不可用：${error.message}`;
+    elements.taskList.appendChild(row);
+  }
+}
+
 async function refresh() {
   showError("");
-  const roomId = elements.roomFilter.value.trim();
+  const roomId = elements.roomFilter.value;
   const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : "";
   try {
     state.slices = await request(`/api/slices${query}`);
@@ -329,12 +454,75 @@ async function refresh() {
   }
 }
 
+async function refreshRooms() {
+  try {
+    state.rooms = await request("/api/rooms");
+    renderRoomOptions(state.rooms);
+  } catch (err) {
+    console.error("Failed to load room list:", err);
+    // Fallback: show room IDs from slices as plain options
+    if (!state.rooms || !state.rooms.length) {
+      const seen = new Set();
+      const fallback = [];
+      for (const item of state.slices) {
+        if (!seen.has(item.room_id)) {
+          seen.add(item.room_id);
+          fallback.push({ room_id: item.room_id, name: item.room_id });
+        }
+      }
+      if (fallback.length) renderRoomOptions(fallback);
+    }
+  }
+}
+
+function renderRoomOptions(rooms) {
+  const selected = elements.roomFilter.value;
+  elements.roomFilter.innerHTML = '<option value="">全部 UP</option>';
+  for (const room of rooms) {
+    const opt = document.createElement("option");
+    opt.value = room.room_id;
+    opt.textContent = room.name || room.room_id;
+    opt.title = opt.textContent === room.room_id ? room.room_id : `${opt.textContent} (${room.room_id})`;
+    elements.roomFilter.appendChild(opt);
+  }
+  if (rooms.some((r) => r.room_id === selected)) {
+    elements.roomFilter.value = selected;
+  }
+}
+
 async function startPcWorkerOnce() {
   const response = await fetch(PC_WORKER_RUN_ONCE_URL, { method: "POST" });
   if (!response.ok) {
     throw new Error(await response.text());
   }
   return response.json();
+}
+
+async function runTaskAction(task, action) {
+  showError("");
+  try {
+    let workerError = "";
+    await request(`/api/tasks/${encodeURIComponent(task.task_id)}/${action}`, {
+      method: "POST",
+    });
+    if (action === "requeue") {
+      try {
+        await startPcWorkerOnce();
+      } catch {
+        workerError = "已重新排队，但未连接到本机 PC worker。请先运行 .\\start_pc_worker_api.ps1";
+      }
+    }
+    await refreshTasks();
+    await refresh();
+    await refreshSliceProgress();
+    await refreshSliceDiagnostics();
+    await refreshWorkerStatus();
+    if (workerError) {
+      showError(workerError);
+    }
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function startSlicing() {
@@ -368,6 +556,7 @@ async function startSlicing() {
     });
     setTimeout(refreshSliceProgress, 1000);
     setTimeout(refreshSliceDiagnostics, 1000);
+    setTimeout(refreshTasks, 1000);
     elements.startSliceButton.disabled = false;
     elements.startSliceButton.textContent = "启动切片";
   } catch (error) {
@@ -399,6 +588,8 @@ async function saveFeedback() {
       decision: feedback.decision,
       quality_reason: feedback.quality_reason,
       manual_range: feedback.manual_range,
+      reviewed_at: feedback.reviewed_at,
+      review_source: feedback.review_source,
     });
     render();
   } catch (error) {
@@ -408,11 +599,52 @@ async function saveFeedback() {
   }
 }
 
+function setDecisionAndSave(decision) {
+  state.decision = decision;
+  syncDecisionButtons();
+  saveFeedback();
+}
+
+function selectNextCandidate() {
+  const items = filteredSlices();
+  if (!items.length) return;
+  const currentIdx = items.findIndex((item) => item.id === state.selectedId);
+  const nextIndex = currentIdx < items.length - 1 ? currentIdx + 1 : 0;
+  state.selectedId = items[nextIndex].id;
+  render();
+}
+
+function replayPreview() {
+  const video = elements.previewVideo;
+  if (video && video.src) {
+    video.load();
+  }
+}
+
+document.addEventListener("keydown", (event) => {
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+  const key = event.key.toLowerCase();
+  if (key === "k") {
+    setDecisionAndSave("keep");
+  } else if (key === "d") {
+    setDecisionAndSave("drop");
+  } else if (key === "r") {
+    setDecisionAndSave("review");
+  } else if (key === "j") {
+    selectNextCandidate();
+  } else if (key === "l") {
+    replayPreview();
+  }
+});
+
 elements.startSliceButton.addEventListener("click", startSlicing);
 elements.refreshButton.addEventListener("click", refresh);
 elements.statusFilter.addEventListener("change", render);
-elements.roomFilter.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") refresh();
+elements.roomFilter.addEventListener("change", () => {
+  refresh();
+  refreshTasks();
 });
 elements.saveButton.addEventListener("click", saveFeedback);
 for (const button of elements.decisionButtons) {
@@ -422,13 +654,39 @@ for (const button of elements.decisionButtons) {
   });
 }
 
+async function refreshWorkerStatus() {
+  const badge = elements.workerBadge;
+  if (!badge) return;
+  try {
+    const resp = await fetch(PC_WORKER_STATUS_URL, { signal: AbortSignal.timeout(3000) });
+    if (!resp.ok) throw new Error("not ok");
+    const data = await resp.json();
+    badge.className = `worker-badge ${data.status === "running" ? "worker-running" : "worker-idle"}`;
+    if (data.status === "running") {
+      badge.textContent = `PC worker: 处理中 PID ${data.pid}`;
+    } else if (data.last_returncode !== undefined) {
+      badge.textContent = `PC worker: 上次退出 ${data.last_returncode}`;
+    } else {
+      badge.textContent = "PC worker: 空闲";
+    }
+  } catch {
+    badge.className = "worker-badge worker-idle";
+    badge.textContent = "PC worker: 未连接";
+  }
+}
+
 refresh();
+refreshRooms();
 refreshSliceProgress();
 refreshSliceDiagnostics();
+refreshTasks();
+refreshWorkerStatus();
 
 setInterval(() => {
   if (document.visibilityState === "visible") {
     refresh();
+    refreshTasks();
+    refreshWorkerStatus();
   }
 }, 30000);
 
@@ -439,10 +697,19 @@ setInterval(() => {
   }
 }, 2000);
 
+setInterval(() => {
+  if (document.visibilityState === "visible") {
+    refreshWorkerStatus();
+  }
+}, 5000);
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
+    refreshRooms();
     refresh();
+    refreshTasks();
     refreshSliceProgress();
     refreshSliceDiagnostics();
+    refreshWorkerStatus();
   }
 });

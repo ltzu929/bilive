@@ -9,6 +9,9 @@ from typing import Any
 
 
 _worker_process: subprocess.Popen | None = None
+_worker_started_at: float = 0.0
+_worker_command: list[str] = []
+_worker_log_path: str = ""
 
 
 def start_worker_once(
@@ -16,7 +19,7 @@ def start_worker_once(
     videos_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Start the PC-side pending worker once and return immediately."""
-    global _worker_process
+    global _worker_process, _worker_started_at, _worker_command, _worker_log_path
 
     if _worker_process is not None and _worker_process.poll() is None:
         return {"status": "already_running", "pid": _worker_process.pid}
@@ -50,6 +53,10 @@ def start_worker_once(
             **_popen_options(),
         )
 
+    _worker_started_at = time.time()
+    _worker_command = command
+    _worker_log_path = str(log_path)
+
     return {
         "status": "started",
         "pid": _worker_process.pid,
@@ -60,14 +67,28 @@ def start_worker_once(
 
 def worker_status() -> dict[str, Any]:
     if _worker_process is None:
-        return {"status": "idle"}
+        return {
+            "status": "idle",
+            "last_started_at": _worker_started_at,
+            "last_command": _worker_command,
+            "last_log_path": _worker_log_path,
+        }
     return_code = _worker_process.poll()
     if return_code is None:
-        return {"status": "running", "pid": _worker_process.pid}
+        return {
+            "status": "running",
+            "pid": _worker_process.pid,
+            "started_at": _worker_started_at,
+            "command": _worker_command,
+            "log_path": _worker_log_path,
+        }
     return {
         "status": "idle",
         "last_pid": _worker_process.pid,
         "last_returncode": return_code,
+        "last_started_at": _worker_started_at,
+        "last_command": _worker_command,
+        "last_log_path": _worker_log_path,
     }
 
 

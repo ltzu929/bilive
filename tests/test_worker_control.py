@@ -55,5 +55,12 @@ def test_start_worker_once_skips_duplicate_worker(monkeypatch):
 
 def test_worker_status_reports_idle(monkeypatch):
     monkeypatch.setattr(worker_control, "_worker_process", None)
+    monkeypatch.setattr(worker_control, "_worker_started_at", 0.0)
+    monkeypatch.setattr(worker_control, "_worker_command", [])
+    monkeypatch.setattr(worker_control, "_worker_log_path", "")
 
-    assert worker_control.worker_status() == {"status": "idle"}
+    status = worker_control.worker_status()
+    assert status["status"] == "idle"
+    assert "last_started_at" in status
+    assert "last_command" in status
+    assert "last_log_path" in status

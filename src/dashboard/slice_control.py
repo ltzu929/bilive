@@ -11,11 +11,17 @@ from typing import Any
 SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
 
 
-def start_slice_scan(videos_root: str | Path | None = None) -> dict[str, Any]:
+def start_slice_scan(
+    videos_root: str | Path | None = None,
+    slice_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Queue completed recordings for the PC-side slice worker.
 
     The dashboard may run on the Pi, so this function must stay lightweight:
     it writes .pending marker files only and never starts the slicer locally.
+
+    Optional slice_options (burst_ratio, burst_context, burst_top_n) are written
+    into each pending marker for the PC worker to read.
     """
     root = Path(videos_root) if videos_root is not None else _default_videos_root()
     root = root.expanduser().resolve()
@@ -27,8 +33,8 @@ def start_slice_scan(videos_root: str | Path | None = None) -> dict[str, Any]:
             "status": "missing_videos_root",
             "queued": 0,
             "skipped": 0,
-        "videos_root": str(root),
-    }
+            "videos_root": str(root),
+        }
 
     existing_pending = load_pending_queue_state(root)["pending_tasks"]
     for room_dir in sorted(root.iterdir(), key=lambda item: item.name):
@@ -38,7 +44,7 @@ def start_slice_scan(videos_root: str | Path | None = None) -> dict[str, Any]:
             if not _is_queue_candidate(video_path):
                 skipped += 1
                 continue
-            pending_path = _write_pending_marker(video_path, root)
+            pending_path = _write_pending_marker(video_path, root, slice_options=slice_options)
             queued_paths.append(str(pending_path))
 
     return {
@@ -93,16 +99,22 @@ def _is_queue_candidate(video_path: Path) -> bool:
     return True
 
 
-def _write_pending_marker(video_path: Path, videos_root: Path) -> Path:
+def _write_pending_marker(
+    video_path: Path,
+    videos_root: Path,
+    slice_options: dict[str, Any] | None = None,
+) -> Path:
     pending_path = video_path.with_suffix(".mp4.pending")
     rel_path = video_path.relative_to(videos_root).as_posix()
-    marker_data = {
+    marker_data: dict[str, Any] = {
         "video_rel_path": rel_path,
         "room_id": video_path.parent.name,
         "action": "slice",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "created_by": "dashboard",
     }
+    if slice_options:
+        marker_data["slice_options"] = slice_options
     tmp_path = pending_path.with_suffix(pending_path.suffix + ".tmp")
     tmp_path.write_text(
         json.dumps(marker_data, ensure_ascii=False, indent=2),

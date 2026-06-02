@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>bilive dashboard</title>
-    <link rel="stylesheet" href="/styles.css?v=slice-diagnostics-row-layout-20260527" />
+    <link rel="stylesheet" href="/styles.css?v=20260602" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -49,13 +49,16 @@
               <p>&#39044;&#35272;&#20505;&#36873;&#29255;&#27573;&#65292;&#35760;&#24405;&#20445;&#30041;&#12289;&#20002;&#24323;&#21644;&#24453;&#31934;&#20999;&#21028;&#26029;&#12290;</p>
             </div>
             <div class="toolbar-controls">
-              <input id="room-filter" placeholder="&#25151;&#38388;&#21495;" />
+              <select id="room-filter">
+                <option value="">&#20840;&#37096; UP</option>
+              </select>
               <select id="status-filter">
                 <option value="all">&#20840;&#37096;</option>
                 <option value="review">&#24453;&#30830;&#35748;</option>
                 <option value="keep">&#20445;&#30041;</option>
                 <option value="drop">&#20002;&#24323;</option>
               </select>
+              <span id="worker-badge" class="worker-badge worker-idle" title="PC worker 状态">PC worker: 未知</span>
               <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
               <button id="refresh-button" type="button">&#21047;&#26032;</button>
             </div>
@@ -88,6 +91,16 @@
             </div>
           </section>
 
+          <section id="task-panel" class="task-panel" aria-live="polite">
+            <div class="task-header">
+              <span class="task-title">任务队列</span>
+              <span id="task-count" class="task-count">0 items</span>
+            </div>
+            <div id="task-list" class="task-list">
+              <div class="task-empty">正在加载任务状态</div>
+            </div>
+          </section>
+
           <div id="error" class="error hidden"></div>
           <div class="workbench">
             <section class="panel slice-list" aria-label="slice candidates">
@@ -108,6 +121,10 @@
                   <label>&#26469;&#28304;</label><span id="source-recording">-</span>
                   <label>&#23494;&#24230;&#26680;&#24515;</label><span id="density-core">-</span>
                   <label>&#19978;&#19979;&#25991;&#31383;&#21475;</label><span id="context-window">-</span>
+                  <label>&#24377;&#24149;&#25968;</label><span id="danmaku-count">-</span>
+                  <label>&#29190;&#28857;&#25490;&#21517;</label><span id="burst-rank">-</span>
+                  <label>&#23792;&#20540;&#20493;&#29575;</label><span id="burst-ratio">-</span>
+                  <label>&#36136;&#37327;&#20998;</label><span id="quality-score">-</span>
                 </div>
               </div>
             </section>
@@ -136,6 +153,6 @@
         </section>
       </main>
     </div>
-    <script src="/app.js?v=slice-diagnostics-20260526"></script>
+    <script src="/app.js?v=20260602"></script>
   </body>
 </html>

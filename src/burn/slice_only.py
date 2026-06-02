@@ -53,11 +53,16 @@ def unload_local_audio_models_after_batch() -> None:
         unload_emotion_model()
 
 
-def slice_only(video_path):
-    """Run the standalone slice pipeline for one completed recording."""
+def slice_only(video_path, **_slice_options):
+    """Run the standalone slice pipeline for one completed recording.
+
+    Optional _slice_options override burst detection parameters:
+        burst_ratio, burst_window, burst_context, burst_merge_gap, burst_top_n
+    """
     if not os.path.exists(video_path):
-        scan_log.error(f"File {video_path} does not exist.")
-        return
+        error = f"File {video_path} does not exist."
+        scan_log.error(error)
+        return {"status": "failed", "error": error}
 
     progress = SliceProgressWriter()
     diagnostics = []
@@ -94,7 +99,11 @@ def slice_only(video_path):
             message="缺少弹幕 XML，无法按弹幕切片",
             error="缺少弹幕 XML",
         )
-        return
+        return {
+            "status": "failed",
+            "error": "缺少弹幕 XML",
+            "diagnostics": diagnostics,
+        }
 
     file_size_mb = check_file_size(original_video_path)
     if file_size_mb < MIN_VIDEO_SIZE:
@@ -139,7 +148,13 @@ def slice_only(video_path):
             message="录像小于切片阈值，已跳过",
             error="",
         )
-        return
+        return {
+            "status": "skipped",
+            "message": "录像小于切片阈值，已跳过",
+            "slice_count": 0,
+            "output_slices": [],
+            "diagnostics": diagnostics,
+        }
 
     diagnostics = upsert_diagnostic(
         diagnostics,
@@ -248,18 +263,22 @@ def slice_only(video_path):
             xml_path,
             original_video_path,
             return_metadata=True,
-            burst_ratio=BURST_RATIO,
-            burst_window=BURST_WINDOW,
-            burst_context=BURST_CONTEXT,
-            burst_merge_gap=BURST_MERGE_GAP,
-            burst_top_n=BURST_TOP_N,
+            burst_ratio=_slice_options.get("burst_ratio", BURST_RATIO),
+            burst_window=_slice_options.get("burst_window", BURST_WINDOW),
+            burst_context=_slice_options.get("burst_context", BURST_CONTEXT),
+            burst_merge_gap=_slice_options.get("burst_merge_gap", BURST_MERGE_GAP),
+            burst_top_n=_slice_options.get("burst_top_n", BURST_TOP_N),
             progress_callback=on_slice_progress,
         )
         scan_log.info(f"Generated {len(slices_path)} slices")
     except Exception as e:
         scan_log.error(f"Error in slice_video_by_danmaku: {e}")
         progress.error(str(e))
-        return
+        return {
+            "status": "failed",
+            "error": str(e),
+            "diagnostics": diagnostics,
+        }
 
     total_slices = len(slices_path)
     set_diagnostic(
@@ -282,6 +301,7 @@ def slice_only(video_path):
         message=f"生成 {total_slices} 个切片",
         error="",
     )
+    output_slices = []
     for index, generated_slice in enumerate(slices_path, start=1):
         slice_path = generated_slice.path
         try:
@@ -412,6 +432,7 @@ def slice_only(video_path):
                 scan_log.error(f"Cannot insert slice to upload queue: {slice_path}")
             else:
                 scan_log.info(f"Slice ready for upload: {slice_path}")
+            output_slices.append(slice_path)
 
         except Exception as e:
             scan_log.error(f"Error processing slice {slice_path}: {e}")
@@ -419,6 +440,15 @@ def slice_only(video_path):
             if os.path.exists(slice_path):
                 os.remove(slice_path)
             delete_slice_upload_metadata(slice_path)
+
+    if total_slices and not output_slices:
+        error = "所有候选切片处理失败"
+        progress.error(error, current_slice=total_slices, total_slices=total_slices)
+        return {
+            "status": "failed",
+            "error": error,
+            "diagnostics": diagnostics,
+        }
 
     if total_slices:
         unload_local_audio_models_after_batch()
@@ -490,6 +520,12 @@ def slice_only(video_path):
         diagnostics=diagnostics,
     )
     scan_log.info(f"Slice-only processing complete for: {original_video_path}")
+    return {
+        "status": "done",
+        "slice_count": len(output_slices),
+        "output_slices": output_slices,
+        "diagnostics": diagnostics,
+    }
 
 
 def diagnostic_item(item_id, title, status, message, details):

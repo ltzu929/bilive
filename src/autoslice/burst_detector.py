@@ -19,6 +19,8 @@ class BurstEvent:
     peak_density: float     # 峰值密度（弹幕数/窗口秒数）
     burst_ratio: float      # 峰值突增率（相对背景）
     danmaku_count: int      # 切片区间内弹幕总数
+    baseline_density: float = 0.0   # 背景密度基线（弹幕数/秒）
+    local_density: float = 0.0      # 峰值局部密度（弹幕数/秒）
 
 
 def build_density_series(
@@ -220,6 +222,8 @@ def detect_bursts(
             peak_density=peak_local_density,
             burst_ratio=ratio,
             danmaku_count=dmk_count,
+            baseline_density=baseline,
+            local_density=peak_local_density,
         ))
 
     # 7. 按 peak_density 降序取 top_n

@@ -47,8 +47,35 @@ def test_frontend_contains_slice_diagnostics_panel():
     assert 'id="slice-diagnostics-panel"' in text
     assert 'id="slice-diagnostics-list"' in text
     assert "正在加载诊断信息" in text
-    assert "/app.js?v=slice-diagnostics" in text
-    assert "/styles.css?v=slice-diagnostics" in text
+    assert "/app.js?v=" in text
+    assert "/styles.css?v=" in text
+
+
+def test_frontend_contains_task_recovery_panel():
+    text = FRONTEND_HTML.read_text(encoding="utf-8")
+    assert 'id="task-panel"' in text
+    assert 'id="task-list"' in text
+    assert "任务队列" in text
+
+
+def test_frontend_fetches_tasks_and_calls_recovery_endpoints():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert 'request(`/api/tasks${query}`)' in text
+    assert 'renderTaskList' in text
+    assert '`/api/tasks/${encodeURIComponent(task.task_id)}/${action}`' in text
+    assert "workerError" in text
+    assert "cancel-pending" in text
+    assert "mark-done" in text
+    assert "requeue" in text
+
+
+def test_frontend_contains_quality_metadata_fields():
+    html = FRONTEND_HTML.read_text(encoding="utf-8")
+    js = FRONTEND_JS.read_text(encoding="utf-8")
+    assert 'id="quality-score"' in html
+    assert 'id="burst-ratio"' in html
+    assert "quality_score" in js
+    assert "burst_ratio" in js
 
 
 def test_frontend_contains_start_slice_button():
@@ -109,3 +136,47 @@ def test_frontend_keeps_slice_rows_from_inheriting_global_button_height():
     assert ".slice-list .slice-row" in text
     assert "height: auto;" in text
     assert "align-items: stretch;" in text
+
+
+# --- Keyboard shortcuts (Milestone 6) ---
+
+
+def test_frontend_registers_keydown_event_listener():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert 'document.addEventListener("keydown"' in text
+
+
+def test_frontend_keyboard_shortcuts_map_k_d_r_j_l():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert '"k"' in text or "'k'" in text
+    assert '"d"' in text or "'d'" in text
+    assert '"r"' in text or "'r'" in text
+    assert '"j"' in text or "'j'" in text
+    assert '"l"' in text or "'l'" in text
+
+
+def test_frontend_keyboard_shortcuts_skip_input_and_textarea():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert "activeElement" in text
+    assert "INPUT" in text
+    assert "TEXTAREA" in text
+
+
+def test_frontend_j_key_selects_next_candidate():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert "filteredSlices" in text
+    assert "nextIndex" in text or "nextIdx" in text or "next_index" in text
+
+
+def test_frontend_l_key_reloads_preview():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert "previewVideo" in text
+    assert "load()" in text or ".src" in text
+
+
+def test_frontend_k_d_r_set_decision_and_save():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert "saveFeedback" in text
+    assert "keep" in text
+    assert "drop" in text
+    assert "review" in text

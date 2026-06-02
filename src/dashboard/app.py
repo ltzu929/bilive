@@ -11,7 +11,14 @@ from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
 from src.dashboard.slice_control import load_pending_queue_state, start_slice_scan
+from src.dashboard.task_state import (
+    build_task_inventory,
+    cancel_pending_task,
+    mark_done_task,
+    requeue_task,
+)
 from src.burn.slice_progress import load_progress_state
+from src.burn.feedback_refine import process_feedback_directory
 
 
 CHUNK_SIZE = 1024 * 1024
@@ -111,7 +118,80 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="bilive dashboard", version="0.1.0")
     store = DashboardFileStore(videos_root or default_videos_root())
-    start_slicing = slice_starter or (lambda: start_slice_scan(store.videos_root))
+
+    def _validated_slice_options(payload: Dict[str, Any] | None) -> dict[str, Any] | None:
+        if not payload:
+            return None
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="request body must be an object")
+        opts = payload.get("slice_options")
+        if opts is None:
+            return None
+        if not isinstance(opts, dict):
+            raise HTTPException(status_code=400, detail="slice_options must be an object")
+        allowed = {
+            "burst_ratio",
+            "burst_window",
+            "burst_context",
+            "burst_merge_gap",
+            "burst_top_n",
+        }
+        unknown = sorted(set(opts) - allowed)
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"unknown slice_options: {', '.join(unknown)}")
+
+        def _float_option(name: str, minimum: float, maximum: float) -> float | None:
+            if name not in opts:
+                return None
+            try:
+                value = float(opts[name])
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"{name} must be numeric") from exc
+            if not minimum <= value <= maximum:
+                raise HTTPException(status_code=400, detail=f"{name} must be {minimum}-{maximum}")
+            return value
+
+        def _int_option(name: str, minimum: int, maximum: int) -> int | None:
+            if name not in opts:
+                return None
+            try:
+                value = int(opts[name])
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"{name} must be an integer") from exc
+            if not minimum <= value <= maximum:
+                raise HTTPException(status_code=400, detail=f"{name} must be {minimum}-{maximum}")
+            return value
+
+        validated: dict[str, Any] = {}
+        ratio = _float_option("burst_ratio", 1.5, 8.0)
+        if ratio is not None:
+            validated["burst_ratio"] = ratio
+
+        for name, minimum, maximum in [
+            ("burst_window", 5, 30),
+            ("burst_merge_gap", 0, 30),
+            ("burst_top_n", 1, 5),
+        ]:
+            value = _int_option(name, minimum, maximum)
+            if value is not None:
+                validated[name] = value
+
+        if "burst_context" in opts:
+            context = _int_option("burst_context", 30, 90)
+            if context not in (30, 45, 60, 90):
+                raise HTTPException(status_code=400, detail="burst_context must be 30/45/60/90")
+            validated["burst_context"] = context
+        return validated if validated else None
+
+    def start_slicing(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        if slice_starter is not None:
+            if payload:
+                return slice_starter(payload)
+            return slice_starter()
+        return start_slice_scan(
+            store.videos_root,
+            slice_options=_validated_slice_options(payload),
+        )
 
     @app.get("/api/rooms")
     async def list_rooms() -> list[Dict[str, Any]]:
@@ -123,6 +203,41 @@ def create_app(
             return [item.to_dict() for item in store.list_slices(room_id)]
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/tasks")
+    async def list_tasks(room_id: str | None = None) -> list[Dict[str, Any]]:
+        room_names = {room.room_id: room.name for room in store.list_rooms()}
+        tasks = build_task_inventory(store.videos_root, room_id=room_id)
+        for task in tasks:
+            task["room_name"] = room_names.get(task["room_id"], task["room_id"])
+        return tasks
+
+    @app.post("/api/tasks/{task_id}/requeue")
+    async def task_requeue(task_id: str) -> Dict[str, Any]:
+        try:
+            return requeue_task(store.videos_root, task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/tasks/{task_id}/cancel-pending")
+    async def task_cancel_pending(task_id: str) -> Dict[str, Any]:
+        try:
+            return cancel_pending_task(store.videos_root, task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/tasks/{task_id}/mark-done")
+    async def task_mark_done(task_id: str) -> Dict[str, Any]:
+        try:
+            return mark_done_task(store.videos_root, task_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/slice-progress")
     async def get_slice_progress() -> Dict[str, Any]:
@@ -151,9 +266,9 @@ def create_app(
         return build_slice_diagnostics(progress, queue_state)
 
     @app.post("/api/slice/start")
-    async def start_slice() -> Dict[str, Any]:
+    async def start_slice(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         try:
-            return start_slicing()
+            return start_slicing(payload)
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -166,6 +281,47 @@ def create_app(
             return store.write_feedback(slice_id, payload)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/refine/preview")
+    async def refine_preview() -> Dict[str, Any]:
+        """Dry-run: count decisions and list what would be generated without writing files."""
+        results = process_feedback_directory(store.videos_root, enqueue_upload=False, dry_run=True)
+        keep_count = sum(1 for r in results if r.decision == "keep")
+        review_count = sum(1 for r in results if r.decision == "review")
+        drop_count = sum(1 for r in results if r.decision == "drop")
+
+        would_generate = []
+        for r in results:
+            if r.status == "skipped_decision" or r.status == "missing_slice":
+                continue
+            would_generate.append({
+                "feedback_path": r.feedback_path,
+                "decision": r.decision,
+                "status": r.status,
+                "message": r.message,
+            })
+
+        return {
+            "keep_count": keep_count,
+            "review_count": review_count,
+            "drop_count": drop_count,
+            "would_generate": would_generate,
+        }
+
+    @app.post("/api/refine/run")
+    async def refine_run() -> Dict[str, Any]:
+        """Execute refinement: generate clips for keep decisions, no upload queue by default."""
+        results = process_feedback_directory(store.videos_root, enqueue_upload=False)
+        keep_count = sum(1 for r in results if r.decision == "keep")
+        refined = sum(1 for r in results if r.status == "refined")
+        failed = sum(1 for r in results if r.status == "refine_failed")
+
+        return {
+            "keep_count": keep_count,
+            "refined": refined,
+            "failed": failed,
+            "upload_queued": False,
+        }
 
     @app.get("/api/media/{media_id}")
     async def get_media(media_id: str, request: Request) -> Response:

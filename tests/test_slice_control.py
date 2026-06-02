@@ -70,3 +70,22 @@ def test_start_slice_scan_reports_existing_pending_tasks(tmp_path):
     assert result["status"] == "queued"
     assert result["queued"] == 0
     assert result["pending_tasks"] == 1
+
+
+def test_start_slice_scan_writes_slice_options_in_marker(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260524-12-57-08.mp4"
+    source.write_bytes(b"mp4")
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+
+    result = slice_control.start_slice_scan(
+        videos_root=videos,
+        slice_options={"burst_ratio": 3.0, "burst_top_n": 2},
+    )
+
+    marker = json.loads(source.with_suffix(".mp4.pending").read_text(encoding="utf-8"))
+    assert result["queued"] == 1
+    assert marker["slice_options"]["burst_ratio"] == 3.0
+    assert marker["slice_options"]["burst_top_n"] == 2

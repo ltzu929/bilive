@@ -52,6 +52,7 @@ class FeedbackRefineResult:
 def process_feedback_directory(
     videos_root: str | Path,
     enqueue_upload: bool = True,
+    dry_run: bool = False,
 ) -> list[FeedbackRefineResult]:
     root = Path(videos_root)
     results = []
@@ -62,6 +63,7 @@ def process_feedback_directory(
             process_feedback_file(
                 feedback_path,
                 enqueue_upload=enqueue_upload,
+                dry_run=dry_run,
             )
         )
     return results
@@ -70,6 +72,7 @@ def process_feedback_directory(
 def process_feedback_file(
     feedback_path: str | Path,
     enqueue_upload: bool = True,
+    dry_run: bool = False,
 ) -> FeedbackRefineResult:
     feedback_path = Path(feedback_path)
     feedback = _read_json(feedback_path)
@@ -111,6 +114,16 @@ def process_feedback_file(
     refined_clip = _refined_clip_path(slice_path, source_path, selected_range)
     edit_json = _edit_path_for(refined_clip)
     title = _select_upload_title(instruction, slice_path)
+
+    if dry_run:
+        return FeedbackRefineResult(
+            feedback_path=str(feedback_path),
+            decision=decision,
+            status="would_refine",
+            message=f"would generate {refined_clip.name}",
+            refined_clip=str(refined_clip),
+            edit_json=str(edit_json),
+        )
 
     try:
         _write_refined_clip(selected_range, refined_clip, title)

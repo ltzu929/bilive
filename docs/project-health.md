@@ -1,6 +1,6 @@
 # 项目体检
 
-更新时间：2026-05-30
+更新时间：2026-06-02
 
 这份文档记录当前仓库的可用入口、历史包袱和后续清理建议。它不是设计稿，而是按当前实际运行状态整理出来的维护索引。
 
@@ -9,9 +9,13 @@
 | 层 | 主路径 | 说明 |
 |----|--------|------|
 | Pi 录制 | `bilive.service` -> `blrec` | 只负责录制，端口 `2233`，输出到 `/mnt/win/bilive/Videos/` |
-| Dashboard | `src/dashboard/app.py` + `frontend/` | `/tasks` 页面提交切片任务和展示诊断 |
-| PC worker API | `start_pc_worker_api.ps1` -> `src.server.worker_api` | 浏览器本机调用 `127.0.0.1:2235` |
-| 切片执行 | `src.server.watcher --once` -> `src.burn.slice_only` | 只处理 `.mp4.pending`，成功后写 `.mp4.done` |
+| Dashboard | `src/dashboard/app.py` + `frontend/` | `/tasks` 页面提交切片任务、展示任务清单、诊断和恢复操作 |
+| 房间筛选 | `src/dashboard/file_store.py` + `GET /api/rooms` | 下拉选项优先显示本地 jsonl 中解析出的 UP 名，房间号作为回退 |
+| 任务清单 | `src/dashboard/task_state.py` | `GET /api/tasks` 统一展示所有源录播状态（ready/pending/done/failed等） |
+| 恢复操作 | API `/api/tasks/{id}/requeue|cancel-pending|mark-done` | 重跑、取消排队、手动标记已处理 |
+| PC worker API | `start_pc_worker_api.ps1` -> `src.server.worker_api` | 浏览器本机调用 `127.0.0.1:2235`，含 worker 状态查询 |
+| 切片执行 | `src.server.watcher --once` -> `src.burn.slice_only` | 只处理 `.mp4.pending`，成功后写 `.mp4.done` + `.mp4.task.json` |
+| 任务历史 | `src/burn/task_history.py` | 每次处理后写 `.mp4.task.json` 保存结果（成功/失败、切片数、错误） |
 | ASR/字幕 | `src/autoslice/mllm_sdk/audio_analyzer.py` + `src/burn/subtitle_burn.py` | `faster-whisper large-v3 cpu int8`，只用真实时间戳烧录 |
 | 上传 | `src.upload.upload` | 消费 SQLite 上传队列 |
 
@@ -72,6 +76,11 @@
 - 前端无法连接 worker 时只提示 `start_pc_worker_api.ps1`，不再引导去跑旧全目录扫描。
 - `.gitignore` 增加 `cookie.json`。
 - 文档统一为 Pi 录制、PC 切片/ASR/上传的边界。
+- 新增任务清单 API (`GET /api/tasks`) 和恢复操作 API (requeue/cancel-pending/mark-done)。
+- Worker 状态查询扩展到返回 `started_at`、`command`、`log_path`；Dashboard 首页工具栏显示实时状态徽章。
+- Worker 失败后不再自动重试，写入 `.task.json` 记录错误并删除 `.pending`。
+- 新增任务历史侧卡（`.mp4.task.json`），记录处理成功/失败/跳过、切片数和输出路径。
+- `slice_only()` 返回结构化结果，watcher 不再把内部失败误判为成功。
 
 ## 下一步建议
 
