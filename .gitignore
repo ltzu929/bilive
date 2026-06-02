@@ -372,6 +372,7 @@ pnpm-lock.yaml
 
 # Ignore the cookies.json
 cookies.json
+cookie.json
 
 # Ignore settings with sensitive cookies
 settings.toml

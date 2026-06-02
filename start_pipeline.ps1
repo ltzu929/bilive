@@ -1,23 +1,34 @@
-# Bilive PC Pipeline Launcher
-# Starts LM Studio, scan_slice, and upload as detached background processes.
-# Safe to close this PowerShell window after running — processes will survive.
+# Bilive PC launcher.
+# Starts local helper services for the dashboard workflow:
+# - optional LM Studio
+# - local PC worker API on 127.0.0.1:2235
+# - optional upload queue consumer
 #
-# Usage: powershell -ExecutionPolicy Bypass -File start_pipeline.ps1
-#   or just run in PowerShell: .\start_pipeline.ps1
+# It does not start the legacy full-directory scan_slice loop by default.
+# Queue slice jobs from /tasks, then the browser will trigger the one-shot worker.
+#
+# Usage:
+#   powershell -ExecutionPolicy Bypass -File start_pipeline.ps1
+#   .\start_pipeline.ps1 -NoUpload
+#   .\start_pipeline.ps1 -RunLegacyScanSlice   # compatibility only, one scan pass
 
 param(
-    [switch]$NoLMStudio,    # Skip LM Studio (if already running)
-    [switch]$NoSlice,       # Skip scan_slice
-    [switch]$NoUpload       # Skip upload
+    [switch]$NoLMStudio,
+    [switch]$NoWorkerApi,
+    [switch]$NoUpload,
+    [switch]$RunLegacyScanSlice,
+    [switch]$NoSlice
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
 
-$env:PYTHONPATH = "$ProjectDir\src"
+$env:PYTHONPATH = "$ProjectDir;$ProjectDir\src"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
+$env:BILIVE_CONFIG = "$ProjectDir\bilive-server.toml"
+$env:BILIVE_VIDEOS_DIR = "$ProjectDir\Videos"
 
 $pythonW = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
 if (-not $pythonW) {
@@ -29,13 +40,17 @@ $logDir = "$ProjectDir\logs\runtime"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $dateSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
 
-Write-Host "=== Bilive Pipeline Launcher ==="
+Write-Host "=== Bilive PC Launcher ==="
 Write-Host "Project: $ProjectDir"
 Write-Host "Python:  $pythonW"
 Write-Host "Logs:    $logDir"
 Write-Host ""
 
-# ── 1. LM Studio ──
+if ($NoSlice) {
+    Write-Warning "-NoSlice is deprecated and now a no-op. Legacy scan_slice is disabled unless -RunLegacyScanSlice is set."
+}
+
+# 1. LM Studio
 $lmPath = "D:\LMStudio\LM Studio\LM Studio.exe"
 if (-not $NoLMStudio) {
     if (Test-Path $lmPath) {
@@ -57,28 +72,38 @@ if (-not $NoLMStudio) {
             if ($ready) {
                 Write-Host "[LM Studio] API ready."
             } else {
-                Write-Warning "[LM Studio] API not responding after 60s. Pipeline may fail at LLM step."
+                Write-Warning "[LM Studio] API not responding after 60s. LLM title generation may fall back."
             }
         }
     } else {
-        Write-Warning "[LM Studio] Not found at $lmPath. LLM title generation will fail."
+        Write-Warning "[LM Studio] Not found at $lmPath. LLM title generation may fall back."
     }
 }
 
-# ── 2. scan_slice ──
-if (-not $NoSlice) {
-    $sliceLog = "$logDir\slice-$dateSuffix.log"
-    Write-Host "[scan_slice] Starting (log: slice-$dateSuffix.log)..."
-    $proc = Start-Process -FilePath $pythonW `
-        -ArgumentList "-m", "src.burn.scan_slice" `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $sliceLog `
-        -RedirectStandardError "$logDir\slice-$dateSuffix.err" `
-        -PassThru
-    Write-Host "[scan_slice] PID: $($proc.Id)"
+# 2. PC worker API
+if (-not $NoWorkerApi) {
+    $workerApiLog = "$logDir\worker-api-$dateSuffix.log"
+    $workerApiRunning = $false
+    try {
+        $null = Invoke-WebRequest "http://127.0.0.1:2235/api/worker/status" -UseBasicParsing -TimeoutSec 2
+        $workerApiRunning = $true
+    } catch { }
+
+    if ($workerApiRunning) {
+        Write-Host "[worker_api] Already running on port 2235."
+    } else {
+        Write-Host "[worker_api] Starting (log: worker-api-$dateSuffix.log)..."
+        $proc = Start-Process -FilePath $pythonW `
+            -ArgumentList "-m", "uvicorn", "src.server.worker_api:api", "--host", "127.0.0.1", "--port", "2235" `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $workerApiLog `
+            -RedirectStandardError "$logDir\worker-api-$dateSuffix.err" `
+            -PassThru
+        Write-Host "[worker_api] PID: $($proc.Id)"
+    }
 }
 
-# ── 3. upload ──
+# 3. Optional upload queue consumer
 if (-not $NoUpload) {
     $uploadLog = "$logDir\upload-$dateSuffix.log"
     Write-Host "[upload] Starting (log: upload-$dateSuffix.log)..."
@@ -91,6 +116,20 @@ if (-not $NoUpload) {
     Write-Host "[upload] PID: $($proc.Id)"
 }
 
+# 4. Legacy compatibility path
+if ($RunLegacyScanSlice) {
+    $sliceLog = "$logDir\slice-legacy-$dateSuffix.log"
+    Write-Warning "[scan_slice] Running legacy full-directory scan once. Prefer /tasks + PC worker for daily use."
+    $proc = Start-Process -FilePath $pythonW `
+        -ArgumentList "-m", "src.burn.scan_slice", "--once" `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $sliceLog `
+        -RedirectStandardError "$logDir\slice-legacy-$dateSuffix.err" `
+        -PassThru
+    Write-Host "[scan_slice] PID: $($proc.Id)"
+}
+
 Write-Host ""
-Write-Host "=== Pipeline started. Safe to close this window. ==="
-Write-Host "Monitor: Get-Content '$logDir\slice-$dateSuffix.log' -Wait -Tail 20"
+Write-Host "=== PC helpers started. Safe to close this window. ==="
+Write-Host "Slice workflow: open /tasks and click Start Slice."
+Write-Host "Worker API: http://127.0.0.1:2235/api/worker/status"

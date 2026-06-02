@@ -64,6 +64,8 @@ const elements = {
   progressCount: document.querySelector("#slice-progress-count"),
   progressPercent: document.querySelector("#slice-progress-percent"),
   progressBar: document.querySelector("#slice-progress-bar"),
+  sliceDiagnosticsList: document.querySelector("#slice-diagnostics-list"),
+  sliceDiagnosticsSource: document.querySelector("#slice-diagnostics-source"),
 };
 
 function mediaUrl(item) {
@@ -226,6 +228,60 @@ function renderSliceProgress(progress) {
   elements.startSliceButton.textContent = status === "running" ? "切片中" : "启动切片";
 }
 
+function renderSliceDiagnostics(payload) {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  elements.sliceDiagnosticsSource.textContent = payload.source_name || "-";
+  elements.sliceDiagnosticsList.innerHTML = "";
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "diagnostic-empty";
+    empty.textContent = "暂无诊断信息";
+    elements.sliceDiagnosticsList.appendChild(empty);
+    return;
+  }
+
+  for (const item of items) {
+    const row = document.createElement("article");
+    row.className = `diagnostic-item diagnostic-${item.status || "info"}`;
+
+    const marker = document.createElement("span");
+    marker.className = "diagnostic-marker";
+
+    const body = document.createElement("div");
+    body.className = "diagnostic-body";
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "diagnostic-title-row";
+    const title = document.createElement("span");
+    title.className = "diagnostic-item-title";
+    title.textContent = item.title || "-";
+    const message = document.createElement("span");
+    message.className = "diagnostic-message";
+    message.textContent = item.message || "";
+    titleRow.append(title, message);
+
+    const details = document.createElement("div");
+    details.className = "diagnostic-details";
+    for (const detail of item.details || []) {
+      const pair = document.createElement("span");
+      pair.className = "diagnostic-detail";
+      const label = document.createElement("span");
+      label.className = "diagnostic-detail-label";
+      label.textContent = detail.label || "-";
+      const value = document.createElement("span");
+      value.className = "diagnostic-detail-value";
+      value.textContent = detail.value || "-";
+      pair.append(label, value);
+      details.appendChild(pair);
+    }
+
+    body.append(titleRow, details);
+    row.append(marker, body);
+    elements.sliceDiagnosticsList.appendChild(row);
+  }
+}
+
 async function refreshSliceProgress() {
   try {
     renderSliceProgress(await request("/api/slice-progress"));
@@ -235,6 +291,25 @@ async function refreshSliceProgress() {
       phase_label: "进度不可用",
       message: error.message,
       current_slice_percent: 0,
+    });
+  }
+}
+
+async function refreshSliceDiagnostics() {
+  try {
+    renderSliceDiagnostics(await request("/api/slice-diagnostics"));
+  } catch (error) {
+    renderSliceDiagnostics({
+      source_name: "-",
+      items: [
+        {
+          id: "diagnostics-error",
+          title: "诊断不可用",
+          status: "error",
+          message: error.message,
+          details: [],
+        },
+      ],
     });
   }
 }
@@ -280,7 +355,7 @@ async function startSlicing() {
           ? "PC worker 已在处理，处理完会自动退出"
           : "PC worker 已启动，处理完会自动退出";
       } catch (error) {
-        workerMessage = "已提交任务，但未连接到本机 PC worker";
+        workerMessage = "已提交任务，但未连接到本机 PC worker。请先运行 .\\start_pc_worker_api.ps1，再从页面启动切片";
       }
     }
     renderSliceProgress({
@@ -292,6 +367,7 @@ async function startSlicing() {
       current_slice_percent: 0,
     });
     setTimeout(refreshSliceProgress, 1000);
+    setTimeout(refreshSliceDiagnostics, 1000);
     elements.startSliceButton.disabled = false;
     elements.startSliceButton.textContent = "启动切片";
   } catch (error) {
@@ -348,6 +424,7 @@ for (const button of elements.decisionButtons) {
 
 refresh();
 refreshSliceProgress();
+refreshSliceDiagnostics();
 
 setInterval(() => {
   if (document.visibilityState === "visible") {
@@ -358,6 +435,7 @@ setInterval(() => {
 setInterval(() => {
   if (document.visibilityState === "visible") {
     refreshSliceProgress();
+    refreshSliceDiagnostics();
   }
 }, 2000);
 
@@ -365,5 +443,6 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refresh();
     refreshSliceProgress();
+    refreshSliceDiagnostics();
   }
 });

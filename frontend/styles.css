@@ -577,6 +577,29 @@ button.primary:active {
 /* override icon-only button sizing in decision-group is handled above */
 .decision-group button { box-shadow: none; }
 
+/* Slice rows are buttons; restore list-row layout after the global button rule. */
+.slice-list .slice-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  height: auto;
+  min-height: 64px;
+  padding: 12px 16px 12px 13px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  text-align: left;
+}
+
+.slice-list .slice-row.active {
+  border-left-color: var(--primary);
+}
+
 /* ── Refined badge → tag-orange compact ── */
 .refined-badge {
   display: inline-flex;
@@ -664,4 +687,145 @@ button.primary:active {
 .progress-panel[data-status="error"] .progress-fill,
 .progress-panel[data-status="stale"] .progress-fill {
   background: var(--danger);
+}
+
+/* Slice diagnostics */
+.diagnostics-panel {
+  margin: 12px 24px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.diagnostics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnostics-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.diagnostics-source {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  text-align: right;
+}
+
+.diagnostics-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+
+.diagnostic-item {
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  min-width: 0;
+  min-height: 96px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.diagnostic-item:last-child { border-right: 0; }
+
+.diagnostic-marker { background: var(--primary); }
+.diagnostic-ok .diagnostic-marker { background: var(--success); }
+.diagnostic-warning .diagnostic-marker { background: var(--warning); }
+.diagnostic-error .diagnostic-marker { background: var(--danger); }
+.diagnostic-pending .diagnostic-marker,
+.diagnostic-running .diagnostic-marker { background: var(--primary); }
+.diagnostic-idle .diagnostic-marker { background: var(--border-strong); }
+
+.diagnostic-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.diagnostic-title-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.diagnostic-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.diagnostic-message {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.diagnostic-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.diagnostic-detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fafafa;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.diagnostic-detail-label {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.diagnostic-detail-value {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.diagnostic-empty {
+  grid-column: 1 / -1;
+  padding: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+@media (max-width: 1200px) {
+  .diagnostics-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diagnostic-item:nth-child(2n) { border-right: 0; }
+}
+
+@media (max-width: 720px) {
+  .diagnostics-header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px 16px;
+  }
+
+  .diagnostics-source { text-align: left; }
+  .diagnostics-list { grid-template-columns: 1fr; }
+  .diagnostic-item { border-right: 0; border-bottom: 1px solid var(--border); }
+  .diagnostic-item:last-child { border-bottom: 0; }
 }

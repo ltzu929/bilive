@@ -8,10 +8,10 @@
 
 这个 fork 主要做四件事：
 
-- 用 `blrec` 录制 B 站直播和弹幕，Web UI 默认在 `http://localhost:2233`。
+- 用 Pi 上的 `blrec` 录制 B 站直播和弹幕，Web UI 默认在 `http://192.168.31.157:2233`。
 - 通过 `bilitool` 登录 B 站，并把 cookie 持久化到本地私有文件，避免每次重登。
-- 扫描录制完成的视频，处理弹幕、字幕、切片，并把待上传文件写入 SQLite 上传队列。
-- 支持独立切片模式，跳过整场渲染，只根据弹幕密度生成切片并上传。
+- 在 Windows/PC 端扫描录制完成的视频，处理弹幕、ASR、字幕烧录、切片，并把待上传文件写入 SQLite 上传队列。
+- 支持 dashboard 启动的一次性切片 worker：页面只写 `.pending`，PC worker 处理完自动退出。
 
 请先确认录制和上传行为符合主播授权、平台规则和你自己的使用场景。本项目不适合未经授权的大规模录制或商业使用。
 
@@ -19,25 +19,45 @@
 
 ### 推荐主路径
 
-当前推荐在 WSL / Linux 下运行：
+当前实际运行方式是 Pi 录制、Windows 做重任务：
 
-1. `./record.sh` 启动录制服务。
-2. 打开 `http://localhost:2233` 管理录制任务。
-3. 另开终端运行 `./upload.sh` 或 `./slice.sh`。
+1. Pi 上 `bilive.service` 常驻运行 `blrec`，负责录制并把文件写到 `/mnt/win/bilive/Videos/`。
+2. Windows 端在 `D:\alldata\pi\bilive` 编辑和运行切片/上传代码。
+3. 需要切片时先运行 `.\start_pc_worker_api.ps1`，再在 dashboard 的 `/tasks` 页面点击“启动切片”。
+4. 切片页面写 `.mp4.pending` 标记，PC worker 执行 `src.server.watcher --once`，处理完 `.pending` 后写 `.done` 并退出。
+5. 需要上传时单独启动上传队列消费者，避免调试切片时误传。
 
-`record.sh` 是本 fork 当前最重要的启动入口。它会：
+Pi 端服务检查：
 
-- 检查 `RECORD_KEY` 长度是否符合 `blrec` 要求。
-- 从多个位置查找 B 站 cookie。
-- 把 cookie 写入 `.secrets/bilibili.cookie` 做本地持久化。
-- 同步更新本地 `settings.toml`。
-- 启动 `blrec` 并确认 `127.0.0.1:2233` 真的可连接后才报成功。
+```bash
+ssh pi
+sudo systemctl status bilive
+sudo systemctl restart bilive
+```
+
+PC 端 worker API：
+
+```powershell
+cd D:\alldata\pi\bilive
+.\start_pc_worker_api.ps1
+```
+
+如果不走页面，也可以手动处理 pending 队列：
+
+```powershell
+cd D:\alldata\pi\bilive
+$env:PYTHONPATH = "$PWD;$PWD\src"
+$env:BILIVE_CONFIG = "$PWD\bilive-server.toml"
+$env:BILIVE_VIDEOS_DIR = "$PWD\Videos"
+python -m src.server.watcher --once --videos-dir .\Videos
+```
 
 ### 不再作为主路径的内容
 
 - 上游 README 中的大量推广、通用部署说明和完整模型矩阵不再是本 fork 的主文档。
 - Docker / Compose 文件仍在仓库里，但当前没有围绕本 fork 的 cookie 持久化和本地配置策略重新整理，不建议作为首选启动方式。
 - `settings.toml` 已从 Git 删除并加入 `.gitignore`，它现在是本机私有配置，不应提交。
+- `src.burn.scan_slice` 是旧的全目录扫描入口，当前不建议做日常切片。`start_pipeline.ps1` 默认不再启动它，只有显式传 `-RunLegacyScanSlice` 才会兼容跑一次。
 
 ## 目录结构
 
@@ -47,7 +67,9 @@
 ├── settings.toml               # blrec 本地私有配置，已忽略，不提交
 ├── record.sh                    # 录制启动入口
 ├── upload.sh                    # 普通扫描 + 上传入口
-├── slice.sh                     # 独立切片 + 上传入口
+├── slice.sh                     # 处理 pending 切片队列一次
+├── start_pc_worker_api.ps1       # Windows 本机 worker API，供 dashboard 触发一次性切片
+├── start_pipeline.ps1            # Windows PC helper 启动器，默认不跑旧 scan_slice
 ├── refine_feedback.sh           # 人工反馈驱动的精切 + 入上传队列入口
 ├── src/
 │   ├── burn/                    # 扫描、渲染、切片处理
@@ -65,7 +87,7 @@
 
 ## 环境准备
 
-### WSL / Linux
+### Pi / Linux
 
 建议使用 Python 3.10。当前仓库里有历史 `venv/`，新环境建议自己创建：
 
@@ -170,94 +192,86 @@ source ~/.bashrc
 
 ## 启动录制
 
-推荐入口：
+当前运行环境里，录制由 Pi 上的 systemd 服务负责：
 
 ```bash
-cd /home/zk/projects/bilive
-source venv/bin/activate
-export RECORD_KEY=bilive2026
-./record.sh
+ssh pi
+sudo systemctl status bilive
+sudo systemctl restart bilive
 ```
 
 成功后访问：
 
 ```text
-http://localhost:2233
+http://192.168.31.157:2233
 ```
 
 在 Web UI 中管理房间任务、录制开关和录制状态。
 
+`record.sh` 仍可用于 WSL/Linux 本地开发或重新搭环境，但不是当前 Pi + Windows 分布式运行的日常入口。
+
 ## 处理和上传
 
-录制服务只负责产生视频和弹幕文件。处理和上传需要另开终端。
+录制服务只负责产生视频和弹幕文件。切片、ASR、字幕烧录、标题分析和上传都在 PC 端完成。
 
-### 普通处理流
+### Dashboard 一次性切片流
 
-```bash
-cd /home/zk/projects/bilive
-source venv/bin/activate
-./upload.sh
+当前推荐入口：
+
+```powershell
+cd D:\alldata\pi\bilive
+.\start_pc_worker_api.ps1
 ```
 
-这个入口会：
+然后在 `/tasks` 页面点击“启动切片”。流程是：
 
-- 停掉旧的 `src.burn.scan` 和上传进程。
-- 后台启动 `src.burn.scan`。
-- 后台启动 `src.upload.upload`。
+1. dashboard 扫描 `Videos/<room_id>/*.mp4`，只把整场录播写成 `.mp4.pending`。
+2. 浏览器调用本机 `http://127.0.0.1:2235/api/worker/run-once`。
+3. worker API 启动 `python -m src.server.watcher --once --videos-dir .\Videos`。
+4. watcher 只处理 pending 队列，调用 `slice_only()`。
+5. `slice_only()` 做弹幕 burst 检测、ffmpeg 切片、faster-whisper ASR、SRT 生成、字幕烧录、分析结果和上传队列写入。
+6. 成功后 `.mp4.pending` 变成 `.mp4.done`，worker 自动退出。
 
-`src.burn.scan` 会扫描 `Videos/` 下录制完成的文件：
+当前默认保留源录播和 XML，方便重跑。只有显式设置：
 
-- `model_type = "append"`：逐段处理并上传，适合当前默认本地流。
-- `model_type = "pipeline"`：ASR 和渲染队列并行，适合性能更强的环境。
-- `model_type = "merge"`：按日期合并后处理，等待更久。
-
-### 独立切片流
-
-```bash
-cd /home/zk/projects/bilive
-source venv/bin/activate
-./slice.sh
+```powershell
+$env:BILIVE_DELETE_SOURCE_AFTER_SLICE = "1"
 ```
 
-这个入口会：
+才会在切片完成后删除源文件。
 
-- 停掉旧扫描、切片扫描和上传进程。
-- 启动 `src.burn.scan_slice`。
-- 启动 `src.upload.upload`。
+### 旧独立扫描入口
 
-`scan_slice` 只处理录制完成的 `mp4 + xml`，跳过整场弹幕/字幕渲染，直接：
+`src.burn.scan_slice` 属于旧的全目录扫描路径。它会扫描整个 `Videos/`，不是只处理页面提交的 pending 队列。日常切片不要优先使用它，否则可能：
 
-1. 把 XML 弹幕转成 ASS。
-2. 根据弹幕密度切片。
-3. 调用 `mllm_model` 生成标题或分析结果。
-4. 注入标题元数据，生成 `.flv` 切片。
-5. 写入上传队列。
-6. 默认删除原始录制文件、XML 和 ASS。
+- 重复处理已经切过但没有 `.done` 的整场录播。
+- 把已生成的 `123s_room_time.mp4` 切片产物也扫一遍，然后报 `No danmaku file`。
+- 在旧循环里每 120 秒再次进入处理。
 
-本地调试时建议加：
+需要兼容排查时可以手动加 `--once`，或者用 `start_pipeline.ps1 -RunLegacyScanSlice` 跑一次；日常仍推荐走 `src.server.watcher --once`。
 
-```bash
-export BILIVE_KEEP_SOURCE=1
-export BILIVE_SKIP_UPLOAD_QUEUE=1
-./slice.sh
+### 上传流
+
+切片会把待上传文件写入 SQLite 上传队列。需要上传时再单独运行上传消费者：
+
+```powershell
+cd D:\alldata\pi\bilive
+$env:PYTHONPATH = "$PWD;$PWD\src"
+$env:BILIVE_CONFIG = "$PWD\bilive-server.toml"
+python -m src.upload.upload
 ```
 
-这样会保留原始文件，并跳过写入上传队列，避免误传。
+调试切片时可以先不启动上传进程，避免误传。
 
 ### 人工反馈精切流
 
-如果使用 dashboard 先人工判断候选，推荐把独立切片流先作为候选生成器：
+如果使用 dashboard 先人工判断候选，推荐先走上面的“一次性切片流”生成候选，但不要启动上传消费者。当前源录播默认保留，不需要再设置 `BILIVE_KEEP_SOURCE`。
 
-```bash
-export BILIVE_KEEP_SOURCE=1
-export BILIVE_SKIP_UPLOAD_QUEUE=1
-./slice.sh
-```
+在 `/tasks` 标注候选后，再运行：
 
-在 `http://127.0.0.1:2233/tasks` 标注候选后，再运行：
-
-```bash
-./refine_feedback.sh
+```powershell
+cd D:\alldata\pi\bilive
+.\refine_feedback.sh
 ```
 
 这个入口会扫描 `Videos/**/*_feedback.json`：
@@ -328,7 +342,7 @@ min_video_size = 20
 mllm_model = "local-audio"
 ```
 
-`auto_slice` 只影响普通处理流中的附加切片。`slice.sh` 会走独立切片扫描，不依赖普通整场渲染流。
+`auto_slice` 只影响普通处理流中的附加切片。当前 `slice.sh` 只处理 pending 队列一次，不依赖普通整场渲染流。
 
 当前支持的 `mllm_model`：
 
@@ -357,7 +371,10 @@ analysis_prompt = ""
 ```toml
 visual_model_url = "http://localhost:1234/v1"
 visual_model_name = "local-model"
+whisper_engine = "faster-whisper"
 whisper_model = "large-v3"
+whisper_device = "cpu"
+whisper_compute_type = "int8"
 frame_fps = 0.5
 enable_visual = false
 enable_audio = true
@@ -367,10 +384,13 @@ enable_emotion_analysis = false
 当前默认更偏向 `local-audio`：
 
 - 关闭视觉分析，减少显存占用。
-- 使用本地 Whisper 做音频转录。
+- 使用 `faster-whisper` `large-v3` CPU `int8` 做音频转录。
+- 字幕烧录只使用 ASR 返回的真实 `transcript_segments` 时间戳；没有真实时间戳时不烧录伪字幕。
 - 通过启发式关键词/情绪生成标题、标签和质量评分。
 
 如果要开 `multi-modal`，需要本地有 OpenAI-compatible 服务，例如 LM Studio，并确认模型支持图片输入。
+
+如果要改成 CUDA，需要先安装可被 faster-whisper/CTranslate2 找到的 CUDA 12 cuBLAS DLL；缺 `cublas64_12.dll` 时会失败。
 
 ### `[cover]`
 
@@ -401,17 +421,19 @@ src/db/data.db
 
 ```text
 logs/record/      # blrec 启动和录制日志
-logs/runtime/     # scan/upload/slice_only 启动日志
+logs/runtime/     # dashboard/worker/slice/upload 运行日志
 logs/scan/        # 处理流程日志
 logs/upload/      # 上传流程日志
 ```
 
 排查顺序：
 
-1. Web UI 打不开：看 `logs/record/` 最新 `blrec-*.log`。
-2. 视频不处理：看 `logs/runtime/scan-*.log` 或 `logs/runtime/slice-*.log`。
-3. 不上传：看 `logs/runtime/upload-*.log` 和 `logs/upload/`。
-4. 切片被跳过：看 `min_video_size`、质量过滤日志和 `BILIVE_SKIP_UPLOAD_QUEUE`。
+1. blrec 打不开：SSH 到 Pi，看 `sudo systemctl status bilive`。
+2. 页面启动切片没反应：看是否启动了 `start_pc_worker_api.ps1`，以及 `logs/runtime/pc-worker-*.log`。
+3. 切片进度异常：看 `logs/runtime/slice-progress.json` 和页面诊断面板。
+4. ASR 失败：看 `logs/runtime/pc-worker-*.log` 里的 HuggingFace 下载、`cublas64_12.dll` 或 faster-whisper 错误。
+5. 不上传：看 `logs/runtime/upload-*.log` 和 `logs/upload/`。
+6. 切片被跳过：看 `min_video_size`、弹幕 burst 诊断和 pending/done 标记。
 
 ## 常见问题
 
@@ -430,30 +452,32 @@ cd /home/zk/projects/bilive
 
 ### 浏览器提示 `ERR_CONNECTION_REFUSED`
 
-通常是 `blrec` 实际没启动。先确认 `RECORD_KEY`：
+通常是目标服务没启动，先确认访问的是哪个端口：
 
 ```bash
-export RECORD_KEY=bilive2026
-./record.sh
+ssh pi
+sudo systemctl status bilive
 ```
 
-`RECORD_KEY` 必须 8 到 80 个字符。脚本现在会在端口不可连接时直接失败，不再误报。
+- `http://192.168.31.157:2233`：Pi 上的 `blrec`。
+- `/tasks` dashboard：切片页面进程。
+- `http://127.0.0.1:2235`：Windows 本机 worker API，只给浏览器触发 worker 用。
+
+如果是本地开发跑 `record.sh`，再检查 `RECORD_KEY`，它必须 8 到 80 个字符。
 
 ### 页面提示 `prompt() is not supported`
 
-Codex 内置浏览器不支持部分原生弹窗。只要 `/tasks` 页面能显示任务卡片，录制已经正常。必要时可以换系统浏览器访问 `http://localhost:2233`。
+部分内置浏览器不支持原生弹窗。只要 `/tasks` 页面能显示任务卡片，录制已经正常。必要时可以换系统浏览器访问 `http://localhost:2233`。
 
 ### `gio: http://localhost:2233: Operation not supported`
 
-这是 WSL 下 `blrec --open` 自动开浏览器失败的噪音。推荐入口 `record.sh` 已经不再传 `--open`。
+这是 WSL 下 `blrec --open` 自动开浏览器失败的噪音。只影响本地开发入口；当前 Pi systemd 服务不依赖它。
 
-### `local-audio` 没有生成标题
+### `local-audio` 没有生成字幕或标题
 
-确认环境里有可用的 Whisper 包和模型。相关代码会 `import whisper`，失败时会在 scan 日志里提示。需要时安装：
+确认环境里有可用的 `faster-whisper` 和模型缓存。当前推荐 `whisper_engine = "faster-whisper"`、`whisper_model = "large-v3"`、`whisper_device = "cpu"`、`whisper_compute_type = "int8"`。
 
-```bash
-python -m pip install openai-whisper
-```
+如果日志里出现 HuggingFace 下载失败，先确认模型是否已缓存，或临时配置代理/`HF_TOKEN`。如果日志里出现 `cublas64_12.dll`，说明误用了 CUDA 路径，先改回 CPU 或安装 CUDA 12 运行库。
 
 同时确认 `ffmpeg` 可用：
 
@@ -474,18 +498,25 @@ PYTHONPATH=./src python -m unittest \
   tests.test_autoslice.TestSliceQualityFilter
 ```
 
-修改 shell 脚本后建议检查：
+修改 shell 脚本后建议在 Pi 上检查：
 
 ```bash
-bash -n record.sh
-bash -n upload.sh
-bash -n slice.sh
+ssh pi "bash -n /mnt/win/bilive/record.sh"
+ssh pi "bash -n /mnt/win/bilive/upload.sh"
+ssh pi "bash -n /mnt/win/bilive/slice.sh"
 git diff --check
 ```
 
 ## 文档站
 
 `docs/` 里仍保留上游 VitePress 文档和本 fork 的一些设计记录。它不是当前 fork 的权威运行说明。
+
+当前仓库维护和清理索引见：
+
+- `docs/project-health.md`
+- `docs/scan.md`
+- `docs/asr-engines.md`
+- `docs/known-issues.md`
 
 如果需要预览：
 

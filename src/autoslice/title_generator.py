@@ -46,6 +46,9 @@ def title_generator(model_type):
                     MULTI_MODAL_VISUAL_NAME,
                     MULTI_MODAL_VISUAL_URL,
                     MULTI_MODAL_WHISPER_MODEL,
+                    WHISPER_COMPUTE_TYPE,
+                    WHISPER_DEVICE,
+                    WHISPER_ENGINE,
                 )
 
                 return multi_modal_analyze(
@@ -60,6 +63,9 @@ def title_generator(model_type):
                     enable_emotion=MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
                     emotion_model=MULTI_MODAL_EMOTION_MODEL,
                     danmaku_text=danmaku_text,
+                    whisper_engine=WHISPER_ENGINE,
+                    whisper_device=WHISPER_DEVICE,
+                    whisper_compute_type=WHISPER_COMPUTE_TYPE,
                     unload_audio_model=False,
                 )
 
@@ -71,6 +77,7 @@ def title_generator(model_type):
                     MULTI_MODAL_VISUAL_NAME,
                     MULTI_MODAL_VISUAL_URL,
                     MULTI_MODAL_WHISPER_MODEL,
+                    WHISPER_COMPUTE_TYPE,
                     WHISPER_DEVICE,
                     WHISPER_ENGINE,
                 )
@@ -88,6 +95,7 @@ def title_generator(model_type):
                     danmaku_text=danmaku_text,
                     whisper_engine=WHISPER_ENGINE,
                     whisper_device=WHISPER_DEVICE,
+                    whisper_compute_type=WHISPER_COMPUTE_TYPE,
                     unload_audio_model=False,
                 )
 

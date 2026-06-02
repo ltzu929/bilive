@@ -45,6 +45,35 @@ def test_multi_modal_analyze_can_unload_audio_model(monkeypatch):
     assert calls == ["unload"]
 
 
+def test_multi_modal_analyze_passes_whisper_compute_type(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        multi_modal_analyzer,
+        "analyze_audio",
+        lambda *args, **kwargs: calls.append(kwargs) or {
+            "transcript": "transcript",
+            "segments": [],
+            "emotion": "neutral",
+        },
+    )
+    monkeypatch.setattr(
+        multi_modal_analyzer,
+        "judge_and_title",
+        lambda **kwargs: JudgeResult(title="title", description="description"),
+    )
+
+    result = multi_modal_analyzer.multi_modal_analyze(
+        "clip.mp4",
+        "artist",
+        enable_visual=False,
+        enable_audio=True,
+        whisper_compute_type="float16",
+    )
+
+    assert result.title == "title"
+    assert calls[0]["whisper_compute_type"] == "float16"
+
+
 def test_multi_modal_analyze_keeps_emotion_model_loaded_without_unload_flag(monkeypatch):
     calls = []
     monkeypatch.setattr(

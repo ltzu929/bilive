@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>bilive dashboard</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=slice-diagnostics-row-layout-20260527" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -78,6 +78,16 @@
             </div>
           </section>
 
+          <section id="slice-diagnostics-panel" class="diagnostics-panel" aria-live="polite">
+            <div class="diagnostics-header">
+              <span class="diagnostics-title">切片诊断</span>
+              <span id="slice-diagnostics-source" class="diagnostics-source">-</span>
+            </div>
+            <div id="slice-diagnostics-list" class="diagnostics-list">
+              <div class="diagnostic-empty">正在加载诊断信息</div>
+            </div>
+          </section>
+
           <div id="error" class="error hidden"></div>
           <div class="workbench">
             <section class="panel slice-list" aria-label="slice candidates">
@@ -126,6 +136,6 @@
         </section>
       </main>
     </div>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=slice-diagnostics-20260526"></script>
   </body>
 </html>

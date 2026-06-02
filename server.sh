@@ -1,15 +1,6 @@
 #!/bin/bash
-# server.sh — 在 PC 上启动处理服务
-#
-# 用法:
-#   ./server.sh                    # 使用默认配置
-#   BILIVE_CONFIG=./bilive-server.toml ./server.sh  # 指定配置文件
-#
-# 环境变量:
-#   BILIVE_CONFIG      — server 配置文件路径 (默认: ./bilive-server.toml)
-#   BILIVE_VIDEOS_DIR  — 视频目录 (默认: ./Videos)
-#   BILIVE_LOG_DIR     — 日志目录 (默认: ./logs)
-#   BILIVE_DB_PATH     — 数据库路径 (默认: ./src/db/data.db)
+# Start PC-side helper services for the dashboard workflow.
+# This starts the worker API and upload consumer, but not the legacy scan_slice loop.
 
 set -e
 
@@ -17,24 +8,27 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 source venv/bin/activate
-export PYTHONPATH=./src
+export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/src"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
 export BILIVE_CONFIG="${BILIVE_CONFIG:-$PROJECT_DIR/bilive-server.toml}"
+export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$PROJECT_DIR/Videos}"
 
 mkdir -p ./logs/runtime ./logs/scan ./logs/upload
 
-# 停止旧进程
-pkill -f 'src.server.watcher' 2>/dev/null || true
+pkill -f 'src.server.worker_api:api' 2>/dev/null || true
 pkill -f 'src.upload.upload' 2>/dev/null || true
 
-# 启动 watcher（监控 .pending 文件并处理）
-nohup python -m src.server.watcher > ./logs/runtime/watcher-$(date +%Y%m%d-%H%M%S).log 2>&1 &
+nohup python -m uvicorn src.server.worker_api:api --host 127.0.0.1 --port 2235 \
+  > ./logs/runtime/worker-api-$(date +%Y%m%d-%H%M%S).log 2>&1 &
 
-# 启动 upload worker
-nohup python -m src.upload.upload > ./logs/runtime/upload-$(date +%Y%m%d-%H%M%S).log 2>&1 &
+nohup python -m src.upload.upload \
+  > ./logs/runtime/upload-$(date +%Y%m%d-%H%M%S).log 2>&1 &
 
-echo "Server started."
-echo "  Config:    $BILIVE_CONFIG"
-echo "  Logs:      ./logs/runtime"
+echo "PC helpers started."
+echo "  Config:      $BILIVE_CONFIG"
+echo "  Videos:      $BILIVE_VIDEOS_DIR"
+echo "  Worker API:  http://127.0.0.1:2235/api/worker/status"
+echo "  Logs:        ./logs/runtime"
 echo ""
-echo "Optional: Start dashboard with:"
-echo "  python -m src.dashboard.app"
+echo "Queue slicing from the dashboard /tasks page."

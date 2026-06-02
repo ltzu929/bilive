@@ -67,6 +67,7 @@ DEFAULT_STATE = {
     "current_slice_percent": 0.0,
     "message": "暂无切片任务",
     "error": "",
+    "diagnostics": [],
     "updated_at": 0.0,
     "stale": False,
 }
@@ -202,6 +203,7 @@ def _normalize_state(data: dict[str, Any]) -> dict[str, Any]:
     )
     state["updated_at"] = _as_float(state.get("updated_at"))
     state["stale"] = bool(state.get("stale", False))
+    state["diagnostics"] = _normalize_diagnostics(state.get("diagnostics"))
 
     for key in [
         "room_id",
@@ -217,6 +219,39 @@ def _normalize_state(data: dict[str, Any]) -> dict[str, Any]:
         state[key] = value
 
     return state
+
+
+def _normalize_diagnostics(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        details = item.get("details")
+        if not isinstance(details, list):
+            details = []
+        normalized_details = []
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            normalized_details.append(
+                {
+                    "label": str(detail.get("label") or ""),
+                    "value": str(detail.get("value") or ""),
+                }
+            )
+        items.append(
+            {
+                "id": str(item.get("id") or ""),
+                "title": str(item.get("title") or ""),
+                "status": str(item.get("status") or "info"),
+                "message": str(item.get("message") or ""),
+                "details": normalized_details,
+            }
+        )
+    return items
 
 
 def _parse_ffmpeg_time(value: str) -> Optional[float]:

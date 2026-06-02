@@ -144,6 +144,12 @@ def create_app(
             progress.update(queue_state)
         return progress
 
+    @app.get("/api/slice-diagnostics")
+    async def get_slice_diagnostics() -> Dict[str, Any]:
+        progress = load_progress_state()
+        queue_state = load_pending_queue_state(store.videos_root)
+        return build_slice_diagnostics(progress, queue_state)
+
     @app.post("/api/slice/start")
     async def start_slice() -> Dict[str, Any]:
         try:
@@ -191,6 +197,52 @@ def create_app(
             app.mount("/", StaticFiles(directory=static_path, html=True), name="web")
 
     return app
+
+
+def build_slice_diagnostics(
+    progress: Dict[str, Any],
+    queue_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    pending_tasks = int(queue_state.get("pending_tasks") or 0)
+    items = progress.get("diagnostics") if isinstance(progress.get("diagnostics"), list) else []
+    if not items and pending_tasks:
+        items = [
+            {
+                "id": "queue",
+                "title": "任务队列",
+                "status": "pending",
+                "message": "等待本机 PC 切片 worker 处理",
+                "details": [
+                    {"label": "待处理", "value": str(pending_tasks)},
+                    {
+                        "label": "示例",
+                        "value": ", ".join(queue_state.get("pending_sources") or []) or "-",
+                    },
+                ],
+            }
+        ]
+    elif not items:
+        items = [
+            {
+                "id": "idle",
+                "title": "切片诊断",
+                "status": "idle",
+                "message": "暂无切片任务",
+                "details": [],
+            }
+        ]
+
+    status = "queued" if pending_tasks and progress.get("status") in {"idle", ""} else progress.get("status")
+    return {
+        "status": status or "idle",
+        "phase": progress.get("phase") or "idle",
+        "phase_label": progress.get("phase_label") or "",
+        "source_name": progress.get("source_name") or "",
+        "message": progress.get("message") or "",
+        "updated_at": progress.get("updated_at") or 0.0,
+        "pending_tasks": pending_tasks,
+        "items": items,
+    }
 
 
 api = create_app(

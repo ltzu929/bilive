@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import List, Tuple
+from typing import Any, Callable, List, Tuple
 import statistics
 
 from src.log.logger import scan_log
@@ -74,6 +74,7 @@ def detect_bursts(
     context: int = 60,
     merge_gap: int = 5,
     top_n: int = 3,
+    diagnostics_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> List[BurstEvent]:
     """弹幕突增检测主函数
 
@@ -91,6 +92,18 @@ def detect_bursts(
     """
     if not timestamps or video_duration <= 0:
         scan_log.warning("No timestamps or invalid duration for burst detection")
+        _emit_diagnostics(
+            diagnostics_callback,
+            danmaku_count=len(timestamps or []),
+            duration_seconds=video_duration,
+            burst_ratio=burst_ratio,
+            burst_window=burst_window,
+            context=context,
+            baseline_density=0.0,
+            detected_segments=0,
+            selected_bursts=0,
+            reason="没有弹幕时间戳或视频时长无效",
+        )
         return []
 
     scan_log.info(
@@ -151,6 +164,18 @@ def detect_bursts(
 
     if not merged:
         scan_log.info("No burst events detected")
+        _emit_diagnostics(
+            diagnostics_callback,
+            danmaku_count=len(timestamps),
+            duration_seconds=video_duration,
+            burst_ratio=burst_ratio,
+            burst_window=burst_window,
+            context=context,
+            baseline_density=baseline,
+            detected_segments=0,
+            selected_bursts=0,
+            reason="未检测到超过阈值的弹幕突增",
+        )
         return []
 
     scan_log.info(f"Detected {len(merged)} burst segments before top_n filtering")
@@ -225,4 +250,22 @@ def detect_bursts(
             f"danmaku={evt.danmaku_count}"
         )
 
+    _emit_diagnostics(
+        diagnostics_callback,
+        danmaku_count=len(timestamps),
+        duration_seconds=video_duration,
+        burst_ratio=burst_ratio,
+        burst_window=burst_window,
+        context=context,
+        baseline_density=baseline,
+        detected_segments=len(merged),
+        selected_bursts=len(selected),
+        max_burst_ratio=max((event.burst_ratio for event in selected), default=0.0),
+        reason=f"检测到 {len(selected)} 个可切片爆点",
+    )
     return selected
+
+
+def _emit_diagnostics(callback, **payload) -> None:
+    if callback:
+        callback(payload)

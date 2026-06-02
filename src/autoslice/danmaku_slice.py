@@ -149,6 +149,10 @@ def _slice_by_burst(
         context=context,
         merge_gap=merge_gap,
         top_n=top_n,
+        diagnostics_callback=lambda summary: _emit_detection_progress(
+            progress_callback,
+            summary,
+        ),
     )
 
     if not events:
@@ -241,6 +245,12 @@ def _emit_slice_progress(
             "percent": percent,
         }
     )
+
+
+def _emit_detection_progress(progress_callback, summary):
+    if not progress_callback:
+        return
+    progress_callback({"event": "detect_complete", **summary})
 
 
 def extract_danmaku_text(

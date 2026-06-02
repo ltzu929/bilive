@@ -113,7 +113,7 @@ MULTI_MODAL_ENABLE_VISUAL = config.get("slice", {}).get("multi_modal", {}).get("
 MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("enable_audio", True)
 WHISPER_ENGINE = config.get("slice", {}).get("multi_modal", {}).get("whisper_engine", "openai-whisper")
 WHISPER_DEVICE = config.get("slice", {}).get("multi_modal", {}).get("whisper_device", "cpu")
-WHISPER_COMPUTE_TYPE = config.get("slice", {}).get("multi_modal", {}).get("whisper_compute_type", "int8")
+WHISPER_COMPUTE_TYPE = config.get("slice", {}).get("multi_modal", {}).get("whisper_compute_type")
 MULTI_MODAL_UNLOAD_AUDIO_MODEL = config.get("slice", {}).get("multi_modal", {}).get("unload_audio_model_after_analysis", True)
 
 # LLM judge provider:

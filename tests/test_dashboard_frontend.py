@@ -42,6 +42,15 @@ def test_frontend_contains_slice_progress_panel():
     assert 'id="slice-progress-percent"' in text
 
 
+def test_frontend_contains_slice_diagnostics_panel():
+    text = FRONTEND_HTML.read_text(encoding="utf-8")
+    assert 'id="slice-diagnostics-panel"' in text
+    assert 'id="slice-diagnostics-list"' in text
+    assert "正在加载诊断信息" in text
+    assert "/app.js?v=slice-diagnostics" in text
+    assert "/styles.css?v=slice-diagnostics" in text
+
+
 def test_frontend_contains_start_slice_button():
     text = FRONTEND_HTML.read_text(encoding="utf-8")
     assert 'id="start-slice-button"' in text
@@ -58,6 +67,13 @@ def test_frontend_polls_slice_progress_endpoint():
     assert "暂无切片任务" in text
 
 
+def test_frontend_polls_slice_diagnostics_endpoint():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert 'request("/api/slice-diagnostics")' in text
+    assert "renderSliceDiagnostics" in text
+    assert "sliceDiagnosticsList" in text
+
+
 def test_frontend_posts_start_slice_request():
     text = FRONTEND_JS.read_text(encoding="utf-8")
     assert 'request("/api/slice/start", {' in text
@@ -71,9 +87,25 @@ def test_frontend_triggers_local_pc_worker_once():
     assert "http://127.0.0.1:2235/api/worker/run-once" in text
     assert "startPcWorkerOnce" in text
     assert "pendingTasks" in text
+    assert "start_pc_worker_api.ps1" in text
+    assert "start_pipeline.ps1" not in text
 
 
 def test_frontend_styles_slice_progress_panel():
     text = FRONTEND_CSS.read_text(encoding="utf-8")
     assert ".progress-panel" in text
     assert ".progress-fill" in text
+
+
+def test_frontend_styles_slice_diagnostics_panel():
+    text = FRONTEND_CSS.read_text(encoding="utf-8")
+    assert ".diagnostics-panel" in text
+    assert ".diagnostic-item" in text
+    assert ".diagnostic-details" in text
+
+
+def test_frontend_keeps_slice_rows_from_inheriting_global_button_height():
+    text = FRONTEND_CSS.read_text(encoding="utf-8")
+    assert ".slice-list .slice-row" in text
+    assert "height: auto;" in text
+    assert "align-items: stretch;" in text

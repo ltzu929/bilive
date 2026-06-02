@@ -15,6 +15,7 @@ from src.config import (
 from autoslice import slice_video_by_danmaku
 from src.autoslice.danmaku_slice import extract_danmaku_text
 from src.autoslice.title_generator import generate_title
+from src.burn.subtitle_burn import burn_subtitles_from_analysis
 from src.upload.slice_metadata import (
     delete_slice_upload_metadata,
     write_slice_upload_metadata,
@@ -59,21 +60,115 @@ def slice_only(video_path):
         return
 
     progress = SliceProgressWriter()
+    diagnostics = []
     original_video_path = str(video_path)
     source_name = Path(original_video_path).name
     room_id = Path(original_video_path).parent.name
     xml_path = original_video_path[:-4] + ".xml"
 
+    def set_diagnostic(item, **progress_fields):
+        nonlocal diagnostics
+        diagnostics = upsert_diagnostic(diagnostics, item)
+        return progress.update(
+            force=True,
+            diagnostics=diagnostics,
+            **progress_fields,
+        )
+
     if not os.path.exists(xml_path):
         scan_log.warning(f"No danmaku file for {video_path}, cannot slice by burst.")
-        return
-
-    if check_file_size(original_video_path) < MIN_VIDEO_SIZE:
-        scan_log.info(
-            f"Video size too small ({check_file_size(original_video_path)}MB), "
-            f"skip slicing: {original_video_path}"
+        set_diagnostic(
+            diagnostic_item(
+                "input",
+                "输入文件",
+                "error",
+                "缺少弹幕 XML，无法按弹幕切片",
+                [("文件", source_name), ("弹幕 XML", "缺失")],
+            ),
+            status="error",
+            phase="error",
+            phase_label="错误",
+            room_id=room_id,
+            source_path=original_video_path,
+            source_name=source_name,
+            message="缺少弹幕 XML，无法按弹幕切片",
+            error="缺少弹幕 XML",
         )
         return
+
+    file_size_mb = check_file_size(original_video_path)
+    if file_size_mb < MIN_VIDEO_SIZE:
+        scan_log.info(
+            f"Video size too small ({file_size_mb}MB), "
+            f"skip slicing: {original_video_path}"
+        )
+        diagnostics = upsert_diagnostic(
+            diagnostics,
+            diagnostic_item(
+                "input",
+                "输入文件",
+                "ok",
+                "录像和弹幕文件已就绪",
+                [
+                    ("文件", source_name),
+                    ("大小", format_mb(file_size_mb)),
+                    ("弹幕 XML", "存在"),
+                ],
+            ),
+        )
+        set_diagnostic(
+            diagnostic_item(
+                "result",
+                "切片结果",
+                "warning",
+                "录像小于切片阈值，已跳过",
+                [
+                    ("大小", format_mb(file_size_mb)),
+                    ("最小阈值", format_mb(MIN_VIDEO_SIZE)),
+                ],
+            ),
+            status="complete",
+            phase="complete",
+            phase_label="完成",
+            room_id=room_id,
+            source_path=original_video_path,
+            source_name=source_name,
+            current_slice=0,
+            total_slices=0,
+            current_slice_percent=100.0,
+            message="录像小于切片阈值，已跳过",
+            error="",
+        )
+        return
+
+    diagnostics = upsert_diagnostic(
+        diagnostics,
+        diagnostic_item(
+            "input",
+            "输入文件",
+            "ok",
+            "录像和弹幕文件已就绪",
+            [
+                ("文件", source_name),
+                ("大小", format_mb(file_size_mb)),
+                ("弹幕 XML", "存在"),
+            ],
+        ),
+    )
+    diagnostics = upsert_diagnostic(
+        diagnostics,
+        diagnostic_item(
+            "burst",
+            "爆点检测",
+            "running",
+            "等待弹幕突增检测结果",
+            [
+                ("阈值", format_ratio(BURST_RATIO)),
+                ("窗口", f"{BURST_WINDOW}s"),
+                ("上下文", f"±{BURST_CONTEXT}s"),
+            ],
+        ),
+    )
 
     scan_log.info(f"Starting slice-only processing: {original_video_path}")
     progress.update(
@@ -90,6 +185,7 @@ def slice_only(video_path):
         current_slice_percent=0.0,
         message="准备切片任务",
         error="",
+        diagnostics=diagnostics,
     )
 
     progress.update(
@@ -114,6 +210,23 @@ def slice_only(video_path):
             current_slice = event.get("current_slice", 0)
             total_slices = event.get("total_slices", 0)
             event_name = event.get("event", "slice_progress")
+            if event_name == "detect_complete":
+                set_diagnostic(
+                    diagnostic_from_detection(event),
+                    status="running",
+                    phase="detect",
+                    phase_label="检测高能片段",
+                    room_id=room_id,
+                    source_path=original_video_path,
+                    source_name=source_name,
+                    current_slice=0,
+                    total_slices=0,
+                    current_slice_path="",
+                    current_slice_percent=0.0,
+                    message=event.get("reason") or "弹幕突增检测完成",
+                    error="",
+                )
+                return
             progress.update(
                 force=event_name in {"slice_start", "slice_complete"},
                 status="running",
@@ -128,6 +241,7 @@ def slice_only(video_path):
                 current_slice_percent=event.get("percent", 0.0),
                 message=f"正在切片 {current_slice}/{total_slices}",
                 error="",
+                diagnostics=diagnostics,
             )
 
         slices_path = slice_video_by_danmaku(
@@ -148,6 +262,26 @@ def slice_only(video_path):
         return
 
     total_slices = len(slices_path)
+    set_diagnostic(
+        diagnostic_item(
+            "result",
+            "切片结果",
+            "ok" if total_slices else "warning",
+            f"生成 {total_slices} 个切片",
+            [("切片数", str(total_slices))],
+        ),
+        status="running",
+        phase="detect" if total_slices == 0 else "slice",
+        phase_label="检测高能片段" if total_slices == 0 else "切片中",
+        room_id=room_id,
+        source_path=original_video_path,
+        source_name=source_name,
+        current_slice=0,
+        total_slices=total_slices,
+        current_slice_percent=0.0 if total_slices == 0 else 100.0,
+        message=f"生成 {total_slices} 个切片",
+        error="",
+    )
     for index, generated_slice in enumerate(slices_path, start=1):
         slice_path = generated_slice.path
         try:
@@ -162,6 +296,7 @@ def slice_only(video_path):
                 current_slice_percent=100.0,
                 message=f"正在分析切片 {index}/{total_slices}",
                 error="",
+                diagnostics=diagnostics,
             )
             danmaku_text = extract_danmaku_text(
                 xml_path,
@@ -192,6 +327,15 @@ def slice_only(video_path):
                     analysis_json_path = slice_path[:-4] + "_analysis.json"
                     result.to_json_file(analysis_json_path)
                     scan_log.info(f"Analysis result saved: {analysis_json_path}")
+
+                burn_result = burn_subtitles_from_analysis(slice_path, result)
+                if burn_result.burned:
+                    scan_log.info(f"ASR subtitles burned into slice: {slice_path}")
+                elif result.transcript_segments:
+                    scan_log.warning(
+                        f"ASR subtitle burn skipped for {slice_path}: "
+                        f"{burn_result.message}"
+                    )
 
                 slice_title = result.title
                 slice_desc = result.description
@@ -241,6 +385,7 @@ def slice_only(video_path):
                 total_slices=total_slices,
                 current_slice_path=slice_path,
                 message="正在写入上传参数",
+                diagnostics=diagnostics,
             )
             write_slice_upload_metadata(
                 slice_path,
@@ -259,6 +404,7 @@ def slice_only(video_path):
                 total_slices=total_slices,
                 current_slice_path=slice_path,
                 message="正在加入上传队列",
+                diagnostics=diagnostics,
             )
             if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1":
                 scan_log.info(f"Skip upload queue for local test: {slice_path}")
@@ -277,8 +423,36 @@ def slice_only(video_path):
     if total_slices:
         unload_local_audio_models_after_batch()
 
-    if os.getenv("BILIVE_KEEP_SOURCE") == "1":
-        scan_log.info("BILIVE_KEEP_SOURCE=1, keep original video/danmaku files.")
+    if total_slices == 0:
+        scan_log.info("No slices generated; keep original video/danmaku files.")
+        set_diagnostic(
+            diagnostic_item(
+                "cleanup",
+                "清理动作",
+                "ok",
+                "0 切片，源文件已保留",
+                [("源文件", "保留"), ("弹幕 XML", "保留")],
+            ),
+            status="running",
+            phase="cleanup",
+            phase_label="清理源文件",
+            message="0 切片，源文件已保留",
+        )
+    elif os.getenv("BILIVE_DELETE_SOURCE_AFTER_SLICE") != "1":
+        scan_log.info("Keep original video/danmaku files after slicing.")
+        set_diagnostic(
+            diagnostic_item(
+                "cleanup",
+                "清理动作",
+                "ok",
+                "源文件已保留",
+                [("源文件", "保留"), ("弹幕 XML", "保留")],
+            ),
+            status="running",
+            phase="cleanup",
+            phase_label="清理源文件",
+            message="源文件已保留",
+        )
     else:
         progress.update(
             force=True,
@@ -286,17 +460,90 @@ def slice_only(video_path):
             phase="cleanup",
             phase_label="清理源文件",
             message="正在清理源文件",
+            diagnostics=diagnostics,
         )
         for remove_path in [original_video_path, xml_path]:
             if os.path.exists(remove_path):
                 os.remove(remove_path)
                 scan_log.info(f"Removed: {remove_path}")
+        set_diagnostic(
+            diagnostic_item(
+                "cleanup",
+                "清理动作",
+                "ok",
+                "已清理源 mp4 和弹幕 XML",
+                [("源文件", "已删除"), ("弹幕 XML", "已删除")],
+            ),
+            status="running",
+            phase="cleanup",
+            phase_label="清理源文件",
+            message="源文件已清理",
+        )
 
     progress.complete(
+        message="未生成切片，源文件已保留" if total_slices == 0 else "切片处理完成",
         room_id=room_id,
         source_path=original_video_path,
         source_name=source_name,
         current_slice=total_slices,
         total_slices=total_slices,
+        diagnostics=diagnostics,
     )
     scan_log.info(f"Slice-only processing complete for: {original_video_path}")
+
+
+def diagnostic_item(item_id, title, status, message, details):
+    return {
+        "id": item_id,
+        "title": title,
+        "status": status,
+        "message": message,
+        "details": [
+            {"label": str(label), "value": str(value)}
+            for label, value in details
+        ],
+    }
+
+
+def upsert_diagnostic(items, item):
+    return [
+        *(existing for existing in items if existing.get("id") != item.get("id")),
+        item,
+    ]
+
+
+def diagnostic_from_detection(event):
+    selected = int(event.get("selected_bursts") or 0)
+    status = "ok" if selected else "warning"
+    message = event.get("reason") or (
+        f"检测到 {selected} 个可切片爆点" if selected else "未检测到超过阈值的弹幕突增"
+    )
+    details = [
+        ("弹幕数", str(int(event.get("danmaku_count") or 0))),
+        ("时长", format_duration(event.get("duration_seconds") or 0)),
+        ("阈值", format_ratio(event.get("burst_ratio") or BURST_RATIO)),
+        ("窗口", f"{int(event.get('burst_window') or BURST_WINDOW)}s"),
+        ("基线密度", f"{float(event.get('baseline_density') or 0):.2f}/s"),
+        ("候选爆点", str(int(event.get("detected_segments") or 0))),
+    ]
+    max_ratio = event.get("max_burst_ratio")
+    if max_ratio is not None:
+        details.append(("最高突增", format_ratio(max_ratio)))
+    return diagnostic_item("burst", "爆点检测", status, message, details)
+
+
+def format_mb(value):
+    return f"{float(value):.1f} MB"
+
+
+def format_ratio(value):
+    return f"{float(value):.1f}x"
+
+
+def format_duration(seconds):
+    seconds = float(seconds or 0)
+    if seconds <= 0:
+        return "-"
+    minutes = int(seconds // 60)
+    remainder = int(seconds % 60)
+    return f"{minutes}m{remainder:02d}s"

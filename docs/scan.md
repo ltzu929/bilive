@@ -1,57 +1,97 @@
 # 切片管线
 
-## 完整流程
+当前推荐管线是 dashboard 提交 `.pending`，PC worker 一次性处理后退出。旧的 `scan_slice.py` 全目录轮询仍保留作兼容入口，但不再作为日常切片主路径。
 
-```
-scan_slice.py 每 120s 轮询 Videos/ 目录
-  ↓ 找到录制完成的 .mp4 + 配对 .xml
-  ↓ 排除 _slice 文件和 < 20MB 文件
-  ↓ 跳过正在录制中的房间（.flv 无配对 .mp4）
-  ↓
-1. 弹幕转换 (xml → ass)                  ~1s
-2. 获取主播信息                            ~0.5s
-3. 弹幕突增切片 (burst_detector + ffmpeg)  ~3s
-   burst_ratio=3.0, context=±60s, top_n=3
-   ↓
-对每个切片（最多3个）：
-  4a. 提取弹幕文本 (xml 时间窗口内)
-  4b. ASR 转录 (Qwen3-ASR-1.7B / Whisper)  ~20s
-  4c. LLM 质量判断 + 标题生成               ~5-15s
-      (qwen3.5-9b via LM Studio)
-      retain=false → 删除切片
-  4d. 深度分析 + 编辑指令（可选）
-  4e. 注入元数据 (mp4 → .flv)              ~1s
-  4f. 入 SQLite 上传队列
-  ↓
-5. 清理原始文件 (mp4 + xml + ass)
-   (除非 BILIVE_KEEP_SOURCE=1)
+## 当前完整流程
+
+```text
+Pi blrec
+  -> 录制 mp4/xml/jsonl/flv 到 /mnt/win/bilive/Videos/<room_id>/
+
+Dashboard /tasks
+  -> POST /api/slice/start
+  -> src.dashboard.slice_control 扫描整场 mp4+xml
+  -> 写 <recording>.mp4.pending
+
+Windows PC worker API
+  -> http://127.0.0.1:2235/api/worker/run-once
+  -> src.server.worker_control 启动:
+     python -m src.server.watcher --once --videos-dir .\Videos
+
+src.server.watcher
+  -> 读取 pending 标记中的 video_rel_path
+  -> 调用 slice_only(video_path)
+  -> 成功后写 .mp4.done，删除 .pending
+  -> 进程退出
+
+slice_only()
+  1. 检查 mp4+xml、文件大小和录制状态
+  2. 解析弹幕并做 burst 检测
+  3. ffmpeg 生成候选切片，默认 top_n=3
+  4. 对每个切片提取音频
+  5. faster-whisper 转录，保留真实 transcript_segments
+  6. LLM judge/标题分析，失败时降级继续
+  7. 根据真实 ASR 时间戳生成 *_asr.srt 并烧录字幕
+  8. 保存 *_analysis.json / *_edit.json
+  9. 写入 SQLite 上传队列
+ 10. 默认保留源 mp4/xml，除非 BILIVE_DELETE_SOURCE_AFTER_SLICE=1
 ```
 
 ## 关键代码
 
 | 步骤 | 文件 | 函数 |
 |------|------|------|
-| 扫描入口 | `src/burn/scan_slice.py` | `process_folder_slice_only()` |
+| 页面提交切片 | `src/dashboard/slice_control.py` | `start_slice_scan()` |
+| worker API | `src/server/worker_api.py` | `POST /api/worker/run-once` |
+| 启动一次性 worker | `src/server/worker_control.py` | `start_worker_once()` |
+| pending 处理 | `src/server/watcher.py` | `process_pending_videos()` |
 | 切片主流程 | `src/burn/slice_only.py` | `slice_only()` |
-| 弹幕转换 | `src/danmaku/generate_danmakus.py` | `process_danmakus()` |
-| 突增检测 | `src/autoslice/burst_detector.py` | `detect_bursts()` |
+| 进度/诊断 | `src/burn/slice_progress.py` | `update_progress()` |
+| 弹幕突增检测 | `src/autoslice/burst_detector.py` | `detect_bursts()` |
 | ASR 转录 | `src/autoslice/mllm_sdk/audio_analyzer.py` | `analyze_audio()` |
+| 字幕烧录 | `src/burn/subtitle_burn.py` | `burn_subtitles_from_analysis()` |
 | LLM 判断 | `src/autoslice/mllm_sdk/judge.py` | `judge_and_title()` |
-| 元数据注入 | `src/autoslice/inject_metadata.py` | `inject_metadata()` |
 | 上传队列 | `src/db/conn.py` | SQLite `upload_queue` 表 |
 
-## 切片进度状态
+## 进度和诊断
 
-自动切片会把当前流水线阶段和 ffmpeg 切片百分比写入 `logs/runtime/slice-progress.json`，Dashboard 通过 `GET /api/slice-progress` 读取并在 `/tasks` 页面的切片进度面板中展示。进度文件位于项目运行目录的 `logs/runtime/` 下，避免频繁写入 Pi SD 卡。
+自动切片会写 `logs/runtime/slice-progress.json`。Dashboard 读取：
 
-## 两条管线
+- `GET /api/slice-progress`：顶部进度条。
+- `GET /api/slice-diagnostics`：诊断面板。
 
-| 特性 | `scan.py` (完整) | `scan_slice.py` (切片专用) |
-|------|-----------------|--------------------------|
-| 用途 | 整场渲染+上传 | 仅切片+上传 |
-| 弹幕渲染 | 烧录字幕到视频 | 不渲染 |
-| 清理 | mp4+xml+ass+srt+jsonl | mp4+xml+ass |
+诊断面板关注输入文件、弹幕 burst、切片结果、ASR/字幕、上传队列等关键状态，不等同于完整日志。
+
+## pending / done 语义
+
+- `.mp4.pending`：等待 PC worker 处理。
+- `.mp4.done`：该源录播已经由 pending worker 成功处理。
+- 没有 `.pending` 和 `.done` 的整场 `mp4+xml`：页面启动切片时会重新加入队列。
+
+调试时如果要重跑某个源录播，可以手动移走对应 `.done`，再从页面重新提交。不要删除源 `.mp4/.xml`，当前默认会保留它们。
+
+## 旧入口
+
+`src.burn.scan_slice` 仍存在：
+
+```powershell
+python -m src.burn.scan_slice --once
+```
+
+它会扫描整个 `Videos/`，不是只处理 pending 队列。常驻模式还会每 120 秒重复扫描。当前只建议在兼容排查时临时使用，日常切片请走 `src.server.watcher --once`。
+
+## 常见排查
+
+| 现象 | 优先看 |
+|------|------|
+| 页面启动后只有 pending | `start_pc_worker_api.ps1` 是否运行，`pc-worker-*.log` |
+| 切片扫到整个 Videos | 是否误用了 `src.burn.scan_slice` 或 `start_pipeline.ps1 -RunLegacyScanSlice` |
+| 生成 0 个切片 | 诊断面板 burst 阈值、弹幕数、`burst_ratio` |
+| 字幕没有烧录 | ASR 是否返回 `transcript_segments`，是否有 `*_asr.srt` |
+| ASR 下载失败 | HuggingFace/代理、模型缓存、`HF_TOKEN` |
+| CUDA ASR 失败 | 是否缺 `cublas64_12.dll` |
+| 标题降级 | LM Studio/OpenAI-compatible 接口是否 502 |
 
 ## 已知问题
 
-见 [`known-issues.md`](known-issues.md)：scan_slice 跳过逻辑、GBK 编码、窗口关闭崩溃。
+见 [`known-issues.md`](known-issues.md)。

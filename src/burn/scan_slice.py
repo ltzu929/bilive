@@ -49,6 +49,8 @@ def process_folder_slice_only(folder_path):
         for mp4_file in Path(folder_path).glob("*.mp4")
         if not mp4_file.name.endswith("-.mp4")
         and not "_slice" in mp4_file.name  # 排除切片文件
+        and not mp4_file.with_suffix(".mp4.pending").exists()
+        and not mp4_file.with_suffix(".mp4.done").exists()
     ]
 
     processed = 0

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Start slice-only scanning and uploader.
+# Process the pending slice queue once.
+# Daily slicing should queue jobs from the dashboard and use src.server.watcher.
 
 set -e
 
@@ -7,16 +8,12 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 source venv/bin/activate
-export PYTHONPATH=./src
+export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/src"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+export BILIVE_CONFIG="${BILIVE_CONFIG:-$PROJECT_DIR/bilive-server.toml}"
+export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$PROJECT_DIR/Videos}"
 
 mkdir -p ./logs/runtime ./logs/scan ./logs/upload
 
-kill -9 $(ps aux | grep 'src.burn.scan' | grep -v grep | awk '{print $2}') 2>/dev/null || true
-kill -9 $(ps aux | grep 'src.burn.scan_slice' | grep -v grep | awk '{print $2}') 2>/dev/null || true
-kill -9 $(ps aux | grep '[u]pload' | awk '{print $2}') 2>/dev/null || true
-
-nohup python -m src.burn.scan_slice > ./logs/runtime/slice-$(date +%Y%m%d-%H%M%S).log 2>&1 &
-nohup python -m src.upload.upload > ./logs/runtime/upload-$(date +%Y%m%d-%H%M%S).log 2>&1 &
-
-echo "Slice-only pipeline started."
-echo "Logs: ./logs/runtime"
+python -m src.server.watcher --once --videos-dir "$BILIVE_VIDEOS_DIR"

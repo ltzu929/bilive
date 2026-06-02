@@ -273,6 +273,7 @@ def multi_modal_analyze(
     danmaku_text: str = "",
     whisper_engine: str = "openai-whisper",
     whisper_device: str = "cpu",
+    whisper_compute_type: str | None = None,
     unload_audio_model: bool = False,
 ) -> AnalysisResult:
     """多模型协作分析视频切片
@@ -307,6 +308,7 @@ def multi_modal_analyze(
             emotion_model=emotion_model,
             whisper_engine=whisper_engine,
             whisper_device=whisper_device,
+            whisper_compute_type=whisper_compute_type,
         )
         if unload_audio_model:
             from .audio_analyzer import unload_asr_models, unload_emotion_model

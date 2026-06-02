@@ -320,6 +320,72 @@ async def test_slice_progress_api_reports_pending_queue(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_slice_diagnostics_api_returns_structured_items(tmp_path, monkeypatch):
+    progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
+    progress_path.parent.mkdir(parents=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "phase": "complete",
+                "source_name": "22966160_20260525-12-00-19.mp4",
+                "message": "未生成切片，源文件已保留",
+                "updated_at": time.time(),
+                "diagnostics": [
+                    {
+                        "id": "burst",
+                        "title": "爆点检测",
+                        "status": "warning",
+                        "message": "未检测到超过阈值的弹幕突增",
+                        "details": [
+                            {"label": "弹幕数", "value": "5328"},
+                            {"label": "阈值", "value": "3.0x"},
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "complete"
+    assert payload["source_name"] == "22966160_20260525-12-00-19.mp4"
+    assert payload["items"][0]["title"] == "爆点检测"
+    assert payload["items"][0]["details"][1] == {"label": "阈值", "value": "3.0x"}
+
+
+@pytest.mark.anyio
+async def test_slice_diagnostics_api_reports_pending_queue(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "8792912"
+    room.mkdir(parents=True)
+    (room / "8792912_20260524-13-06-05.mp4.pending").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["items"][0]["id"] == "queue"
+    assert payload["items"][0]["message"] == "等待本机 PC 切片 worker 处理"
+
+
+@pytest.mark.anyio
 async def test_tasks_route_serves_static_frontend(tmp_path):
     frontend = tmp_path / "frontend"
     frontend.mkdir()

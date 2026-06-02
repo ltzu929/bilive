@@ -126,7 +126,13 @@ def extract_audio(video_path: str) -> str:
         return ""
 
 
-def transcribe_audio_whisper(audio_path: str, model_size: str = "base", device: str = "cpu", engine: str = "openai-whisper") -> Dict[str, Any]:
+def transcribe_audio_whisper(
+    audio_path: str,
+    model_size: str = "base",
+    device: str = "cpu",
+    engine: str = "openai-whisper",
+    compute_type: Optional[str] = None,
+) -> Dict[str, Any]:
     """使用 ASR 模型转录音频
 
     Args:
@@ -139,14 +145,19 @@ def transcribe_audio_whisper(audio_path: str, model_size: str = "base", device: 
         Dict: 转录结果，包含文本和元数据
     """
     if engine == "faster-whisper":
-        return _transcribe_faster_whisper(audio_path, model_size, device)
+        return _transcribe_faster_whisper(audio_path, model_size, device, compute_type)
     elif engine == "qwen3-asr":
         return _transcribe_qwen3_asr(audio_path, model_size, device)
     else:
         return _transcribe_openai_whisper(audio_path, model_size, device)
 
 
-def _transcribe_faster_whisper(audio_path: str, model_size: str = "large-v3", device: str = "cuda") -> Dict[str, Any]:
+def _transcribe_faster_whisper(
+    audio_path: str,
+    model_size: str = "large-v3",
+    device: str = "cuda",
+    compute_type: Optional[str] = None,
+) -> Dict[str, Any]:
     """使用 faster-whisper (CTranslate2) 转录音频"""
     try:
         from faster_whisper import WhisperModel
@@ -158,7 +169,7 @@ def _transcribe_faster_whisper(audio_path: str, model_size: str = "large-v3", de
     try:
         global _whisper_model
         # int8_float16 avoids cuBLAS dependency on CUDA 13.x while still using GPU
-        compute_type = "int8" if device == "cpu" else "int8_float16"
+        compute_type = compute_type or ("int8" if device == "cpu" else "int8_float16")
         if _whisper_model is None or not hasattr(_whisper_model, '_faster_whisper'):
             scan_log.info(f"Loading faster-whisper model: {model_size}, device={device}, compute_type={compute_type}")
             _whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
@@ -573,6 +584,7 @@ def analyze_audio(
     emotion_model: str = "facebook/wav2vec2-base-robust-emotion",
     whisper_engine: str = "openai-whisper",
     whisper_device: str = "cpu",
+    whisper_compute_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """完整的音频分析流程
 
@@ -596,7 +608,11 @@ def analyze_audio(
 
     # 2. Whisper 转录
     transcript_result = transcribe_audio_whisper(
-        audio_path, whisper_model, device=whisper_device, engine=whisper_engine
+        audio_path,
+        whisper_model,
+        device=whisper_device,
+        engine=whisper_engine,
+        compute_type=whisper_compute_type,
     )
     result["transcript"] = transcript_result.get("transcript", "")
     result["segments"] = transcript_result.get("segments", [])

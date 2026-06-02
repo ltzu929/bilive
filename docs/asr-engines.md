@@ -1,46 +1,101 @@
 # ASR 引擎
 
-切片管线中的语音转录组件。当前默认使用 Qwen3-ASR-1.7B。
+切片管线中的语音转录组件。当前默认使用 `faster-whisper`，因为字幕烧录需要真实时间戳。
 
-## 配置
+## 当前推荐配置
 
-`bilive-server.toml` → `[slice.multi_modal]`：
+`bilive-server.toml` -> `[slice.multi_modal]`：
 
 ```toml
-whisper_engine = "qwen3-asr"              # 引擎选择
-whisper_model = "Qwen/Qwen3-ASR-1.7B"     # 模型 ID (HuggingFace)
-whisper_device = "cuda"                   # cuda / cpu
+whisper_engine = "faster-whisper"
+whisper_model = "large-v3"
+whisper_device = "cpu"
+whisper_compute_type = "int8"
 ```
 
-引擎分发逻辑：`src/autoslice/mllm_sdk/audio_analyzer.py` → `transcribe_audio_whisper()`
+引擎分发逻辑：`src/autoslice/mllm_sdk/audio_analyzer.py` -> `transcribe_audio_whisper()`。
+
+## 为什么回到 faster-whisper
+
+字幕烧录必须使用真实时间戳。`Qwen3-ASR` 可以给出整段文本，但当前集成没有可用的真实段级时间戳；如果强行把一整段 transcript 平均切开，字幕会变成长句或节奏错误。
+
+`faster-whisper` 返回 `segments`，每段包含 `start/end/text`，可以直接生成 SRT：
+
+```text
+transcript_segments -> *_asr.srt -> ffmpeg subtitles filter -> burned mp4
+```
+
+因此当前策略是：
+
+- 有真实 `transcript_segments`：生成 SRT 并烧录。
+- 没有真实时间戳：不烧录伪字幕。
 
 ## 引擎对比
 
-| 引擎 | 配置值 | 模型 | 中文 CER | 显存 | 速度 | 状态 |
-|------|--------|------|---------|------|------|------|
-| **Qwen3-ASR** | `qwen3-asr` | Qwen3-ASR-1.7B | **3.2%** | ~5GB | ~20s/片段 | ✅ 推荐 |
-| openai-whisper | `openai-whisper` | large-v3-turbo | ~12% | ~5GB | ~60s/片段 | ✅ 可用 |
-| faster-whisper | `faster-whisper` | large-v3 | ~12% | ~5GB | ~8s/片段 | ❌ 缺cuBLAS |
+| 引擎 | 配置值 | 当前用途 | 时间戳 | 状态 |
+|------|--------|----------|--------|------|
+| faster-whisper | `faster-whisper` | 当前默认 ASR + 字幕烧录 | 有真实段时间戳 | 推荐，CPU `int8` 可用 |
+| openai-whisper | `openai-whisper` | 兼容回退 | 有真实段时间戳 | 可用但慢 |
+| Qwen3-ASR | `qwen3-asr` | 只适合文本转录参考 | 当前无可用真实时间戳 | 不适合烧录字幕主路径 |
 
-> 中文准确率差距：Qwen3-ASR 的 CER 3.2% vs Whisper 12-19%，好 4-6 倍。在噪音环境下差距更大（16% vs 63%）。
+## 模型选择
 
-## Qwen3-ASR
+当前实际可用模型：
 
-2026年1月阿里发布，1.7B 参数，支持 52 种语言 + 22 种中文方言，自带标点。
+```toml
+whisper_model = "large-v3"
+```
 
-安装：`pip install qwen-asr`
+原因：
 
-首次运行从 HuggingFace 下载约 4.5GB 模型，建议设 `HF_TOKEN` 加速（同下）。
+- 本机已经缓存 `Systran/faster-whisper-large-v3`。
+- `large-v3-turbo` 首次下载可能因为 HuggingFace/代理失败。
+- CPU `int8` 虽然慢，但稳定，不依赖 CUDA DLL。
 
-代码：`src/autoslice/mllm_sdk/audio_analyzer.py` → `_transcribe_qwen3_asr()`
+如果后续网络和缓存稳定，可以再测试 `large-v3-turbo`。测试前先确认 HuggingFace 下载能完成。
 
-回退到 Whisper：`whisper_engine = "openai-whisper"`, `whisper_model = "large-v3-turbo"`
+## CUDA 注意事项
 
-## faster-whisper / openai-whisper 预下载
+`faster-whisper` 的 CUDA 路径依赖 CTranslate2 对应的 CUDA 12 运行库。只有显卡驱动或 CUDA 13 驱动通常不包含：
 
-faster-whisper 使用 CTranslate2 格式模型（~3GB），首次运行需从 HuggingFace 下载。
-openai-whisper 使用 PyTorch 格式（~3GB），缓存于 `~/.cache/whisper/large-v3.pt`。
+```text
+cublas64_12.dll
+```
 
-**加速下载**：在 https://huggingface.co/settings/tokens 创建 token，设 `$env:HF_TOKEN = "hf_xxx"`。
+缺这个 DLL 时会报：
 
-**cuBLAS 问题**：faster-whisper 依赖 `cublas64_12.dll`（CUDA 12 Toolkit），仅安装驱动（CUDA 13）时不包含此 DLL。表现为 `Library cublas64_12.dll is not found`。目前无解——需安装 CUDA Toolkit 12.x 或改用 openai-whisper。
+```text
+Library cublas64_12.dll is not found or cannot be loaded
+```
+
+处理方式：
+
+1. 继续使用当前 CPU 配置：`whisper_device = "cpu"`、`whisper_compute_type = "int8"`。
+2. 或安装/配置 CUDA 12 cuBLAS 运行库，再改为 CUDA。
+
+不要只把配置改成 `whisper_device = "cuda"`，否则 worker 会在 ASR 阶段失败。
+
+## 下载和缓存
+
+faster-whisper 使用 HuggingFace 模型缓存。网络不稳定时会出现代理或连接重置错误。可以：
+
+- 使用已经缓存的 `large-v3`。
+- 配置可用代理。
+- 设置 `HF_TOKEN`。
+
+PowerShell 示例：
+
+```powershell
+$env:HF_TOKEN = "hf_xxx"
+```
+
+## 相关文件
+
+| 文件 | 用途 |
+|------|------|
+| `bilive-server.toml` | 当前 ASR 配置 |
+| `src/autoslice/mllm_sdk/audio_analyzer.py` | ASR 引擎加载和转录 |
+| `src/autoslice/mllm_sdk/multi_modal_analyzer.py` | 分析管线参数透传 |
+| `src/autoslice/title_generator.py` | 调用 ASR/标题分析 |
+| `src/burn/subtitle_burn.py` | SRT 生成和字幕烧录 |
+| `tests/test_subtitle_burn.py` | 字幕烧录测试 |
