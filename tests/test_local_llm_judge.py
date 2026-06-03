@@ -58,6 +58,28 @@ def test_local_subprocess_judge_falls_back_when_command_missing():
         transcript="",
     )
 
-    assert result.retain is True
+    assert result.retain is False
+    assert result.judge_status == "judge_failed"
+    assert "not configured" in result.judge_error
     assert result.title
     assert "not configured" in result.retain_reason
+
+
+def test_local_subprocess_bad_json_is_judge_failed(monkeypatch):
+    class Completed:
+        returncode = 0
+        stdout = "not json"
+        stderr = ""
+
+    monkeypatch.setattr(judge.subprocess, "run", lambda *args, **kwargs: Completed())
+
+    result = judge.judge_and_title_local_subprocess(
+        ["python", "runner.py"],
+        artist="artist",
+        danmaku_text="danmaku",
+        transcript="transcript",
+    )
+
+    assert result.retain is False
+    assert result.judge_status == "judge_failed"
+    assert "JSON parse failed" in result.judge_error

@@ -22,6 +22,8 @@ class JudgeResult:
     description: str = ""
     content_type: str = "other"
     quality_score: float = 0.5
+    judge_status: str = "keep"
+    judge_error: str = ""
     tags: list = field(default_factory=list)
     highlights: list = field(default_factory=list)
     emotion_peak_time: float = 0.0
@@ -40,6 +42,8 @@ class JudgeResult:
             quality_score=self.quality_score,
             retain_recommendation=self.retain,
             quality_reason=self.retain_reason,
+            judge_status=self.judge_status,
+            judge_error=self.judge_error,
             highlights=[
                 Highlight(
                     h.get("start", 0),
@@ -94,12 +98,14 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 def _fallback_result(artist: str, reason: str) -> JudgeResult:
     return JudgeResult(
-        retain=True,
+        retain=False,
         retain_reason=reason,
         title=f"{artist}精彩片段",
         description="精彩直播片段",
         content_type="other",
-        quality_score=0.5,
+        quality_score=0.0,
+        judge_status="judge_failed",
+        judge_error=reason,
     )
 
 
@@ -117,6 +123,8 @@ def _judge_result_from_dict(result: Dict[str, Any]) -> JudgeResult:
         description=str(result.get("description", "")),
         content_type=str(result.get("content_type", "other")),
         quality_score=quality_score,
+        judge_status="keep" if retain else "drop",
+        judge_error="",
         tags=result.get("tags", []),
         highlights=result.get("highlights", []),
     )
@@ -267,8 +275,8 @@ def judge_and_title(
             return _judge_result_from_dict(result)
 
         scan_log.warning("Failed to parse judge JSON from LLM response")
-        return _fallback_result(artist, "LLM JSON parse failed, keeping by default")
+        return _fallback_result(artist, "LLM JSON parse failed")
 
     except Exception as e:
         scan_log.error(f"Judge LLM call failed: {e}")
-        return _fallback_result(artist, f"LLM failed: {e}, keeping by default")
+        return _fallback_result(artist, f"LLM failed: {e}")

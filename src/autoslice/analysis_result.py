@@ -45,6 +45,8 @@ class AnalysisResult:
     quality_score: float = 0.5
     retain_recommendation: bool = True
     quality_reason: str = ""
+    judge_status: str = "keep"
+    judge_error: str = ""
 
     # MCP 剪辑数据（待办功能使用）
     highlights: List[Highlight] = field(default_factory=list)
@@ -90,6 +92,8 @@ class AnalysisResult:
             quality_score=data.get("quality_score", 0.5),
             retain_recommendation=data.get("retain_recommendation", True),
             quality_reason=data.get("quality_reason", ""),
+            judge_status=data.get("judge_status", "keep"),
+            judge_error=data.get("judge_error", ""),
             highlights=highlights,
             emotion_peak_time=data.get("emotion_peak_time", 0.0),
             suggested_trim=suggested_trim,
@@ -124,6 +128,8 @@ class AnalysisResult:
             "quality_score": self.quality_score,
             "retain_recommendation": self.retain_recommendation,
             "quality_reason": self.quality_reason,
+            "judge_status": self.judge_status,
+            "judge_error": self.judge_error,
             "highlights": [
                 {"start": h.start, "end": h.end, "score": h.score, "desc": h.desc}
                 for h in self.highlights
