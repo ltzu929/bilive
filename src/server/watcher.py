@@ -105,6 +105,7 @@ def process_pending_videos(videos_dir: str = None) -> int:
                     pipeline_result.get("output_slices"),
                     videos_dir,
                 ),
+                segments=pipeline_result.get("segments"),
                 diagnostics=pipeline_result.get("diagnostics"),
             )
 

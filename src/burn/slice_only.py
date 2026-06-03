@@ -1,6 +1,7 @@
 # Copyright (c) 2024 bilive.
 # Slice-only pipeline: skip full-stream rendering and generate/upload clips directly.
 
+import base64
 import os
 from pathlib import Path
 
@@ -302,6 +303,8 @@ def slice_only(video_path, **_slice_options):
         error="",
     )
     output_slices = []
+    segments = []
+    judge_failed_count = 0
     for index, generated_slice in enumerate(slices_path, start=1):
         slice_path = generated_slice.path
         try:
@@ -333,11 +336,28 @@ def slice_only(video_path, **_slice_options):
             from src.autoslice.analysis_result import AnalysisResult
 
             if isinstance(result, AnalysisResult):
+                segment = build_segment_record(
+                    original_video_path,
+                    generated_slice,
+                    result,
+                    upload_status="not_queued",
+                )
+                if result.judge_status == "judge_failed":
+                    judge_failed_count += 1
+                    scan_log.warning(
+                        f"Slice {slice_path} kept for manual review after LLM judge failure: "
+                        f"{result.judge_error or result.quality_reason}"
+                    )
+                    segments.append(segment)
+                    continue
+
                 if not result.retain_recommendation:
                     scan_log.info(
                         f"Slice {slice_path} filtered by LLM judge: "
                         f"retain=False, reason={result.quality_reason}"
                     )
+                    segment["judge_status"] = "drop"
+                    segments.append(segment)
                     os.remove(slice_path)
                     continue
 
@@ -364,6 +384,12 @@ def slice_only(video_path, **_slice_options):
                 slice_title = result
                 slice_desc = "精彩直播片段"
                 slice_tags = ["直播切片"]
+                segment = build_segment_record(
+                    original_video_path,
+                    generated_slice,
+                    None,
+                    upload_status="not_queued",
+                )
 
             if isinstance(result, AnalysisResult):
                 from src.config import (
@@ -433,6 +459,8 @@ def slice_only(video_path, **_slice_options):
             else:
                 scan_log.info(f"Slice ready for upload: {slice_path}")
             output_slices.append(slice_path)
+            segment["upload_status"] = "skipped" if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1" else "queued"
+            segments.append(segment)
 
         except Exception as e:
             scan_log.error(f"Error processing slice {slice_path}: {e}")
@@ -441,7 +469,7 @@ def slice_only(video_path, **_slice_options):
                 os.remove(slice_path)
             delete_slice_upload_metadata(slice_path)
 
-    if total_slices and not output_slices:
+    if total_slices and not output_slices and not segments:
         error = "所有候选切片处理失败"
         progress.error(error, current_slice=total_slices, total_slices=total_slices)
         return {
@@ -523,7 +551,9 @@ def slice_only(video_path, **_slice_options):
     return {
         "status": "done",
         "slice_count": len(output_slices),
+        "judge_failed_count": judge_failed_count,
         "output_slices": output_slices,
+        "segments": segments,
         "diagnostics": diagnostics,
     }
 
@@ -546,6 +576,60 @@ def upsert_diagnostic(items, item):
         *(existing for existing in items if existing.get("id") != item.get("id")),
         item,
     ]
+
+
+def build_segment_record(source_path, generated_slice, analysis, upload_status="not_queued"):
+    slice_path = str(generated_slice.path)
+    start = float(getattr(generated_slice, "context_start", 0.0) or 0.0)
+    end = float(getattr(generated_slice, "context_end", 0.0) or 0.0)
+    judge_status = "keep"
+    judge_error = ""
+    quality_score = None
+    quality_reason = ""
+    title = Path(slice_path).stem
+    description = ""
+    tags = []
+    manual_override = False
+
+    if analysis is not None:
+        judge_status = analysis.judge_status or ("keep" if analysis.retain_recommendation else "drop")
+        judge_error = analysis.judge_error
+        quality_score = analysis.quality_score
+        quality_reason = analysis.quality_reason
+        title = analysis.title
+        description = analysis.description
+        tags = analysis.tags
+
+    return {
+        "segment_id": segment_id_for(source_path, start, end),
+        "source_rel_path": source_rel_path(source_path),
+        "candidate_path": slice_path,
+        "candidate_rel_path": str(Path(source_path).parent.name + "/" + Path(slice_path).name),
+        "start_seconds": start,
+        "end_seconds": end,
+        "density_core_start": float(getattr(generated_slice, "density_core_start", start) or start),
+        "density_core_end": float(getattr(generated_slice, "density_core_end", end) or end),
+        "danmaku_count": int(getattr(generated_slice, "danmaku_count", 0) or 0),
+        "judge_status": judge_status,
+        "judge_error": judge_error,
+        "quality_score": quality_score,
+        "quality_reason": quality_reason,
+        "title": title,
+        "description": description,
+        "tags": tags,
+        "upload_status": upload_status,
+        "manual_override": manual_override,
+    }
+
+
+def segment_id_for(source_path, start, end):
+    raw = f"{source_rel_path(source_path)}:{float(start):.3f}:{float(end):.3f}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def source_rel_path(source_path):
+    source = Path(source_path)
+    return f"{source.parent.name}/{source.name}"
 
 
 def diagnostic_from_detection(event):

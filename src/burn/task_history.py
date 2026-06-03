@@ -23,6 +23,7 @@ def write_task_history(
     worker_pid: Optional[int] = None,
     slice_count: int = 0,
     output_slices: Optional[List[str]] = None,
+    segments: Optional[List[Dict[str, Any]]] = None,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
     log_path: Optional[str] = None,
     error: Optional[str] = None,
@@ -53,6 +54,9 @@ def write_task_history(
 
     if output_slices:
         history["output_slices"] = output_slices
+
+    if segments is not None:
+        history["segments"] = segments
 
     if diagnostics:
         history["diagnostics"] = diagnostics

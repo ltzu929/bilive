@@ -303,3 +303,62 @@ def test_slice_only_burns_asr_subtitles_for_retained_analysis(tmp_path, monkeypa
     assert calls
     assert calls[0][0] == str(slice_path)
     assert calls[0][1].transcript_segments[0].text == "第一句"
+
+
+def test_slice_only_retains_judge_failed_candidate_without_upload(tmp_path, monkeypatch):
+    source = tmp_path / "8792912" / "8792912_20260524-13-06-05.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    slice_path = source.parent / "10s_8792912_20260524-13-06-05.mp4"
+    slice_path.write_bytes(b"slice")
+    generated = [
+        SimpleNamespace(
+            path=str(slice_path),
+            context_start=0.0,
+            context_end=60.0,
+            duration=60.0,
+            density_core_start=10.0,
+            density_core_end=20.0,
+            danmaku_count=12,
+        )
+    ]
+
+    queued = []
+    burned = []
+
+    monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
+    monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
+    monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
+    monkeypatch.setattr(
+        slice_only_module,
+        "generate_title",
+        lambda *args, **kwargs: AnalysisResult(
+            title="artist精彩片段",
+            description="精彩直播片段",
+            tags=["直播"],
+            retain_recommendation=False,
+            quality_reason="LLM failed: 502",
+            judge_status="judge_failed",
+            judge_error="LLM failed: 502",
+        ),
+    )
+    monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: queued.append(path) or True)
+    monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", lambda *args: burned.append(args))
+    monkeypatch.setattr(slice_only_module, "unload_local_audio_models_after_batch", lambda: None)
+
+    result = slice_only_module.slice_only(str(source))
+
+    assert result["status"] == "done"
+    assert result["slice_count"] == 0
+    assert result["judge_failed_count"] == 1
+    assert slice_path.exists()
+    assert queued == []
+    assert burned == []
+    assert result["segments"][0]["judge_status"] == "judge_failed"
+    assert result["segments"][0]["judge_error"] == "LLM failed: 502"
+    assert result["segments"][0]["candidate_path"] == str(slice_path)
+    assert result["segments"][0]["danmaku_count"] == 12
