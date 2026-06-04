@@ -524,15 +524,39 @@ ffmpeg -version
 
 ## 测试和检查
 
-当前测试里有不少需要真实 API key 或真实视频路径的占位测试，不适合作为完整 CI 直接跑。
+默认测试套件指本机离线、无需真实 API key、无需云 SDK、无需真实视频路径、无需外部服务的快速回归测试。它覆盖当前活跃的 dashboard pending worker 主线、任务状态、进度诊断、字幕烧录、上传元数据等契约。
 
-可以先跑不依赖外部服务的核心测试：
+默认运行：
 
 ```bash
 source venv/bin/activate
-PYTHONPATH=./src python -m unittest \
-  tests.test_autoslice.TestAnalysisResult \
-  tests.test_autoslice.TestSliceQualityFilter
+PYTHONPATH=.:./src python -m pytest
+```
+
+如果只改了切片主线，可以先跑目标测试：
+
+```bash
+PYTHONPATH=.:./src python -m pytest \
+  tests/test_slice_control.py \
+  tests/test_watcher_once.py \
+  tests/test_task_state.py \
+  tests/test_slice_only_model_unload.py \
+  tests/test_slice_progress.py \
+  tests/test_subtitle_burn.py \
+  tests/test_dashboard_api.py \
+  tests/test_dashboard_frontend.py
+```
+
+需要真实 API key、云 SDK、真实媒体文件或外部服务的测试标记为 `integration`，默认不运行。确认本机依赖和密钥都已准备好后再手动运行：
+
+```bash
+PYTHONPATH=.:./src python -m pytest -m integration
+```
+
+旧入口兼容测试标记为 `legacy`。它们仍包含在默认测试套件里，因为对应入口还保留在仓库中；如果只想看当前主路径，可以临时排除：
+
+```bash
+PYTHONPATH=.:./src python -m pytest -m "not integration and not legacy"
 ```
 
 修改 shell 脚本后建议在 Pi 上检查：

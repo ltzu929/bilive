@@ -2,21 +2,14 @@ import json
 import time
 from types import SimpleNamespace
 
-import httpx
 import pytest
-
-from src.dashboard.app import create_app
 
 
 @pytest.mark.anyio
-async def test_slices_api_lists_candidates(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
+async def test_slices_api_lists_candidates(videos_root, write_slice, dashboard_client):
+    write_slice()
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/slices?room_id=8792912")
 
     assert response.status_code == 200
@@ -24,14 +17,10 @@ async def test_slices_api_lists_candidates(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_feedback_api_updates_sidecar(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+async def test_feedback_api_updates_sidecar(videos_root, write_slice, dashboard_client):
+    write_slice()
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         slice_id = (await client.get("/api/slices?room_id=8792912")).json()[0]["id"]
         response = await client.patch(
             f"/api/slices/{slice_id}/feedback",
@@ -43,15 +32,15 @@ async def test_feedback_api_updates_sidecar(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_feedback_api_persists_reviewed_at_and_review_source(tmp_path):
+async def test_feedback_api_persists_reviewed_at_and_review_source(
+    videos_root,
+    write_slice,
+    dashboard_client,
+):
     """PATCH feedback adds reviewed_at timestamp and review_source='dashboard'."""
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    write_slice()
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         slice_id = (await client.get("/api/slices?room_id=8792912")).json()[0]["id"]
         response = await client.patch(
             f"/api/slices/{slice_id}/feedback",
@@ -67,15 +56,15 @@ async def test_feedback_api_persists_reviewed_at_and_review_source(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_feedback_api_preserves_reviewed_at_on_update(tmp_path):
+async def test_feedback_api_preserves_reviewed_at_on_update(
+    videos_root,
+    write_slice,
+    dashboard_client,
+):
     """Subsequent PATCH preserves the original reviewed_at."""
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    write_slice()
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         slice_id = (await client.get("/api/slices?room_id=8792912")).json()[0]["id"]
         first = await client.patch(
             f"/api/slices/{slice_id}/feedback",
@@ -92,14 +81,12 @@ async def test_feedback_api_preserves_reviewed_at_on_update(tmp_path):
     assert second.json()["reviewed_at"] == first_reviewed_at
 
 
-def test_normalize_feedback_preserves_reviewed_at_and_review_source(tmp_path):
+def test_normalize_feedback_preserves_reviewed_at_and_review_source(videos_root, write_slice):
     """_normalize_feedback preserves reviewed_at and review_source from data."""
     from src.dashboard.file_store import DashboardFileStore
 
-    store = DashboardFileStore(videos_root=tmp_path / "Videos")
-    room = tmp_path / "Videos" / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
+    store = DashboardFileStore(videos_root=videos_root)
+    write_slice()
 
     items = store.list_slices(room_id="8792912")
     item = items[0]
@@ -113,14 +100,10 @@ def test_normalize_feedback_preserves_reviewed_at_and_review_source(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_media_api_serves_mp4_source(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"mp4")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+async def test_media_api_serves_mp4_source(videos_root, write_slice, dashboard_client):
+    write_slice(content=b"mp4")
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         item = (await client.get("/api/slices?room_id=8792912")).json()[0]
         response = await client.get(f"/api/media/{item['media_id']}")
 
@@ -130,14 +113,14 @@ async def test_media_api_serves_mp4_source(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_media_api_supports_byte_ranges_for_seek(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"0123456789")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+async def test_media_api_supports_byte_ranges_for_seek(
+    videos_root,
+    write_slice,
+    dashboard_client,
+):
+    write_slice(content=b"0123456789")
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         item = (await client.get("/api/slices?room_id=8792912")).json()[0]
         response = await client.get(
             f"/api/media/{item['media_id']}",
@@ -153,14 +136,10 @@ async def test_media_api_supports_byte_ranges_for_seek(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_preview_media_api_serves_mp4_source(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"mp4")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+async def test_preview_media_api_serves_mp4_source(videos_root, write_slice, dashboard_client):
+    write_slice(content=b"mp4")
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         item = (await client.get("/api/slices?room_id=8792912")).json()[0]
         response = await client.get(f"/api/preview/{item['media_id']}")
 
@@ -170,14 +149,14 @@ async def test_preview_media_api_serves_mp4_source(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_preview_media_api_supports_byte_ranges_for_seek(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"0123456789")
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+async def test_preview_media_api_supports_byte_ranges_for_seek(
+    videos_root,
+    write_slice,
+    dashboard_client,
+):
+    write_slice(content=b"0123456789")
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         item = (await client.get("/api/slices?room_id=8792912")).json()[0]
         response = await client.get(
             f"/api/preview/{item['media_id']}",
@@ -193,10 +172,13 @@ async def test_preview_media_api_supports_byte_ranges_for_seek(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_preview_media_api_remuxes_flv_to_cached_mp4(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
+async def test_preview_media_api_remuxes_flv_to_cached_mp4(
+    videos_root,
+    make_room,
+    dashboard_client,
+    monkeypatch,
+):
+    room = make_room("8792912")
     (room / "3130s_8792912_20260506-18-56-51.flv").write_bytes(b"flv")
     commands = []
 
@@ -206,9 +188,8 @@ async def test_preview_media_api_remuxes_flv_to_cached_mp4(tmp_path, monkeypatch
         output_path.write_bytes(b"mp4-preview")
 
     monkeypatch.setattr("src.dashboard.file_store.subprocess.run", fake_run)
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         item = (await client.get("/api/slices?room_id=8792912")).json()[0]
         response = await client.get(f"/api/preview/{item['media_id']}")
 
@@ -225,13 +206,11 @@ async def test_preview_media_api_remuxes_flv_to_cached_mp4(tmp_path, monkeypatch
 
 
 @pytest.mark.anyio
-async def test_rooms_api_lists_video_rooms(tmp_path):
-    videos = tmp_path / "Videos"
-    (videos / "8792912").mkdir(parents=True)
-    (videos / "22384516").mkdir(parents=True)
+async def test_rooms_api_lists_video_rooms(make_room, videos_root, dashboard_client):
+    make_room("8792912")
+    make_room("22384516")
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/rooms")
 
     assert response.status_code == 200
@@ -242,10 +221,8 @@ async def test_rooms_api_lists_video_rooms(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_rooms_api_uses_anchor_name_from_jsonl(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "22384516"
-    room.mkdir(parents=True)
+async def test_rooms_api_uses_anchor_name_from_jsonl(make_room, videos_root, dashboard_client):
+    room = make_room("22384516")
     (room / "22384516_20260527-12-55-31.jsonl").write_text(
         json.dumps({
             "cmd": "DANMU_MSG",
@@ -254,8 +231,7 @@ async def test_rooms_api_uses_anchor_name_from_jsonl(tmp_path):
         encoding="utf-8",
     )
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/rooms")
 
     assert response.status_code == 200
@@ -263,10 +239,12 @@ async def test_rooms_api_uses_anchor_name_from_jsonl(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_tasks_api_uses_anchor_name_from_room_metadata(tmp_path):
-    videos = tmp_path / "Videos"
-    room = videos / "22384516"
-    room.mkdir(parents=True)
+async def test_tasks_api_uses_anchor_name_from_room_metadata(
+    make_room,
+    videos_root,
+    dashboard_client,
+):
+    room = make_room("22384516")
     (room / "22384516_20260527-12-55-31.jsonl").write_text(
         json.dumps({
             "cmd": "DANMU_MSG",
@@ -278,8 +256,7 @@ async def test_tasks_api_uses_anchor_name_from_room_metadata(tmp_path):
     source.write_bytes(b"video")
     source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/tasks")
 
     assert response.status_code == 200
@@ -324,12 +301,10 @@ def _write_source_workbench_fixture(videos):
 
 
 @pytest.mark.anyio
-async def test_source_recordings_api_lists_summary_counts(tmp_path):
-    videos = tmp_path / "Videos"
-    _write_source_workbench_fixture(videos)
+async def test_source_recordings_api_lists_summary_counts(videos_root, dashboard_client):
+    _write_source_workbench_fixture(videos_root)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/source-recordings")
 
     assert response.status_code == 200
@@ -339,12 +314,13 @@ async def test_source_recordings_api_lists_summary_counts(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_source_recording_detail_api_returns_density_and_segments(tmp_path):
-    videos = tmp_path / "Videos"
-    _write_source_workbench_fixture(videos)
+async def test_source_recording_detail_api_returns_density_and_segments(
+    videos_root,
+    dashboard_client,
+):
+    _write_source_workbench_fixture(videos_root)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         item = (await client.get("/api/source-recordings")).json()[0]
         response = await client.get(f"/api/source-recordings/{item['task_id']}")
         media = await client.get(f"/api/media/{response.json()['source_media_id']}")
@@ -358,14 +334,17 @@ async def test_source_recording_detail_api_returns_density_and_segments(tmp_path
 
 
 @pytest.mark.anyio
-async def test_segment_action_apis_update_segment_sidecar(tmp_path, monkeypatch):
+async def test_segment_action_apis_update_segment_sidecar(
+    videos_root,
+    dashboard_client,
+    monkeypatch,
+):
     from pathlib import Path
 
     from src.autoslice.analysis_result import AnalysisResult
     from src.dashboard import source_workbench
 
-    videos = tmp_path / "Videos"
-    _write_source_workbench_fixture(videos)
+    _write_source_workbench_fixture(videos_root)
     queued = []
 
     monkeypatch.setattr(source_workbench, "insert_upload_queue", lambda path: queued.append(path) or True)
@@ -391,8 +370,7 @@ async def test_segment_action_apis_update_segment_sidecar(tmp_path, monkeypatch)
 
     monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         keep = await client.post(
             "/api/segments/seg1/manual-keep",
             json={"title": "Manual", "description": "Desc", "tags": ["live"]},
@@ -415,15 +393,11 @@ async def test_segment_action_apis_update_segment_sidecar(tmp_path, monkeypatch)
 
 
 @pytest.mark.anyio
-async def test_app_uses_videos_root_from_env(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
-    monkeypatch.setenv("BILIVE_VIDEOS_DIR", str(videos))
+async def test_app_uses_videos_root_from_env(videos_root, write_slice, dashboard_client, monkeypatch):
+    write_slice()
+    monkeypatch.setenv("BILIVE_VIDEOS_DIR", str(videos_root))
 
-    transport = httpx.ASGITransport(app=create_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(None) as client:
         response = await client.get("/api/slices?room_id=8792912")
 
     assert response.status_code == 200
@@ -431,11 +405,14 @@ async def test_app_uses_videos_root_from_env(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_slice_progress_api_returns_idle_when_missing(tmp_path, monkeypatch):
+async def test_slice_progress_api_returns_idle_when_missing(
+    tmp_path,
+    dashboard_client,
+    monkeypatch,
+):
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(tmp_path / "Videos") as client:
         response = await client.get("/api/slice-progress")
 
     assert response.status_code == 200
@@ -443,7 +420,7 @@ async def test_slice_progress_api_returns_idle_when_missing(tmp_path, monkeypatc
 
 
 @pytest.mark.anyio
-async def test_start_slice_api_invokes_slice_starter(tmp_path):
+async def test_start_slice_api_invokes_slice_starter(tmp_path, dashboard_client):
     calls = []
 
     def fake_start_slice(_opts=None):
@@ -454,13 +431,10 @@ async def test_start_slice_api_invokes_slice_starter(tmp_path):
             "log_path": str(tmp_path / "logs" / "runtime" / "slice.log"),
         }
 
-    transport = httpx.ASGITransport(
-        app=create_app(
-            videos_root=tmp_path / "Videos",
-            slice_starter=fake_start_slice,
-        )
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(
+        tmp_path / "Videos",
+        slice_starter=fake_start_slice,
+    ) as client:
         response = await client.post("/api/slice/start")
 
     assert response.status_code == 200
@@ -470,20 +444,17 @@ async def test_start_slice_api_invokes_slice_starter(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_start_slice_api_accepts_legacy_zero_arg_starter(tmp_path):
+async def test_start_slice_api_accepts_legacy_zero_arg_starter(tmp_path, dashboard_client):
     calls = []
 
     def fake_start_slice():
         calls.append("start")
         return {"status": "started"}
 
-    transport = httpx.ASGITransport(
-        app=create_app(
-            videos_root=tmp_path / "Videos",
-            slice_starter=fake_start_slice,
-        )
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(
+        tmp_path / "Videos",
+        slice_starter=fake_start_slice,
+    ) as client:
         response = await client.post("/api/slice/start")
 
     assert response.status_code == 200
@@ -492,17 +463,14 @@ async def test_start_slice_api_accepts_legacy_zero_arg_starter(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_start_slice_api_reports_start_errors(tmp_path):
+async def test_start_slice_api_reports_start_errors(tmp_path, dashboard_client):
     def fake_start_slice(_opts=None):
         raise RuntimeError("slice scanner failed")
 
-    transport = httpx.ASGITransport(
-        app=create_app(
-            videos_root=tmp_path / "Videos",
-            slice_starter=fake_start_slice,
-        )
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(
+        tmp_path / "Videos",
+        slice_starter=fake_start_slice,
+    ) as client:
         response = await client.post("/api/slice/start")
 
     assert response.status_code == 500
@@ -510,7 +478,10 @@ async def test_start_slice_api_reports_start_errors(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(tmp_path):
+async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(
+    tmp_path,
+    dashboard_client,
+):
     trigger_calls = []
 
     def fake_start_slice(_opts=None):
@@ -520,14 +491,11 @@ async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(tmp
         trigger_calls.append(pending_tasks)
         return {"status": "triggered", "returncode": 0}
 
-    transport = httpx.ASGITransport(
-        app=create_app(
-            videos_root=tmp_path / "Videos",
-            slice_starter=fake_start_slice,
-            remote_worker_trigger=fake_trigger,
-        )
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(
+        tmp_path / "Videos",
+        slice_starter=fake_start_slice,
+        remote_worker_trigger=fake_trigger,
+    ) as client:
         response = await client.post("/api/slice/start")
 
     assert response.status_code == 200
@@ -536,20 +504,20 @@ async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(tmp
 
 
 @pytest.mark.anyio
-async def test_start_slice_api_does_not_trigger_remote_worker_without_pending_tasks(tmp_path):
+async def test_start_slice_api_does_not_trigger_remote_worker_without_pending_tasks(
+    tmp_path,
+    dashboard_client,
+):
     trigger_calls = []
 
     def fake_start_slice(_opts=None):
         return {"status": "empty", "queued": 0, "pending_tasks": 0}
 
-    transport = httpx.ASGITransport(
-        app=create_app(
-            videos_root=tmp_path / "Videos",
-            slice_starter=fake_start_slice,
-            remote_worker_trigger=lambda pending_tasks: trigger_calls.append(pending_tasks),
-        )
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(
+        tmp_path / "Videos",
+        slice_starter=fake_start_slice,
+        remote_worker_trigger=lambda pending_tasks: trigger_calls.append(pending_tasks),
+    ) as client:
         response = await client.post("/api/slice/start")
 
     assert response.status_code == 200
@@ -558,18 +526,15 @@ async def test_start_slice_api_does_not_trigger_remote_worker_without_pending_ta
 
 
 @pytest.mark.anyio
-async def test_worker_trigger_status_api_reports_remote_mode(tmp_path):
-    transport = httpx.ASGITransport(
-        app=create_app(
-            videos_root=tmp_path / "Videos",
-            remote_worker_status_reader=lambda: {
-                "mode": "remote",
-                "enabled": True,
-                "message": "Pi remote Windows task trigger is enabled",
-            },
-        )
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+async def test_worker_trigger_status_api_reports_remote_mode(tmp_path, dashboard_client):
+    async with dashboard_client(
+        tmp_path / "Videos",
+        remote_worker_status_reader=lambda: {
+            "mode": "remote",
+            "enabled": True,
+            "message": "Pi remote Windows task trigger is enabled",
+        },
+    ) as client:
         response = await client.get("/api/worker-trigger/status")
 
     assert response.status_code == 200
@@ -581,7 +546,7 @@ async def test_worker_trigger_status_api_reports_remote_mode(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
+async def test_slice_progress_api_reads_runtime_file(tmp_path, dashboard_client, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
     progress_path.write_text(
@@ -599,8 +564,7 @@ async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(tmp_path / "Videos") as client:
         response = await client.get("/api/slice-progress")
 
     assert response.status_code == 200
@@ -609,7 +573,7 @@ async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_slice_progress_api_marks_stale(tmp_path, monkeypatch):
+async def test_slice_progress_api_marks_stale(tmp_path, dashboard_client, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
     progress_path.write_text(
@@ -625,8 +589,7 @@ async def test_slice_progress_api_marks_stale(tmp_path, monkeypatch):
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(tmp_path / "Videos") as client:
         response = await client.get("/api/slice-progress")
 
     assert response.status_code == 200
@@ -634,10 +597,14 @@ async def test_slice_progress_api_marks_stale(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_slice_progress_api_reports_pending_queue(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
+async def test_slice_progress_api_reports_pending_queue(
+    videos_root,
+    make_room,
+    dashboard_client,
+    tmp_path,
+    monkeypatch,
+):
+    room = make_room("8792912")
     (room / "8792912_20260524-13-06-05.mp4.pending").write_text(
         "{}",
         encoding="utf-8",
@@ -645,8 +612,7 @@ async def test_slice_progress_api_reports_pending_queue(tmp_path, monkeypatch):
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/slice-progress")
 
     assert response.status_code == 200
@@ -657,10 +623,14 @@ async def test_slice_progress_api_reports_pending_queue(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_slice_progress_api_replaces_stale_running_progress_with_pending_queue(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
+async def test_slice_progress_api_replaces_stale_running_progress_with_pending_queue(
+    videos_root,
+    make_room,
+    dashboard_client,
+    tmp_path,
+    monkeypatch,
+):
+    room = make_room("8792912")
     (room / "8792912_20260602-10-56-23.mp4.pending").write_text(
         "{}",
         encoding="utf-8",
@@ -683,8 +653,7 @@ async def test_slice_progress_api_replaces_stale_running_progress_with_pending_q
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/slice-progress")
 
     assert response.status_code == 200
@@ -697,7 +666,11 @@ async def test_slice_progress_api_replaces_stale_running_progress_with_pending_q
 
 
 @pytest.mark.anyio
-async def test_slice_diagnostics_api_returns_structured_items(tmp_path, monkeypatch):
+async def test_slice_diagnostics_api_returns_structured_items(
+    tmp_path,
+    dashboard_client,
+    monkeypatch,
+):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
     progress_path.write_text(
@@ -727,8 +700,7 @@ async def test_slice_diagnostics_api_returns_structured_items(tmp_path, monkeypa
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(tmp_path / "Videos") as client:
         response = await client.get("/api/slice-diagnostics")
 
     assert response.status_code == 200
@@ -740,10 +712,14 @@ async def test_slice_diagnostics_api_returns_structured_items(tmp_path, monkeypa
 
 
 @pytest.mark.anyio
-async def test_slice_diagnostics_api_reports_pending_queue(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
+async def test_slice_diagnostics_api_reports_pending_queue(
+    videos_root,
+    make_room,
+    dashboard_client,
+    tmp_path,
+    monkeypatch,
+):
+    room = make_room("8792912")
     (room / "8792912_20260524-13-06-05.mp4.pending").write_text(
         "{}",
         encoding="utf-8",
@@ -751,8 +727,7 @@ async def test_slice_diagnostics_api_reports_pending_queue(tmp_path, monkeypatch
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/slice-diagnostics")
 
     assert response.status_code == 200
@@ -763,10 +738,14 @@ async def test_slice_diagnostics_api_reports_pending_queue(tmp_path, monkeypatch
 
 
 @pytest.mark.anyio
-async def test_slice_diagnostics_api_replaces_stale_running_progress_with_pending_queue(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
+async def test_slice_diagnostics_api_replaces_stale_running_progress_with_pending_queue(
+    videos_root,
+    make_room,
+    dashboard_client,
+    tmp_path,
+    monkeypatch,
+):
+    room = make_room("8792912")
     (room / "8792912_20260602-10-56-23.mp4.pending").write_text(
         "{}",
         encoding="utf-8",
@@ -797,8 +776,7 @@ async def test_slice_diagnostics_api_replaces_stale_running_progress_with_pendin
     monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
     monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/slice-diagnostics")
 
     assert response.status_code == 200
@@ -810,30 +788,26 @@ async def test_slice_diagnostics_api_replaces_stale_running_progress_with_pendin
 
 
 @pytest.mark.anyio
-async def test_tasks_route_serves_static_frontend(tmp_path):
+async def test_tasks_route_serves_static_frontend(tmp_path, dashboard_client):
     frontend = tmp_path / "frontend"
     frontend.mkdir()
     (frontend / "index.html").write_text("<main id=\"app\"></main>", encoding="utf-8")
 
-    transport = httpx.ASGITransport(
-        app=create_app(videos_root=tmp_path / "Videos", static_dir=frontend)
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(tmp_path / "Videos", static_dir=frontend) as client:
         response = await client.get("/tasks")
 
     assert response.status_code == 200
     assert "id=\"app\"" in response.text
 
 
-# ── Milestone 4: Quality Explanation Panel ──
-
-
 @pytest.mark.anyio
-async def test_slice_item_includes_quality_fields_from_feedback_sidecar(tmp_path):
-    """SliceItem populates quality_score, burst_ratio, burst_rank from _feedback.json."""
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
+async def test_slices_api_exposes_quality_fields(
+    videos_root,
+    make_room,
+    dashboard_client,
+):
+    """API layer exposes quality metadata; file-store tests cover precedence rules."""
+    room = make_room("8792912")
     mp4 = room / "3100s_8792912_20260506-18-56-51.mp4"
     mp4.write_bytes(b"clip")
     feedback = room / "3100s_8792912_20260506-18-56-51_feedback.json"
@@ -848,8 +822,7 @@ async def test_slice_item_includes_quality_fields_from_feedback_sidecar(tmp_path
         encoding="utf-8",
     )
 
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.get("/api/slices?room_id=8792912")
 
     assert response.status_code == 200
@@ -859,137 +832,45 @@ async def test_slice_item_includes_quality_fields_from_feedback_sidecar(tmp_path
     assert item["burst_rank"] == 1
 
 
-@pytest.mark.anyio
-async def test_slice_item_quality_fields_default_none_without_sidecar(tmp_path):
-    """Without feedback sidecar, quality fields are None."""
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    (room / "3100s_8792912_20260506-18-56-51.mp4").write_bytes(b"clip")
-
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/slices?room_id=8792912")
-
-    assert response.status_code == 200
-    item = response.json()[0]
-    assert item["quality_score"] is None
-    assert item["burst_ratio"] is None
-    assert item["burst_rank"] is None
-
-
-@pytest.mark.anyio
-async def test_slice_item_reads_quality_from_analysis_sidecar(tmp_path):
-    """SliceItem reads quality fields from _analysis.json when feedback lacks them."""
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    mp4 = room / "3100s_8792912_20260506-18-56-51.mp4"
-    mp4.write_bytes(b"clip")
-    analysis = room / "3100s_8792912_20260506-18-56-51_analysis.json"
-    analysis.write_text(
-        json.dumps({
-            "quality_score": 0.72,
-            "burst_ratio": 3.1,
-            "burst_rank": 2,
-        }),
-        encoding="utf-8",
-    )
-
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/slices?room_id=8792912")
-
-    assert response.status_code == 200
-    item = response.json()[0]
-    assert item["quality_score"] == 0.72
-    assert item["burst_ratio"] == 3.1
-    assert item["burst_rank"] == 2
-
-
-@pytest.mark.anyio
-async def test_feedback_sidecar_overrides_analysis_for_quality_fields(tmp_path):
-    """Feedback sidecar takes priority over analysis sidecar for quality fields."""
-    videos = tmp_path / "Videos"
-    room = videos / "8792912"
-    room.mkdir(parents=True)
-    mp4 = room / "3100s_8792912_20260506-18-56-51.mp4"
-    mp4.write_bytes(b"clip")
-    analysis = room / "3100s_8792912_20260506-18-56-51_analysis.json"
-    analysis.write_text(
-        json.dumps({
-            "quality_score": 0.5,
-            "burst_ratio": 2.0,
-            "burst_rank": 3,
-        }),
-        encoding="utf-8",
-    )
-    feedback = room / "3100s_8792912_20260506-18-56-51_feedback.json"
-    feedback.write_text(
-        json.dumps({
-            "decision": "keep",
-            "quality_score": 0.9,
-            "burst_ratio": 5.0,
-            "burst_rank": 1,
-        }),
-        encoding="utf-8",
-    )
-
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/slices?room_id=8792912")
-
-    assert response.status_code == 200
-    item = response.json()[0]
-    assert item["quality_score"] == 0.9
-    assert item["burst_ratio"] == 5.0
-    assert item["burst_rank"] == 1
-
-
 # ── Milestone 5: Burst Parameter Tuning ──
 
 
 @pytest.mark.anyio
-async def test_start_slice_rejects_invalid_burst_ratio(tmp_path):
+async def test_start_slice_rejects_invalid_burst_ratio(videos_root, dashboard_client):
     """POST /api/slice/start rejects burst_ratio outside 1.5-8.0."""
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         resp = await client.post("/api/slice/start", json={"slice_options": {"burst_ratio": 1.0}})
     assert resp.status_code == 400
 
 
 @pytest.mark.anyio
-async def test_start_slice_rejects_invalid_burst_top_n(tmp_path):
+async def test_start_slice_rejects_invalid_burst_top_n(videos_root, dashboard_client):
     """POST /api/slice/start rejects burst_top_n outside 1-5."""
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         resp = await client.post("/api/slice/start", json={"slice_options": {"burst_top_n": 6}})
     assert resp.status_code == 400
 
 
 @pytest.mark.anyio
-async def test_start_slice_rejects_non_object_slice_options(tmp_path):
+async def test_start_slice_rejects_non_object_slice_options(videos_root, dashboard_client):
     """slice_options must be a JSON object."""
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         resp = await client.post("/api/slice/start", json={"slice_options": "bad"})
     assert resp.status_code == 400
 
 
 @pytest.mark.anyio
-async def test_start_slice_rejects_non_numeric_burst_ratio(tmp_path):
+async def test_start_slice_rejects_non_numeric_burst_ratio(videos_root, dashboard_client):
     """burst_ratio must be numeric."""
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         resp = await client.post("/api/slice/start", json={"slice_options": {"burst_ratio": "bad"}})
     assert resp.status_code == 400
 
 
 @pytest.mark.anyio
-async def test_start_slice_accepts_valid_slice_options(tmp_path):
+async def test_start_slice_accepts_valid_slice_options(videos_root, dashboard_client):
     """POST /api/slice/start with valid slice_options proceeds."""
-    transport = httpx.ASGITransport(app=create_app(videos_root=tmp_path / "Videos"))
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         resp = await client.post("/api/slice/start", json={
             "slice_options": {
                 "burst_ratio": 3.0,
@@ -1003,7 +884,11 @@ async def test_start_slice_accepts_valid_slice_options(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_refine_preview_uses_dry_run_without_upload(tmp_path, monkeypatch):
+async def test_refine_preview_uses_dry_run_without_upload(
+    videos_root,
+    dashboard_client,
+    monkeypatch,
+):
     calls = []
 
     def fake_process(root, enqueue_upload=True, dry_run=False):
@@ -1023,11 +908,9 @@ async def test_refine_preview_uses_dry_run_without_upload(tmp_path, monkeypatch)
             ),
         ]
 
-    videos = tmp_path / "Videos"
     monkeypatch.setattr("src.dashboard.app.process_feedback_directory", fake_process)
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.post("/api/refine/preview")
 
     assert response.status_code == 200
@@ -1035,11 +918,15 @@ async def test_refine_preview_uses_dry_run_without_upload(tmp_path, monkeypatch)
     assert body["keep_count"] == 1
     assert body["drop_count"] == 1
     assert body["would_generate"][0]["status"] == "would_refine"
-    assert calls == [(videos, False, True)]
+    assert calls == [(videos_root, False, True)]
 
 
 @pytest.mark.anyio
-async def test_refine_run_does_not_enqueue_upload_by_default(tmp_path, monkeypatch):
+async def test_refine_run_does_not_enqueue_upload_by_default(
+    videos_root,
+    dashboard_client,
+    monkeypatch,
+):
     calls = []
 
     def fake_process(root, enqueue_upload=True, dry_run=False):
@@ -1049,11 +936,9 @@ async def test_refine_run_does_not_enqueue_upload_by_default(tmp_path, monkeypat
             SimpleNamespace(decision="keep", status="refine_failed"),
         ]
 
-    videos = tmp_path / "Videos"
     monkeypatch.setattr("src.dashboard.app.process_feedback_directory", fake_process)
-    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with dashboard_client(videos_root) as client:
         response = await client.post("/api/refine/run")
 
     assert response.status_code == 200
@@ -1063,4 +948,4 @@ async def test_refine_run_does_not_enqueue_upload_by_default(tmp_path, monkeypat
         "failed": 1,
         "upload_queued": False,
     }
-    assert calls == [(videos, False, False)]
+    assert calls == [(videos_root, False, False)]

@@ -1,6 +1,11 @@
 from pathlib import Path
 
+import pytest
+
 from src.burn import scan_slice
+
+
+pytestmark = pytest.mark.legacy
 
 
 def test_scan_slice_once_processes_room_folders(tmp_path, monkeypatch):
