@@ -286,6 +286,134 @@ async def test_tasks_api_uses_anchor_name_from_room_metadata(tmp_path):
     assert response.json()[0]["room_name"] == "呜米"
 
 
+def _write_source_workbench_fixture(videos):
+    from src.burn.task_history import write_task_history
+
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260602-12-56-49.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<i>\n"
+        "  <d p=\"1,1,25,16777215,0,0,0,0\">a</d>\n"
+        "  <d p=\"11,1,25,16777215,0,0,0,0\">b</d>\n"
+        "</i>\n",
+        encoding="utf-8",
+    )
+    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+    candidate = room / "10s_22384516_20260602-12-56-49.mp4"
+    candidate.write_bytes(b"clip")
+    write_task_history(
+        source,
+        status="done",
+        videos_root=videos,
+        segments=[
+            {
+                "segment_id": "seg1",
+                "candidate_path": str(candidate),
+                "candidate_rel_path": "22384516/10s_22384516_20260602-12-56-49.mp4",
+                "start_seconds": 10.0,
+                "end_seconds": 70.0,
+                "judge_status": "keep",
+                "upload_status": "queued",
+            }
+        ],
+    )
+    return source
+
+
+@pytest.mark.anyio
+async def test_source_recordings_api_lists_summary_counts(tmp_path):
+    videos = tmp_path / "Videos"
+    _write_source_workbench_fixture(videos)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/source-recordings")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["summary_counts"]["keep"] == 1
+    assert body[0]["source_name"] == "22384516_20260602-12-56-49.mp4"
+
+
+@pytest.mark.anyio
+async def test_source_recording_detail_api_returns_density_and_segments(tmp_path):
+    videos = tmp_path / "Videos"
+    _write_source_workbench_fixture(videos)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        item = (await client.get("/api/source-recordings")).json()[0]
+        response = await client.get(f"/api/source-recordings/{item['task_id']}")
+        media = await client.get(f"/api/media/{response.json()['source_media_id']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["density_points"][0]["count"] == 1
+    assert body["segments"][0]["judge_status"] == "keep"
+    assert media.status_code == 200
+    assert media.content == b"video"
+
+
+@pytest.mark.anyio
+async def test_segment_action_apis_update_segment_sidecar(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from src.autoslice.analysis_result import AnalysisResult
+    from src.dashboard import source_workbench
+
+    videos = tmp_path / "Videos"
+    _write_source_workbench_fixture(videos)
+    queued = []
+
+    monkeypatch.setattr(source_workbench, "insert_upload_queue", lambda path: queued.append(path) or True)
+    monkeypatch.setattr(source_workbench, "write_slice_upload_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        source_workbench,
+        "extract_danmaku_text",
+        lambda *args, **kwargs: "danmaku",
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "generate_title",
+        lambda *args, **kwargs: AnalysisResult(
+            title="Retried",
+            description="Retried desc",
+            retain_recommendation=True,
+            judge_status="keep",
+        ),
+    )
+
+    def fake_slice(_source, output_path, _start, _duration):
+        Path(output_path).write_bytes(b"rendered")
+
+    monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        keep = await client.post(
+            "/api/segments/seg1/manual-keep",
+            json={"title": "Manual", "description": "Desc", "tags": ["live"]},
+        )
+        ranged = await client.post(
+            "/api/segments/seg1/range",
+            json={"start_seconds": 5, "end_seconds": 25},
+        )
+        dropped = await client.post("/api/segments/seg1/drop", json={"reason": "bad"})
+        retried = await client.post("/api/segments/seg1/retry-judge")
+        rendered = await client.post("/api/segments/seg1/render")
+
+    assert keep.status_code == 200
+    assert keep.json()["judge_status"] == "manual_keep"
+    assert queued
+    assert ranged.json()["start_seconds"] == 5.0
+    assert dropped.json()["judge_status"] == "drop"
+    assert retried.json()["judge_status"] == "keep"
+    assert rendered.json()["candidate_rel_path"].endswith("5s_22384516_20260602-12-56-49.mp4")
+
+
 @pytest.mark.anyio
 async def test_app_uses_videos_root_from_env(tmp_path, monkeypatch):
     videos = tmp_path / "Videos"
@@ -382,6 +510,77 @@ async def test_start_slice_api_reports_start_errors(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(tmp_path):
+    trigger_calls = []
+
+    def fake_start_slice(_opts=None):
+        return {"status": "queued", "queued": 1, "pending_tasks": 1}
+
+    def fake_trigger(pending_tasks):
+        trigger_calls.append(pending_tasks)
+        return {"status": "triggered", "returncode": 0}
+
+    transport = httpx.ASGITransport(
+        app=create_app(
+            videos_root=tmp_path / "Videos",
+            slice_starter=fake_start_slice,
+            remote_worker_trigger=fake_trigger,
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/slice/start")
+
+    assert response.status_code == 200
+    assert response.json()["worker_trigger"] == {"status": "triggered", "returncode": 0}
+    assert trigger_calls == [1]
+
+
+@pytest.mark.anyio
+async def test_start_slice_api_does_not_trigger_remote_worker_without_pending_tasks(tmp_path):
+    trigger_calls = []
+
+    def fake_start_slice(_opts=None):
+        return {"status": "empty", "queued": 0, "pending_tasks": 0}
+
+    transport = httpx.ASGITransport(
+        app=create_app(
+            videos_root=tmp_path / "Videos",
+            slice_starter=fake_start_slice,
+            remote_worker_trigger=lambda pending_tasks: trigger_calls.append(pending_tasks),
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/slice/start")
+
+    assert response.status_code == 200
+    assert "worker_trigger" not in response.json()
+    assert trigger_calls == []
+
+
+@pytest.mark.anyio
+async def test_worker_trigger_status_api_reports_remote_mode(tmp_path):
+    transport = httpx.ASGITransport(
+        app=create_app(
+            videos_root=tmp_path / "Videos",
+            remote_worker_status_reader=lambda: {
+                "mode": "remote",
+                "enabled": True,
+                "message": "Pi remote Windows task trigger is enabled",
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/worker-trigger/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mode": "remote",
+        "enabled": True,
+        "message": "Pi remote Windows task trigger is enabled",
+    }
+
+
+@pytest.mark.anyio
 async def test_slice_progress_api_reads_runtime_file(tmp_path, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
@@ -458,6 +657,46 @@ async def test_slice_progress_api_reports_pending_queue(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_slice_progress_api_replaces_stale_running_progress_with_pending_queue(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "8792912"
+    room.mkdir(parents=True)
+    (room / "8792912_20260602-10-56-23.mp4.pending").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
+    progress_path.parent.mkdir(parents=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "phase": "analyze",
+                "source_name": "old-recording.mp4",
+                "current_slice": 1,
+                "total_slices": 3,
+                "updated_at": time.time() - 600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-progress")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["source_name"] == ""
+    assert payload["current_slice"] == 0
+    assert payload["total_slices"] == 0
+    assert payload["pending_tasks"] == 1
+
+
+@pytest.mark.anyio
 async def test_slice_diagnostics_api_returns_structured_items(tmp_path, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
@@ -519,6 +758,53 @@ async def test_slice_diagnostics_api_reports_pending_queue(tmp_path, monkeypatch
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "queued"
+    assert payload["items"][0]["id"] == "queue"
+    assert payload["items"][0]["message"] == "等待本机 PC 切片 worker 处理"
+
+
+@pytest.mark.anyio
+async def test_slice_diagnostics_api_replaces_stale_running_progress_with_pending_queue(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "8792912"
+    room.mkdir(parents=True)
+    (room / "8792912_20260602-10-56-23.mp4.pending").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
+    progress_path.parent.mkdir(parents=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "phase": "analyze",
+                "source_name": "old-recording.mp4",
+                "message": "正在分析旧任务",
+                "updated_at": time.time() - 600,
+                "diagnostics": [
+                    {
+                        "id": "old",
+                        "title": "旧任务",
+                        "status": "ok",
+                        "message": "旧诊断",
+                        "details": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    transport = httpx.ASGITransport(app=create_app(videos_root=videos))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/slice-diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["source_name"] == ""
     assert payload["items"][0]["id"] == "queue"
     assert payload["items"][0]["message"] == "等待本机 PC 切片 worker 处理"
 

@@ -34,6 +34,11 @@ if (siderToggle) {
 const state = {
   slices: [],
   tasks: [],
+  sourceRecordings: [],
+  selectedSourceId: "",
+  selectedSegmentId: "",
+  sourceDetail: null,
+  taskPanelCollapsed: false,
   selectedId: "",
   decision: "review",
 };
@@ -73,8 +78,27 @@ const elements = {
   progressBar: document.querySelector("#slice-progress-bar"),
   sliceDiagnosticsList: document.querySelector("#slice-diagnostics-list"),
   sliceDiagnosticsSource: document.querySelector("#slice-diagnostics-source"),
+  taskPanel: document.querySelector("#task-panel"),
+  taskToggle: document.querySelector("#task-toggle"),
   taskList: document.querySelector("#task-list"),
   taskCount: document.querySelector("#task-count"),
+  sourceRecordingList: document.querySelector("#source-recording-list"),
+  sourceRecordingCount: document.querySelector("#source-recording-count"),
+  sourcePreviewVideo: document.querySelector("#source-preview-video"),
+  sourceFileSize: document.querySelector("#source-file-size"),
+  sourceStatus: document.querySelector("#source-status"),
+  sourceSummary: document.querySelector("#source-summary"),
+  selectedSegmentRange: document.querySelector("#selected-segment-range"),
+  densityChart: document.querySelector("#density-chart"),
+  densitySegmentLayer: document.querySelector("#density-segment-layer"),
+  segmentPanel: document.querySelector("#segment-panel"),
+  segmentStatus: document.querySelector("#segment-status"),
+  segmentTitle: document.querySelector("#segment-title"),
+  segmentDescription: document.querySelector("#segment-description"),
+  segmentKeepButton: document.querySelector("#segment-keep-button"),
+  segmentDropButton: document.querySelector("#segment-drop-button"),
+  segmentRetryButton: document.querySelector("#segment-retry-button"),
+  segmentRenderButton: document.querySelector("#segment-render-button"),
 };
 
 function mediaUrl(item) {
@@ -159,6 +183,7 @@ function taskStatusTag(status) {
 }
 
 function renderList() {
+  if (!elements.sliceList || !elements.sliceCount) return;
   const items = filteredSlices();
   elements.sliceCount.textContent = `${items.length} items`;
   elements.sliceList.innerHTML = "";
@@ -201,6 +226,7 @@ function syncDecisionButtons() {
 }
 
 function renderDetails() {
+  if (!elements.previewVideo) return;
   const item = selectedSlice();
   elements.saveButton.disabled = !item;
   if (!item) {
@@ -358,18 +384,24 @@ function renderTaskList(tasks) {
     const meta = document.createElement("div");
     meta.className = "task-meta";
     const room = document.createElement("span");
+    room.className = "task-room";
     room.textContent = task.room_name && task.room_name !== task.room_id
       ? `${task.room_name} (${task.room_id})`
       : task.room_id || "-";
     const size = document.createElement("span");
+    size.className = "task-size";
     size.textContent = `${Number(task.source_size_mb || 0).toFixed(1)} MB`;
-    meta.append(room, document.createTextNode(" / "), size, taskStatusTag(task.status));
+    meta.append(room);
+
+    const statusCell = document.createElement("div");
+    statusCell.className = "task-status-cell";
+    statusCell.append(size, taskStatusTag(task.status));
 
     const message = document.createElement("div");
     message.className = "task-message";
     message.textContent = task.message || "";
 
-    main.append(title, meta, message);
+    main.append(title, meta);
 
     const buttons = document.createElement("div");
     buttons.className = "task-actions";
@@ -385,8 +417,290 @@ function renderTaskList(tasks) {
       buttons.appendChild(button);
     }
 
-    row.append(main, buttons);
+    row.append(main, statusCell, message, buttons);
     elements.taskList.appendChild(row);
+  }
+}
+
+function formatMegabytes(value) {
+  const number = Number(value || 0);
+  return number > 0 ? `${number.toFixed(1)} MB` : "-";
+}
+
+function sourceMediaUrl(detail) {
+  if (!detail?.source_media_id) return "";
+  return `/api/media/${encodeURIComponent(detail.source_media_id)}`;
+}
+
+function selectedSegment() {
+  const segments = state.sourceDetail?.segments || [];
+  return segments.find((segment) => segment.segment_id === state.selectedSegmentId) || null;
+}
+
+function segmentRangeLabel(segment) {
+  if (!segment) return "-";
+  const start = Number(segment.start_seconds || 0).toFixed(1);
+  const end = Number(segment.end_seconds || 0).toFixed(1);
+  return `${start}s - ${end}s`;
+}
+
+function sourceSummaryLabel(counts = {}) {
+  return [
+    `keep ${Number(counts.keep || 0) + Number(counts.manual_keep || 0)}`,
+    `failed ${Number(counts.judge_failed || 0)}`,
+    `drop ${Number(counts.drop || 0)}`,
+  ].join(" / ");
+}
+
+async function refreshSourceRecordings() {
+  const roomId = elements.roomFilter.value;
+  const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : "";
+  try {
+    state.sourceRecordings = await request(`/api/source-recordings${query}`);
+    if (!state.sourceRecordings.some((item) => item.task_id === state.selectedSourceId)) {
+      state.selectedSourceId = state.sourceRecordings[0]?.task_id || "";
+      state.selectedSegmentId = "";
+    }
+    renderSourceRecordings();
+    if (state.selectedSourceId) {
+      await refreshSourceDetail(state.selectedSourceId);
+    } else {
+      state.sourceDetail = null;
+      renderSourceDetail();
+    }
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function renderSourceRecordings() {
+  if (!elements.sourceRecordingList || !elements.sourceRecordingCount) return;
+  const items = state.sourceRecordings;
+  elements.sourceRecordingCount.textContent = `${items.length} items`;
+  elements.sourceRecordingList.innerHTML = "";
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "task-empty";
+    empty.textContent = "暂无录播";
+    elements.sourceRecordingList.appendChild(empty);
+    return;
+  }
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `source-row${item.task_id === state.selectedSourceId ? " active" : ""}`;
+
+    const name = document.createElement("span");
+    name.className = "source-name";
+    name.textContent = item.source_name || item.source_rel_path || "-";
+
+    const meta = document.createElement("span");
+    meta.className = "source-meta";
+    meta.textContent = `${item.room_name || item.room_id || "-"} / ${formatMegabytes(item.source_size_mb)} / ${sourceSummaryLabel(item.summary_counts)}`;
+
+    button.append(name, meta);
+    button.addEventListener("click", () => selectSourceRecording(item.task_id));
+    elements.sourceRecordingList.appendChild(button);
+  }
+}
+
+function selectSourceRecording(taskId) {
+  state.selectedSourceId = taskId;
+  state.selectedSegmentId = "";
+  renderSourceRecordings();
+  refreshSourceDetail(taskId);
+}
+
+async function refreshSourceDetail(taskId) {
+  if (!taskId) return;
+  state.sourceDetail = await request(`/api/source-recordings/${encodeURIComponent(taskId)}`);
+  if (!state.sourceDetail.segments?.some((segment) => segment.segment_id === state.selectedSegmentId)) {
+    state.selectedSegmentId = state.sourceDetail.segments?.[0]?.segment_id || "";
+  }
+  renderSourceDetail();
+}
+
+function renderSourceDetail() {
+  const detail = state.sourceDetail;
+  if (!detail) {
+    if (elements.sourcePreviewVideo) elements.sourcePreviewVideo.removeAttribute("src");
+    if (elements.sourceRecording) elements.sourceRecording.textContent = "-";
+    if (elements.sourceFileSize) elements.sourceFileSize.textContent = "-";
+    renderDensityChart({ density_points: [], segments: [] });
+    renderSegmentPanel();
+    return;
+  }
+
+  const url = sourceMediaUrl(detail);
+  if (url && elements.sourcePreviewVideo?.src !== new URL(url, window.location.href).href) {
+    elements.sourcePreviewVideo.src = url;
+  }
+  if (elements.sourceRecording) elements.sourceRecording.textContent = detail.source_name || "-";
+  if (elements.sourceFileSize) elements.sourceFileSize.textContent = formatMegabytes(detail.source_size_mb);
+  if (elements.sourceStatus) elements.sourceStatus.textContent = detail.message || detail.status || "-";
+  if (elements.sourceSummary) elements.sourceSummary.textContent = sourceSummaryLabel(detail.summary_counts);
+  renderDensityChart(detail);
+  renderSegmentPanel();
+}
+
+function renderDensityChart(detail) {
+  if (!elements.densityChart || !elements.densitySegmentLayer) return;
+  const points = Array.isArray(detail?.density_points) ? detail.density_points : [];
+  const segments = Array.isArray(detail?.segments) ? detail.segments : [];
+  const area = elements.densityChart.querySelector(".density-area");
+  const maxEnd = Math.max(
+    10,
+    ...points.map((point) => Number(point.end_seconds || 0)),
+    ...segments.map((segment) => Number(segment.end_seconds || 0)),
+  );
+
+  if (area) {
+    if (!points.length) {
+      area.setAttribute("d", "");
+    } else {
+      const top = points.map((point) => {
+        const x = (Number(point.start_seconds || 0) / maxEnd) * 100;
+        const y = 38 - Number(point.normalized || 0) * 34;
+        return `${x.toFixed(2)} ${y.toFixed(2)}`;
+      });
+      const lastX = (Number(points[points.length - 1].end_seconds || maxEnd) / maxEnd) * 100;
+      area.setAttribute("d", `M 0 38 L ${top.join(" L ")} L ${lastX.toFixed(2)} 38 Z`);
+    }
+  }
+
+  elements.densitySegmentLayer.innerHTML = "";
+  for (const segment of segments) {
+    const status = segment.judge_status || "";
+    const isKeep = status === "keep" || status === "manual_keep";
+    const isFailed = status === "judge_failed";
+    if (!isKeep && !isFailed) continue;
+
+    const start = Number(segment.start_seconds || 0);
+    const end = Number(segment.end_seconds || start);
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", ((start / maxEnd) * 100).toFixed(2));
+    rect.setAttribute("y", "3");
+    rect.setAttribute("width", Math.max(((end - start) / maxEnd) * 100, 0.5).toFixed(2));
+    rect.setAttribute("height", "34");
+    rect.setAttribute("rx", "0");
+    rect.classList.add(isKeep ? "segment-overlay-keep" : "segment-overlay-judge-failed");
+    rect.addEventListener("click", () => {
+      if (elements.sourcePreviewVideo) {
+        elements.sourcePreviewVideo.currentTime = start;
+        elements.sourcePreviewVideo.pause();
+      }
+      selectSegment(segment.segment_id);
+    });
+    elements.densitySegmentLayer.appendChild(rect);
+  }
+}
+
+function selectSegment(segmentId) {
+  state.selectedSegmentId = segmentId;
+  renderDensityChart(state.sourceDetail);
+  renderSegmentPanel();
+}
+
+function renderSegmentPanel() {
+  const segment = selectedSegment();
+  const hasSegment = Boolean(segment);
+  for (const element of [
+    elements.segmentTitle,
+    elements.segmentDescription,
+    elements.qualityReason,
+    elements.manualStart,
+    elements.manualEnd,
+    elements.saveButton,
+    elements.segmentKeepButton,
+    elements.segmentDropButton,
+    elements.segmentRetryButton,
+    elements.segmentRenderButton,
+  ]) {
+    if (element) element.disabled = !hasSegment;
+  }
+
+  if (!segment) {
+    if (elements.segmentStatus) elements.segmentStatus.textContent = "-";
+    if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = "-";
+    if (elements.segmentTitle) elements.segmentTitle.value = "";
+    if (elements.segmentDescription) elements.segmentDescription.value = "";
+    if (elements.qualityReason) elements.qualityReason.value = "";
+    if (elements.manualStart) elements.manualStart.value = 0;
+    if (elements.manualEnd) elements.manualEnd.value = 0;
+    if (elements.danmakuCount) elements.danmakuCount.textContent = "-";
+    if (elements.qualityScore) elements.qualityScore.textContent = "-";
+    if (elements.burstRatio) elements.burstRatio.textContent = "-";
+    return;
+  }
+
+  if (elements.segmentStatus) elements.segmentStatus.textContent = segment.judge_status || "review";
+  if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = segmentRangeLabel(segment);
+  if (elements.segmentTitle) elements.segmentTitle.value = segment.title || "";
+  if (elements.segmentDescription) elements.segmentDescription.value = segment.description || "";
+  if (elements.qualityReason) elements.qualityReason.value = segment.quality_reason || segment.judge_error || "";
+  if (elements.manualStart) elements.manualStart.value = Number(segment.start_seconds || 0);
+  if (elements.manualEnd) elements.manualEnd.value = Number(segment.end_seconds || 0);
+  if (elements.danmakuCount) elements.danmakuCount.textContent = segment.danmaku_count != null ? String(segment.danmaku_count) : "-";
+  if (elements.qualityScore) {
+    elements.qualityScore.textContent = segment.quality_score != null
+      ? `${Math.round(Number(segment.quality_score) * 100)}%`
+      : "-";
+  }
+  if (elements.burstRatio) elements.burstRatio.textContent = segment.burst_ratio != null ? `${segment.burst_ratio}x` : "-";
+}
+
+async function runSegmentAction(action, payload = null) {
+  const segment = selectedSegment();
+  if (!segment) return;
+  const options = { method: "POST" };
+  if (payload) options.body = JSON.stringify(payload);
+  const updated = await request(`/api/segments/${encodeURIComponent(segment.segment_id)}/${action}`, options);
+  const segments = state.sourceDetail?.segments || [];
+  const index = segments.findIndex((item) => item.segment_id === updated.segment_id);
+  if (index >= 0) segments[index] = updated;
+  state.selectedSegmentId = updated.segment_id;
+  renderSourceDetail();
+}
+
+async function saveSegmentRange() {
+  await runSegmentAction("range", {
+    start_seconds: Number(elements.manualStart?.value || 0),
+    end_seconds: Number(elements.manualEnd?.value || 0),
+  });
+}
+
+async function manualKeepCurrentSegment() {
+  await runSegmentAction("manual-keep", {
+    title: elements.segmentTitle?.value || "",
+    description: elements.segmentDescription?.value || "",
+    tags: [],
+    start_seconds: Number(elements.manualStart?.value || 0),
+    end_seconds: Number(elements.manualEnd?.value || 0),
+  });
+}
+
+async function dropCurrentSegment() {
+  await runSegmentAction("drop", {
+    reason: elements.qualityReason?.value || "",
+  });
+}
+
+async function retryCurrentSegmentJudge() {
+  await runSegmentAction("retry-judge");
+}
+
+async function renderCurrentSegment() {
+  await runSegmentAction("render");
+}
+
+function toggleTaskPanel() {
+  state.taskPanelCollapsed = !state.taskPanelCollapsed;
+  elements.taskPanel?.classList.toggle("task-collapsed", state.taskPanelCollapsed);
+  if (elements.taskToggle) {
+    elements.taskToggle.setAttribute("aria-expanded", state.taskPanelCollapsed ? "false" : "true");
+    elements.taskToggle.textContent = state.taskPanelCollapsed ? "展开" : "折叠";
   }
 }
 
@@ -498,6 +812,32 @@ async function startPcWorkerOnce() {
   return response.json();
 }
 
+function describeWorkerTrigger(trigger) {
+  if (!trigger || trigger.status === "disabled" || trigger.status === "skipped") {
+    return {
+      handled: false,
+      message: trigger?.message || "remote worker trigger is disabled",
+    };
+  }
+  if (trigger.status === "triggered") {
+    return {
+      handled: true,
+      message: "Windows 计划任务已触发，切片进程会在 PC 上运行并自动退出",
+    };
+  }
+  if (trigger.status === "failed") {
+    const detail = trigger.stderr || trigger.message || "未知错误";
+    return {
+      handled: true,
+      message: `已排队，但 Pi 触发 Windows 计划任务失败：${detail}`,
+    };
+  }
+  return {
+    handled: true,
+    message: `远程 worker 状态：${trigger.status}`,
+  };
+}
+
 async function runTaskAction(task, action) {
   showError("");
   try {
@@ -537,13 +877,18 @@ async function startSlicing() {
     const pendingTasks = Number(result.pending_tasks || queued);
     let workerMessage = "";
     if (pendingTasks > 0) {
-      try {
-        const worker = await startPcWorkerOnce();
-        workerMessage = worker.status === "already_running"
-          ? "PC worker 已在处理，处理完会自动退出"
-          : "PC worker 已启动，处理完会自动退出";
-      } catch (error) {
-        workerMessage = "已提交任务，但未连接到本机 PC worker。请先运行 .\\start_pc_worker_api.ps1，再从页面启动切片";
+      const remoteWorker = describeWorkerTrigger(result.worker_trigger);
+      if (remoteWorker.handled) {
+        workerMessage = remoteWorker.message;
+      } else {
+        try {
+          const worker = await startPcWorkerOnce();
+          workerMessage = worker.status === "already_running"
+            ? "PC worker 已在处理，处理完会自动退出"
+            : "PC worker 已启动，处理完会自动退出";
+        } catch (error) {
+          workerMessage = "已提交任务，但未连接到本机 PC worker。请先运行 .\\start_pc_worker_api.ps1，再从页面启动切片";
+        }
       }
     }
     renderSliceProgress({
@@ -557,6 +902,7 @@ async function startSlicing() {
     setTimeout(refreshSliceProgress, 1000);
     setTimeout(refreshSliceDiagnostics, 1000);
     setTimeout(refreshTasks, 1000);
+    setTimeout(refreshSourceRecordings, 1000);
     elements.startSliceButton.disabled = false;
     elements.startSliceButton.textContent = "启动切片";
   } catch (error) {
@@ -567,6 +913,18 @@ async function startSlicing() {
 }
 
 async function saveFeedback() {
+  if (state.sourceDetail && state.selectedSegmentId) {
+    showError("");
+    elements.saveButton.disabled = true;
+    try {
+      await saveSegmentRange();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      elements.saveButton.disabled = false;
+    }
+    return;
+  }
   const item = selectedSlice();
   if (!item) return;
   showError("");
@@ -640,13 +998,22 @@ document.addEventListener("keydown", (event) => {
 });
 
 elements.startSliceButton.addEventListener("click", startSlicing);
-elements.refreshButton.addEventListener("click", refresh);
+elements.refreshButton.addEventListener("click", () => {
+  refresh();
+  refreshSourceRecordings();
+});
 elements.statusFilter.addEventListener("change", render);
 elements.roomFilter.addEventListener("change", () => {
   refresh();
   refreshTasks();
+  refreshSourceRecordings();
 });
 elements.saveButton.addEventListener("click", saveFeedback);
+elements.taskToggle?.addEventListener("click", toggleTaskPanel);
+elements.segmentKeepButton?.addEventListener("click", () => manualKeepCurrentSegment().catch((error) => showError(error.message)));
+elements.segmentDropButton?.addEventListener("click", () => dropCurrentSegment().catch((error) => showError(error.message)));
+elements.segmentRetryButton?.addEventListener("click", () => retryCurrentSegmentJudge().catch((error) => showError(error.message)));
+elements.segmentRenderButton?.addEventListener("click", () => renderCurrentSegment().catch((error) => showError(error.message)));
 for (const button of elements.decisionButtons) {
   button.addEventListener("click", () => {
     state.decision = button.dataset.decision;
@@ -654,7 +1021,17 @@ for (const button of elements.decisionButtons) {
   });
 }
 
-async function refreshWorkerStatus() {
+function renderRemoteWorkerStatus(data) {
+  const badge = elements.workerBadge;
+  if (!badge) return false;
+  if (data?.mode !== "remote" || !data.enabled) return false;
+  badge.className = "worker-badge worker-idle";
+  badge.textContent = "Windows task: 已配置";
+  badge.title = data.message || "Pi 会通过 SSH 触发 Windows 计划任务";
+  return true;
+}
+
+async function refreshLocalWorkerStatus() {
   const badge = elements.workerBadge;
   if (!badge) return;
   try {
@@ -675,8 +1052,19 @@ async function refreshWorkerStatus() {
   }
 }
 
+async function refreshWorkerStatus() {
+  try {
+    const remoteStatus = await request("/api/worker-trigger/status");
+    if (renderRemoteWorkerStatus(remoteStatus)) return;
+  } catch {
+    // Older dashboard builds do not expose remote worker status; use legacy badge.
+  }
+  await refreshLocalWorkerStatus();
+}
+
 refresh();
 refreshRooms();
+refreshSourceRecordings();
 refreshSliceProgress();
 refreshSliceDiagnostics();
 refreshTasks();
@@ -685,6 +1073,7 @@ refreshWorkerStatus();
 setInterval(() => {
   if (document.visibilityState === "visible") {
     refresh();
+    refreshSourceRecordings();
     refreshTasks();
     refreshWorkerStatus();
   }
@@ -707,6 +1096,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refreshRooms();
     refresh();
+    refreshSourceRecordings();
     refreshTasks();
     refreshSliceProgress();
     refreshSliceDiagnostics();

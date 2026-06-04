@@ -13,9 +13,11 @@ Dashboard /tasks
   -> src.dashboard.slice_control 扫描整场 mp4+xml
   -> 写 <recording>.mp4.pending
 
-Windows PC worker API
-  -> http://127.0.0.1:2235/api/worker/run-once
-  -> src.server.worker_control 启动:
+Windows worker trigger
+  -> 推荐：Pi dashboard 通过 SSH 触发 Windows Scheduled Task:
+     schtasks /Run /TN BiliveSliceOnce
+  -> 兼容：浏览器调用 http://127.0.0.1:2235/api/worker/run-once
+  -> Windows 执行:
      python -m src.server.watcher --once --videos-dir .\Videos
 
 src.server.watcher
@@ -45,6 +47,7 @@ slice_only()
 |------|------|------|
 | 任务清单 | `src/dashboard/task_state.py` | `build_task_inventory()` |
 | 页面提交切片 | `src/dashboard/slice_control.py` | `start_slice_scan()` |
+| Pi 触发 Windows 任务 | `src/dashboard/remote_worker.py` | `trigger_remote_worker()` |
 | 恢复操作 | `src/dashboard/task_state.py` | `requeue_task()` / `cancel_pending_task()` / `mark_done_task()` |
 | worker API | `src/server/worker_api.py` | `POST /api/worker/run-once`, `GET /api/worker/status` |
 | 启动一次性 worker | `src/server/worker_control.py` | `start_worker_once()`, `worker_status()` |
@@ -77,6 +80,32 @@ slice_only()
 - 房间下拉的显示名来自本地录播 `jsonl` 的粉丝牌锚点信息；找不到 UP 名时回退房间号。
 
 调试时如果要重跑某个源录播，可以手动移走对应 `.done`，再从页面重新提交。不要删除源 `.mp4/.xml`，当前默认会保留它们。
+
+## Pi 触发 Windows 计划任务
+
+推荐方案是让 Pi 只做编排，Windows 仍执行切片。Windows 先注册一个手动计划任务：
+
+```powershell
+cd D:\alldata\pi\bilive
+.\install_windows_slice_task.ps1
+```
+
+这个任务运行 `run_slice_once.ps1`，脚本会同步执行 `src.server.watcher --once`，写入
+`logs/runtime/pc-worker-task-*.log`，切完后退出。脚本包含 `slice-once.lock` 防重入；如果上一次
+worker 仍在跑，再触发会直接退出。
+
+Pi dashboard 读取 `bilive-server.toml` 的配置：
+
+```toml
+[dashboard.remote_worker]
+enabled = true
+command = ["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"]
+timeout = 10
+```
+
+`win` 是 Pi 上 SSH config 里的 Windows 主机别名。配置打开后，点击“启动切片”会先写
+`.mp4.pending`，再从 Pi 后端触发该计划任务。若配置未打开，前端仍会回退到旧的
+`127.0.0.1:2235` PC worker API 流程。
 
 ## 任务状态和恢复 API
 

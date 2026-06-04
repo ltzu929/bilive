@@ -12,6 +12,7 @@ from src.dashboard.schemas import VALID_DECISIONS, RoomItem, SliceItem
 
 
 SLICE_NAME_RE = re.compile(r"^(?P<start>\d+(?:\.\d+)?)s_(?P<source>.+)\.(mp4|flv)$")
+SOURCE_NAME_RE = re.compile(r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}\.mp4$")
 
 
 class DashboardFileStore:
@@ -86,7 +87,7 @@ class DashboardFileStore:
 
     def resolve_media(self, media_id: str) -> Path:
         path = self._decode_id(media_id)
-        if not path.is_file() or not SLICE_NAME_RE.match(path.name):
+        if not path.is_file() or not _is_dashboard_media(path):
             raise ValueError("Unknown media id")
         return path
 
@@ -335,3 +336,7 @@ class DashboardFileStore:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+
+def _is_dashboard_media(path: Path) -> bool:
+    return bool(SLICE_NAME_RE.match(path.name) or SOURCE_NAME_RE.match(path.name))

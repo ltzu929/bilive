@@ -11,7 +11,7 @@
 - 用 Pi 上的 `blrec` 录制 B 站直播和弹幕，Web UI 默认在 `http://192.168.31.157:2233`。
 - 通过 `bilitool` 登录 B 站，并把 cookie 持久化到本地私有文件，避免每次重登。
 - 在 Windows/PC 端扫描录制完成的视频，处理弹幕、ASR、字幕烧录、切片，并把待上传文件写入 SQLite 上传队列。
-- 支持 dashboard 启动的一次性切片 worker：页面只写 `.pending`，PC worker 处理完自动退出。
+- 支持 dashboard 启动的一次性切片 worker：页面只写 `.pending`，Pi 可触发 Windows 计划任务，PC worker 处理完自动退出。
 
 请先确认录制和上传行为符合主播授权、平台规则和你自己的使用场景。本项目不适合未经授权的大规模录制或商业使用。
 
@@ -23,8 +23,8 @@
 
 1. Pi 上 `bilive.service` 常驻运行 `blrec`，负责录制并把文件写到 `/mnt/win/bilive/Videos/`。
 2. Windows 端在 `D:\alldata\pi\bilive` 编辑和运行切片/上传代码。
-3. 需要切片时先运行 `.\start_pc_worker_api.ps1`，再在 dashboard 的 `/tasks` 页面点击“启动切片”。
-4. 切片页面写 `.mp4.pending` 标记，PC worker 执行 `src.server.watcher --once`，处理完 `.pending` 后写 `.done` 并退出。
+3. 推荐在 Windows 注册 `BiliveSliceOnce` 计划任务，再让 Pi dashboard 点击“启动切片”时触发它。
+4. 切片页面写 `.mp4.pending` 标记，Windows 执行 `src.server.watcher --once`，处理完 `.pending` 后写 `.done` 并退出。
 5. 需要上传时单独启动上传队列消费者，避免调试切片时误传。
 
 Pi 端服务检查：
@@ -35,7 +35,23 @@ sudo systemctl status bilive
 sudo systemctl restart bilive
 ```
 
-PC 端 worker API：
+Windows 端推荐注册一次性切片计划任务：
+
+```powershell
+cd D:\alldata\pi\bilive
+.\install_windows_slice_task.ps1
+```
+
+然后在 `bilive-server.toml` 打开 Pi 触发配置：
+
+```toml
+[dashboard.remote_worker]
+enabled = true
+command = ["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"]
+timeout = 10
+```
+
+`win` 是 Pi 上 SSH config 里的 Windows 主机别名。未配置这个远程触发时，仍可用兼容入口：
 
 ```powershell
 cd D:\alldata\pi\bilive
@@ -69,6 +85,8 @@ python -m src.server.watcher --once --videos-dir .\Videos
 ├── upload.sh                    # 普通扫描 + 上传入口
 ├── slice.sh                     # 处理 pending 切片队列一次
 ├── start_pc_worker_api.ps1       # Windows 本机 worker API，供 dashboard 触发一次性切片
+├── run_slice_once.ps1            # Windows 计划任务执行的一次性 pending worker
+├── install_windows_slice_task.ps1 # 注册 BiliveSliceOnce 手动计划任务
 ├── start_pipeline.ps1            # Windows PC helper 启动器，默认不跑旧 scan_slice
 ├── refine_feedback.sh           # 人工反馈驱动的精切 + 入上传队列入口
 ├── src/
@@ -216,21 +234,40 @@ http://192.168.31.157:2233
 
 ### Dashboard 一次性切片流
 
-当前推荐入口：
+当前推荐入口是 Pi 触发 Windows 计划任务。先在 Windows 注册：
+
+```powershell
+cd D:\alldata\pi\bilive
+.\install_windows_slice_task.ps1
+```
+
+再在 Pi 可访问的 `bilive-server.toml` 中启用：
+
+```toml
+[dashboard.remote_worker]
+enabled = true
+command = ["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"]
+timeout = 10
+```
+
+之后直接在 `/tasks` 页面点击“启动切片”。流程是：
+
+1. dashboard 扫描 `Videos/<room_id>/*.mp4`，只把整场录播写成 `.mp4.pending`。
+2. Pi dashboard 通过 SSH 触发 Windows 手动计划任务 `BiliveSliceOnce`。
+3. Windows 任务运行 `run_slice_once.ps1`。
+4. 脚本同步启动 `python -m src.server.watcher --once --videos-dir .\Videos`。
+5. watcher 只处理 pending 队列，调用 `slice_only()`。
+6. `slice_only()` 做弹幕 burst 检测、ffmpeg 切片、faster-whisper ASR、SRT 生成、字幕烧录、分析结果和上传队列写入。
+7. 成功后 `.mp4.pending` 变成 `.mp4.done`，worker 自动退出，计划任务结束。
+
+兼容入口仍可用：
 
 ```powershell
 cd D:\alldata\pi\bilive
 .\start_pc_worker_api.ps1
 ```
 
-然后在 `/tasks` 页面点击“启动切片”。流程是：
-
-1. dashboard 扫描 `Videos/<room_id>/*.mp4`，只把整场录播写成 `.mp4.pending`。
-2. 浏览器调用本机 `http://127.0.0.1:2235/api/worker/run-once`。
-3. worker API 启动 `python -m src.server.watcher --once --videos-dir .\Videos`。
-4. watcher 只处理 pending 队列，调用 `slice_only()`。
-5. `slice_only()` 做弹幕 burst 检测、ffmpeg 切片、faster-whisper ASR、SRT 生成、字幕烧录、分析结果和上传队列写入。
-6. 成功后 `.mp4.pending` 变成 `.mp4.done`，worker 自动退出。
+如果远程触发未启用，浏览器会继续尝试调用本机 `http://127.0.0.1:2235/api/worker/run-once`。
 
 当前默认保留源录播和 XML，方便重跑。只有显式设置：
 

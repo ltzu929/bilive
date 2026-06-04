@@ -10,7 +10,17 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
+from src.dashboard.remote_worker import remote_worker_status, trigger_remote_worker
 from src.dashboard.slice_control import load_pending_queue_state, start_slice_scan
+from src.dashboard.source_workbench import (
+    build_source_recording_detail,
+    build_source_recording_list,
+    drop_segment,
+    manual_keep_segment,
+    render_segment,
+    retry_segment_judge,
+    update_segment_range,
+)
 from src.dashboard.task_state import (
     build_task_inventory,
     cancel_pending_task,
@@ -111,10 +121,21 @@ def media_response(
     )
 
 
+def _segment_action(action) -> Dict[str, Any]:
+    try:
+        return action()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def create_app(
     videos_root: str | Path | None = None,
     static_dir: str | Path | None = None,
     slice_starter=None,
+    remote_worker_trigger=None,
+    remote_worker_status_reader=None,
 ) -> FastAPI:
     app = FastAPI(title="bilive dashboard", version="0.1.0")
     store = DashboardFileStore(videos_root or default_videos_root())
@@ -193,6 +214,16 @@ def create_app(
             slice_options=_validated_slice_options(payload),
         )
 
+    def trigger_worker(pending_tasks: int) -> Dict[str, Any]:
+        if remote_worker_trigger is not None:
+            return remote_worker_trigger(pending_tasks)
+        return trigger_remote_worker(pending_tasks=pending_tasks)
+
+    def read_worker_trigger_status() -> Dict[str, Any]:
+        if remote_worker_status_reader is not None:
+            return remote_worker_status_reader()
+        return remote_worker_status()
+
     @app.get("/api/rooms")
     async def list_rooms() -> list[Dict[str, Any]]:
         return [room.to_dict() for room in store.list_rooms()]
@@ -211,6 +242,57 @@ def create_app(
         for task in tasks:
             task["room_name"] = room_names.get(task["room_id"], task["room_id"])
         return tasks
+
+    @app.get("/api/source-recordings")
+    async def list_source_recordings(room_id: str | None = None) -> list[Dict[str, Any]]:
+        room_names = {room.room_id: room.name for room in store.list_rooms()}
+        return build_source_recording_list(
+            store.videos_root,
+            room_names=room_names,
+            room_id=room_id,
+        )
+
+    @app.get("/api/source-recordings/{task_id}")
+    async def get_source_recording(task_id: str) -> Dict[str, Any]:
+        room_names = {room.room_id: room.name for room in store.list_rooms()}
+        try:
+            return build_source_recording_detail(
+                store.videos_root,
+                task_id,
+                room_names=room_names,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/segments/{segment_id}/manual-keep")
+    async def segment_manual_keep(
+        segment_id: str,
+        payload: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        return _segment_action(
+            lambda: manual_keep_segment(store.videos_root, segment_id, payload)
+        )
+
+    @app.post("/api/segments/{segment_id}/drop")
+    async def segment_drop(
+        segment_id: str,
+        payload: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        return _segment_action(lambda: drop_segment(store.videos_root, segment_id, payload))
+
+    @app.post("/api/segments/{segment_id}/range")
+    async def segment_range(segment_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return _segment_action(lambda: update_segment_range(store.videos_root, segment_id, payload))
+
+    @app.post("/api/segments/{segment_id}/retry-judge")
+    async def segment_retry_judge(segment_id: str) -> Dict[str, Any]:
+        return _segment_action(lambda: retry_segment_judge(store.videos_root, segment_id))
+
+    @app.post("/api/segments/{segment_id}/render")
+    async def segment_render(segment_id: str) -> Dict[str, Any]:
+        return _segment_action(lambda: render_segment(store.videos_root, segment_id))
 
     @app.post("/api/tasks/{task_id}/requeue")
     async def task_requeue(task_id: str) -> Dict[str, Any]:
@@ -246,15 +328,7 @@ def create_app(
         if queue_state["pending_tasks"] and (
             progress["status"] == "idle" or progress.get("stale")
         ):
-            progress.update(
-                status="queued",
-                phase="queued",
-                phase_label="已排队",
-                message="等待本机 PC 切片 worker 处理",
-                current_slice_percent=0.0,
-                stale=False,
-                **queue_state,
-            )
+            progress = build_queued_progress(queue_state)
         else:
             progress.update(queue_state)
         return progress
@@ -268,9 +342,26 @@ def create_app(
     @app.post("/api/slice/start")
     async def start_slice(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         try:
-            return start_slicing(payload)
+            result = start_slicing(payload)
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        pending_tasks = int(result.get("pending_tasks") or result.get("queued") or 0)
+        if pending_tasks > 0:
+            try:
+                result["worker_trigger"] = trigger_worker(pending_tasks)
+            except Exception as exc:  # pragma: no cover - defensive boundary
+                result["worker_trigger"] = {
+                    "status": "failed",
+                    "message": str(exc),
+                    "stdout": "",
+                    "stderr": "",
+                }
+        return result
+
+    @app.get("/api/worker-trigger/status")
+    async def get_worker_trigger_status() -> Dict[str, Any]:
+        return read_worker_trigger_status()
 
     @app.patch("/api/slices/{slice_id}/feedback")
     async def update_feedback(
@@ -360,23 +451,12 @@ def build_slice_diagnostics(
     queue_state: Dict[str, Any],
 ) -> Dict[str, Any]:
     pending_tasks = int(queue_state.get("pending_tasks") or 0)
+    show_queue = pending_tasks and (
+        progress.get("status") in {"idle", ""} or progress.get("stale")
+    )
     items = progress.get("diagnostics") if isinstance(progress.get("diagnostics"), list) else []
-    if not items and pending_tasks:
-        items = [
-            {
-                "id": "queue",
-                "title": "任务队列",
-                "status": "pending",
-                "message": "等待本机 PC 切片 worker 处理",
-                "details": [
-                    {"label": "待处理", "value": str(pending_tasks)},
-                    {
-                        "label": "示例",
-                        "value": ", ".join(queue_state.get("pending_sources") or []) or "-",
-                    },
-                ],
-            }
-        ]
+    if show_queue:
+        items = build_queue_diagnostic_items(queue_state)
     elif not items:
         items = [
             {
@@ -388,17 +468,57 @@ def build_slice_diagnostics(
             }
         ]
 
-    status = "queued" if pending_tasks and progress.get("status") in {"idle", ""} else progress.get("status")
+    status = "queued" if show_queue else progress.get("status")
     return {
         "status": status or "idle",
-        "phase": progress.get("phase") or "idle",
-        "phase_label": progress.get("phase_label") or "",
-        "source_name": progress.get("source_name") or "",
-        "message": progress.get("message") or "",
+        "phase": "queued" if show_queue else progress.get("phase") or "idle",
+        "phase_label": "已排队" if show_queue else progress.get("phase_label") or "",
+        "source_name": "" if show_queue else progress.get("source_name") or "",
+        "message": "等待本机 PC 切片 worker 处理" if show_queue else progress.get("message") or "",
         "updated_at": progress.get("updated_at") or 0.0,
         "pending_tasks": pending_tasks,
         "items": items,
     }
+
+
+def build_queued_progress(queue_state: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "status": "queued",
+        "phase": "queued",
+        "phase_label": "已排队",
+        "room_id": "",
+        "source_path": "",
+        "source_name": "",
+        "current_slice": 0,
+        "total_slices": 0,
+        "current_slice_path": "",
+        "current_slice_percent": 0.0,
+        "message": "等待本机 PC 切片 worker 处理",
+        "error": "",
+        "diagnostics": [],
+        "updated_at": 0.0,
+        "stale": False,
+        **queue_state,
+    }
+
+
+def build_queue_diagnostic_items(queue_state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    pending_tasks = int(queue_state.get("pending_tasks") or 0)
+    return [
+        {
+            "id": "queue",
+            "title": "任务队列",
+            "status": "pending",
+            "message": "等待本机 PC 切片 worker 处理",
+            "details": [
+                {"label": "待处理", "value": str(pending_tasks)},
+                {
+                    "label": "示例",
+                    "value": ", ".join(queue_state.get("pending_sources") or []) or "-",
+                },
+            ],
+        }
+    ]
 
 
 api = create_app(

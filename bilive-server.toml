@@ -8,6 +8,13 @@
 # log_dir 环境变量: BILIVE_LOG_DIR
 # db_path 环境变量: BILIVE_DB_PATH
 
+[dashboard.remote_worker]
+# Pi dashboard can trigger a fixed Windows Scheduled Task after writing .pending.
+# Keep disabled until Windows OpenSSH and install_windows_slice_task.ps1 are configured.
+enabled = true
+command = ["ssh", "zk@192.168.31.202", "schtasks", "/Run", "/TN", "BiliveSliceOnce"]
+timeout = 10
+
 [model]
 model_type = "append" # Can be pipeline, append, merge
 

@@ -55,7 +55,37 @@ def test_frontend_contains_task_recovery_panel():
     text = FRONTEND_HTML.read_text(encoding="utf-8")
     assert 'id="task-panel"' in text
     assert 'id="task-list"' in text
+    assert 'id="task-toggle"' in text
     assert "任务队列" in text
+
+
+def test_frontend_contains_source_workbench():
+    html = FRONTEND_HTML.read_text(encoding="utf-8")
+    js = FRONTEND_JS.read_text(encoding="utf-8")
+    css = FRONTEND_CSS.read_text(encoding="utf-8")
+
+    assert 'id="source-recording-list"' in html
+    assert 'id="source-preview-video"' in html
+    assert 'id="density-chart"' in html
+    assert 'id="segment-panel"' in html
+    assert "refreshSourceRecordings" in js
+    assert "renderSourceRecordings" in js
+    assert "selectSourceRecording" in js
+    assert "renderDensityChart" in js
+    assert "toggleTaskPanel" in js
+    assert ".density-area" in css
+    assert ".segment-overlay-keep" in css
+    assert ".segment-overlay-judge-failed" in css
+
+
+def test_frontend_task_queue_uses_column_layout():
+    js = FRONTEND_JS.read_text(encoding="utf-8")
+    css = FRONTEND_CSS.read_text(encoding="utf-8")
+    assert "task-status-cell" in js
+    assert "task-room" in js
+    assert ".task-status-cell" in css
+    assert ".task-row" in css
+    assert "minmax(220px, 1.2fr) minmax(150px, 0.7fr) minmax(220px, 1fr) auto" in css
 
 
 def test_frontend_fetches_tasks_and_calls_recovery_endpoints():
@@ -116,6 +146,22 @@ def test_frontend_triggers_local_pc_worker_once():
     assert "pendingTasks" in text
     assert "start_pc_worker_api.ps1" in text
     assert "start_pipeline.ps1" not in text
+
+
+def test_frontend_prefers_pi_remote_worker_trigger():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert "describeWorkerTrigger" in text
+    assert "worker_trigger" in text
+    assert "Windows 计划任务已触发" in text
+    assert "remote worker trigger is disabled" in text
+
+
+def test_frontend_toolbar_reports_remote_worker_mode():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+    assert 'request("/api/worker-trigger/status")' in text
+    assert "renderRemoteWorkerStatus" in text
+    assert "Windows task: 已配置" in text
+    assert "refreshLocalWorkerStatus" in text
 
 
 def test_frontend_styles_slice_progress_panel():

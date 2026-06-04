@@ -110,8 +110,12 @@ def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
         if history_status == "failed" and not has_pending and not has_done:
             status = "failed"
             message = history.get("error", "处理失败")
-        elif history_status == "done" and has_done and history.get("slice_count"):
-            message = f"已处理，生成 {history['slice_count']} 个切片"
+        elif history_status in {"done", "skipped"} and has_done:
+            slice_count = history.get("slice_count")
+            if slice_count:
+                message = f"已处理，生成 {slice_count} 个切片"
+            else:
+                message = _history_result_message(history) or message
 
     task: Dict[str, Any] = {
         "task_id": _encode_task_id(source_rel),
@@ -129,6 +133,20 @@ def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
     }
 
     return task
+
+
+def _history_result_message(history: Dict[str, Any]) -> Optional[str]:
+    diagnostics = history.get("diagnostics")
+    if not isinstance(diagnostics, list):
+        return None
+
+    for item in diagnostics:
+        if not isinstance(item, dict) or item.get("id") != "result":
+            continue
+        message = item.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return None
 
 
 def _encode_task_id(source_rel_path: str) -> str:

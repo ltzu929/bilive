@@ -878,9 +878,9 @@ button.primary:active {
 
 .task-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(150px, 0.7fr) minmax(220px, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   min-height: 64px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
@@ -911,10 +911,27 @@ button.primary:active {
   color: var(--text-secondary);
 }
 
-.task-message {
+.task-room,
+.task-size {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-status-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-secondary);
-  word-break: break-word;
+}
+
+.task-message {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .task-actions {
@@ -922,6 +939,7 @@ button.primary:active {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+  min-width: max-content;
 }
 
 .task-actions button {
@@ -936,9 +954,123 @@ button.primary:active {
   font-size: 13px;
 }
 
+.task-toggle {
+  height: 26px;
+  padding: 0 10px;
+  margin-left: auto;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.task-panel.task-collapsed .task-list {
+  display: none;
+}
+
+.source-workbench {
+  grid-template-columns: minmax(260px, 340px) minmax(520px, 1fr) minmax(280px, 320px);
+}
+
+.source-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 5px;
+  width: 100%;
+  min-height: 66px;
+  height: auto;
+  padding: 11px 14px 11px 12px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.source-row:hover {
+  background: #fafafa;
+}
+
+.source-row.active {
+  background: var(--primary-light);
+  border-left-color: var(--primary);
+}
+
+.source-name {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.source-meta {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.density-chart-shell {
+  padding: 12px 16px 0;
+}
+
+.density-chart {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border: 1px solid var(--border);
+  background: linear-gradient(to bottom, #fff, #fafafa);
+}
+
+.density-area {
+  fill: rgba(24, 144, 255, 0.24);
+  stroke: var(--primary);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.segment-overlay-keep {
+  fill: rgba(24, 144, 255, 0.26);
+  stroke: var(--primary);
+  stroke-width: 1.2;
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+}
+
+.segment-overlay-judge-failed {
+  fill: rgba(255, 77, 79, 0.13);
+  stroke: var(--danger);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  cursor: pointer;
+  vector-effect: non-scaling-stroke;
+}
+
+.segment-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.segment-actions button {
+  min-width: 0;
+  padding: 0 10px;
+}
+
 @media (max-width: 1200px) {
+  .source-workbench {
+    grid-template-columns: 1fr;
+  }
   .diagnostics-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .diagnostic-item:nth-child(2n) { border-right: 0; }
+  .task-row {
+    grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.65fr) auto;
+  }
+  .task-message { grid-column: 1 / -1; }
 }
 
 @media (max-width: 720px) {
@@ -953,5 +1085,6 @@ button.primary:active {
   .diagnostic-item { border-right: 0; border-bottom: 1px solid var(--border); }
   .diagnostic-item:last-child { border-bottom: 0; }
   .task-row { grid-template-columns: 1fr; align-items: stretch; }
+  .task-message { grid-column: auto; }
   .task-actions { justify-content: flex-start; }
 }

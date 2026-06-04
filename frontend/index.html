@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>bilive dashboard</title>
-    <link rel="stylesheet" href="/styles.css?v=20260602" />
+    <link rel="stylesheet" href="/styles.css?v=20260603-3" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -17,25 +17,26 @@
         <nav>
           <a class="nav-item" href="http://192.168.31.157:2233/tasks">
             <span class="nav-icon" data-icon="record"></span>
-            <span class="nav-text">&#24405;&#25773;&#25511;&#21046;&#21488;</span>
+            <span class="nav-text">录播控制台</span>
           </a>
           <a class="nav-item active" href="/tasks">
             <span class="nav-icon" data-icon="scissor"></span>
-            <span class="nav-text">&#20999;&#29255;</span>
+            <span class="nav-text">切片</span>
           </a>
           <span class="nav-item disabled" aria-disabled="true">
             <span class="nav-icon" data-icon="upload"></span>
-            <span class="nav-text">&#19978;&#20256;</span>
+            <span class="nav-text">上传</span>
           </span>
           <span class="nav-item disabled" aria-disabled="true">
             <span class="nav-icon" data-icon="setting"></span>
-            <span class="nav-text">&#35774;&#32622;</span>
+            <span class="nav-text">设置</span>
           </span>
         </nav>
         <div class="sider-trigger" id="sider-toggle" role="button" aria-label="collapse sidebar">
           <span class="nav-icon" data-icon="fold"></span>
         </div>
       </aside>
+
       <main class="main">
         <section class="page">
           <header class="toolbar">
@@ -43,24 +44,24 @@
               <nav class="breadcrumb" aria-label="breadcrumb">
                 <span class="breadcrumb-item">bilive</span>
                 <span class="breadcrumb-sep">/</span>
-                <span class="breadcrumb-item current">&#20999;&#29255;</span>
+                <span class="breadcrumb-item current">切片</span>
               </nav>
-              <h1>&#20999;&#29255;</h1>
-              <p>&#39044;&#35272;&#20505;&#36873;&#29255;&#27573;&#65292;&#35760;&#24405;&#20445;&#30041;&#12289;&#20002;&#24323;&#21644;&#24453;&#31934;&#20999;&#21028;&#26029;&#12290;</p>
+              <h1>切片</h1>
+              <p>预览录播、弹幕密度和 LLM 判断结果。</p>
             </div>
             <div class="toolbar-controls">
               <select id="room-filter">
-                <option value="">&#20840;&#37096; UP</option>
+                <option value="">全部 UP</option>
               </select>
               <select id="status-filter">
-                <option value="all">&#20840;&#37096;</option>
-                <option value="review">&#24453;&#30830;&#35748;</option>
-                <option value="keep">&#20445;&#30041;</option>
-                <option value="drop">&#20002;&#24323;</option>
+                <option value="all">全部</option>
+                <option value="review">待确认</option>
+                <option value="keep">保留</option>
+                <option value="drop">丢弃</option>
               </select>
               <span id="worker-badge" class="worker-badge worker-idle" title="PC worker 状态">PC worker: 未知</span>
               <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
-              <button id="refresh-button" type="button">&#21047;&#26032;</button>
+              <button id="refresh-button" type="button">刷新</button>
             </div>
           </header>
 
@@ -94,6 +95,7 @@
           <section id="task-panel" class="task-panel" aria-live="polite">
             <div class="task-header">
               <span class="task-title">任务队列</span>
+              <button id="task-toggle" class="task-toggle" type="button" aria-expanded="true">折叠</button>
               <span id="task-count" class="task-count">0 items</span>
             </div>
             <div id="task-list" class="task-list">
@@ -102,57 +104,80 @@
           </section>
 
           <div id="error" class="error hidden"></div>
-          <div class="workbench">
-            <section class="panel slice-list" aria-label="slice candidates">
+
+          <div class="legacy-slice-hidden hidden" aria-hidden="true">
+            <span id="slice-count">0 items</span>
+            <div id="slice-list"></div>
+            <video id="preview-video"></video>
+            <span id="file-size">-</span>
+            <span id="density-core">-</span>
+            <span id="context-window">-</span>
+            <span id="burst-rank">-</span>
+          </div>
+
+          <div class="workbench source-workbench">
+            <section class="panel source-list-panel" aria-label="source recordings">
               <div class="panel-header">
-                <span class="panel-title">&#20505;&#36873;&#20999;&#29255;</span>
-                <span class="panel-meta" id="slice-count">0 items</span>
+                <span class="panel-title">录播视频</span>
+                <span class="panel-meta" id="source-recording-count">0 items</span>
               </div>
-              <div class="panel-body" id="slice-list"></div>
+              <div class="panel-body" id="source-recording-list"></div>
             </section>
-            <section class="panel preview-panel">
+
+            <section class="panel source-preview-panel">
               <div class="panel-header">
-                <span class="panel-title">&#39044;&#35272;</span>
-                <span class="panel-meta" id="file-size">-</span>
+                <span class="panel-title">预览</span>
+                <span class="panel-meta" id="source-file-size">-</span>
               </div>
               <div class="panel-body">
-                <video id="preview-video" class="preview-video" controls preload="metadata"></video>
+                <video id="source-preview-video" class="preview-video" controls preload="metadata"></video>
+                <div class="density-chart-shell">
+                  <svg id="density-chart" class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图">
+                    <path class="density-area" d=""></path>
+                    <g id="density-segment-layer"></g>
+                  </svg>
+                </div>
                 <div class="metadata-grid">
-                  <label>&#26469;&#28304;</label><span id="source-recording">-</span>
-                  <label>&#23494;&#24230;&#26680;&#24515;</label><span id="density-core">-</span>
-                  <label>&#19978;&#19979;&#25991;&#31383;&#21475;</label><span id="context-window">-</span>
-                  <label>&#24377;&#24149;&#25968;</label><span id="danmaku-count">-</span>
-                  <label>&#29190;&#28857;&#25490;&#21517;</label><span id="burst-rank">-</span>
-                  <label>&#23792;&#20540;&#20493;&#29575;</label><span id="burst-ratio">-</span>
-                  <label>&#36136;&#37327;&#20998;</label><span id="quality-score">-</span>
+                  <label>来源</label><span id="source-recording">-</span>
+                  <label>状态</label><span id="source-status">-</span>
+                  <label>判断</label><span id="source-summary">-</span>
+                  <label>片段</label><span id="selected-segment-range">-</span>
+                  <label>弹幕数</label><span id="danmaku-count">-</span>
+                  <label>峰值倍率</label><span id="burst-ratio">-</span>
+                  <label>质量分</label><span id="quality-score">-</span>
                 </div>
               </div>
             </section>
-            <section class="panel feedback-panel" aria-label="manual feedback">
+
+            <section id="segment-panel" class="panel segment-panel" aria-label="manual segment handling">
               <div class="panel-header">
-                <span class="panel-title">&#20154;&#24037;&#21028;&#26029;</span>
+                <span class="panel-title">人工判断</span>
+                <span id="segment-status" class="panel-meta">-</span>
               </div>
               <div class="panel-body feedback-body">
-                <div class="decision-group">
-                  <button data-decision="review" type="button">review</button>
-                  <button data-decision="keep" type="button">keep</button>
-                  <button data-decision="drop" type="button">drop</button>
-                </div>
+                <label class="field"><span>标题</span><input id="segment-title" type="text" /></label>
+                <label class="field"><span>描述</span><textarea id="segment-description" rows="3"></textarea></label>
                 <label class="field">
-                  <span>&#21407;&#22240;</span>
+                  <span>原因</span>
                   <textarea id="quality-reason" rows="5"></textarea>
                 </label>
                 <div class="range-row">
-                  <label class="field"><span>&#20837;&#28857;</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
-                  <label class="field"><span>&#20986;&#28857;</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
+                  <label class="field"><span>入点</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
+                  <label class="field"><span>出点</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
                 </div>
-                <button id="save-button" class="btn-primary" type="button">&#20445;&#23384;&#21453;&#39304;</button>
+                <div class="segment-actions">
+                  <button id="segment-keep-button" class="btn-primary" type="button">keep</button>
+                  <button id="segment-drop-button" class="btn-danger" type="button">drop</button>
+                  <button id="save-button" type="button">保存区间</button>
+                  <button id="segment-retry-button" type="button">retry LLM</button>
+                  <button id="segment-render-button" type="button">render</button>
+                </div>
               </div>
             </section>
           </div>
         </section>
       </main>
     </div>
-    <script src="/app.js?v=20260602"></script>
+    <script src="/app.js?v=20260603-3"></script>
   </body>
 </html>

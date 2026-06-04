@@ -70,6 +70,66 @@ def test_build_task_inventory_returns_done_state(tmp_path):
     assert tasks[0]["done_path"] == "22384516/22384516_20260527-12-55-32.mp4.done"
 
 
+def test_done_task_shows_skipped_history_message(tmp_path):
+    """Done marker plus skipped history should keep the task done but explain why."""
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video data")
+    source.with_suffix(".xml").write_text("<danmaku/>", encoding="utf-8")
+    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+    write_task_history(
+        source,
+        status="skipped",
+        diagnostics=[
+            {
+                "id": "result",
+                "title": "切片结果",
+                "status": "warning",
+                "message": "录像小于切片阈值，已跳过",
+                "details": [],
+            }
+        ],
+        videos_root=videos,
+    )
+
+    tasks = task_state.build_task_inventory(videos_root=videos)
+
+    assert tasks[0]["status"] == "done"
+    assert tasks[0]["message"] == "录像小于切片阈值，已跳过"
+
+
+def test_done_task_shows_zero_slice_history_message(tmp_path):
+    """Done marker plus 0-slice diagnostics should explain that no clips were made."""
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video data")
+    source.with_suffix(".xml").write_text("<danmaku/>", encoding="utf-8")
+    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+    write_task_history(
+        source,
+        status="done",
+        diagnostics=[
+            {
+                "id": "result",
+                "title": "切片结果",
+                "status": "warning",
+                "message": "生成 0 个切片",
+                "details": [{"label": "切片数", "value": "0"}],
+            }
+        ],
+        videos_root=videos,
+    )
+
+    tasks = task_state.build_task_inventory(videos_root=videos)
+
+    assert tasks[0]["status"] == "done"
+    assert tasks[0]["message"] == "生成 0 个切片"
+
+
 def test_build_task_inventory_returns_failed_from_history(tmp_path):
     """Failed task history is visible after watcher removes .pending."""
     videos = tmp_path / "Videos"
