@@ -1,61 +1,97 @@
 #!/bin/bash
-# bilive-wrapper.sh — systemd wrapper for blrec + scanner on Pi
-# Manages both processes, forwards signals, exits when either dies.
-#
-# Environment variables (from /mnt/win/bilive/.secrets/env):
-#   RECORD_KEY         — blrec API key (required)
-#   BILIVE_COOKIE_FILE — cookie path (default: /mnt/win/bilive/.secrets/bilibili.cookie)
-#   BLREC_HOST         — blrec listen address (default: 0.0.0.0)
-#   BLREC_PORT         — blrec listen port (default: 2233)
+# Keep the Pi service alive while the Windows-hosted SMB share is offline.
 
-set -e
+set -u
 
-PROJECT_DIR="/mnt/win/bilive"
-cd "$PROJECT_DIR"
+PROJECT_DIR="${BILIVE_PROJECT_DIR:-/mnt/win/bilive}"
+ENV_FILE="${BILIVE_ENV_FILE:-$PROJECT_DIR/.secrets/env}"
+SETTINGS_FILE="${BILIVE_SETTINGS_FILE:-$PROJECT_DIR/settings.toml}"
+PYTHON_BIN="${BILIVE_PYTHON_BIN:-/home/ubuntu/miniforge/envs/bilive/bin/python}"
+WAIT_SECONDS="${BILIVE_WAIT_SECONDS:-300}"
+HEALTHCHECK_SECONDS="${BILIVE_HEALTHCHECK_SECONDS:-30}"
+RESTART_SECONDS="${BILIVE_RESTART_SECONDS:-10}"
+PROBE_TIMEOUT_SECONDS="${BILIVE_PROBE_TIMEOUT_SECONDS:-20}"
 
-export BILIVE_VIDEOS_DIR="/mnt/win/bilive/Videos"
-export BILIVE_LOG_DIR="/mnt/win/bilive/logs"
-export PYTHONPATH="./src"
+export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$PROJECT_DIR/Videos}"
+export BILIVE_LOG_DIR="${BILIVE_LOG_DIR:-$PROJECT_DIR/logs}"
 
-mkdir -p "$BILIVE_VIDEOS_DIR" "$BILIVE_LOG_DIR/record" "$BILIVE_LOG_DIR/runtime" "$BILIVE_LOG_DIR/scan"
+BLREC_PID=""
 
-# Validate RECORD_KEY
-if [ -z "$RECORD_KEY" ]; then
-    echo "[ERROR] RECORD_KEY not set. Add it to /mnt/win/bilive/.secrets/env"
-    exit 1
-fi
-
-# Activate conda
-CONDA_SH="$HOME/miniforge/etc/profile.d/conda.sh"
-if [ ! -f "$CONDA_SH" ]; then
-    echo "[ERROR] conda not found"
-    exit 1
-fi
-source "$CONDA_SH" && conda activate bilive
-
-# ── Cleanup: kill scanner when blrec exits ──
-cleanup() {
-    echo "[INFO] Stopping scanner (PID $SCANNER_PID)..."
-    kill "$SCANNER_PID" 2>/dev/null || true
-    wait "$SCANNER_PID" 2>/dev/null || true
+log() {
+    printf '%s %s\n' "$(date -Is)" "$*"
 }
-trap cleanup EXIT INT TERM
 
-# ── Start scanner (background) ──
-echo "[INFO] Starting scanner..."
-python -m src.agent.scanner &
-SCANNER_PID=$!
+storage_ready() {
+    timeout "$PROBE_TIMEOUT_SECONDS" stat "$ENV_FILE" >/dev/null 2>&1 &&
+        timeout "$PROBE_TIMEOUT_SECONDS" stat "$SETTINGS_FILE" >/dev/null 2>&1
+}
 
-# ── Start blrec (foreground) ──
-echo "[INFO] Starting blrec on port ${BLREC_PORT:-2233}..."
+stop_blrec() {
+    if [ -n "$BLREC_PID" ] && kill -0 "$BLREC_PID" 2>/dev/null; then
+        log "[INFO] Stopping blrec (PID $BLREC_PID)..."
+        kill -TERM "$BLREC_PID" 2>/dev/null || true
+        wait "$BLREC_PID" 2>/dev/null || true
+    fi
+    BLREC_PID=""
+}
 
-# Run blrec directly with full config
-BLREC_HOST="${BLREC_HOST:-0.0.0.0}"
-BLREC_PORT="${BLREC_PORT:-2233}"
+shutdown() {
+    stop_blrec
+    exit 0
+}
+trap shutdown INT TERM
 
-exec python -m blrec \
-    -c /mnt/win/bilive/settings.toml \
-    --host "$BLREC_HOST" \
-    --port "$BLREC_PORT" \
-    --api-key "$RECORD_KEY" \
-    --out-dir "$BILIVE_VIDEOS_DIR"
+while true; do
+    if ! storage_ready; then
+        log "[WAIT] Windows SMB share is unavailable; retrying in ${WAIT_SECONDS}s"
+        sleep "$WAIT_SECONDS"
+        continue
+    fi
+
+    unset RECORD_KEY
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    if [ -z "${RECORD_KEY:-}" ]; then
+        log "[ERROR] RECORD_KEY is missing from $ENV_FILE; retrying in ${WAIT_SECONDS}s"
+        sleep "$WAIT_SECONDS"
+        continue
+    fi
+
+    if ! cd "$PROJECT_DIR" ||
+        ! mkdir -p "$BILIVE_VIDEOS_DIR" "$BILIVE_LOG_DIR/record"; then
+        log "[WAIT] Windows SMB share became unavailable during setup"
+        sleep "$WAIT_SECONDS"
+        continue
+    fi
+
+    BLREC_HOST="${BLREC_HOST:-0.0.0.0}"
+    BLREC_PORT="${BLREC_PORT:-2233}"
+    log "[INFO] Windows SMB share is ready; starting blrec on ${BLREC_HOST}:${BLREC_PORT}"
+
+    "$PYTHON_BIN" -m blrec \
+        --host "$BLREC_HOST" \
+        --port "$BLREC_PORT" \
+        -c "$SETTINGS_FILE" \
+        --api-key "$RECORD_KEY" &
+    BLREC_PID=$!
+
+    while kill -0 "$BLREC_PID" 2>/dev/null; do
+        sleep "$HEALTHCHECK_SECONDS"
+        if ! storage_ready; then
+            log "[WAIT] Windows SMB share was disconnected"
+            stop_blrec
+            break
+        fi
+    done
+
+    if [ -n "$BLREC_PID" ]; then
+        wait "$BLREC_PID"
+        status=$?
+        BLREC_PID=""
+        log "[WARN] blrec exited with status $status; retrying in ${RESTART_SECONDS}s"
+        sleep "$RESTART_SECONDS"
+    else
+        log "[WAIT] Waiting ${WAIT_SECONDS}s before checking the Windows SMB share"
+        sleep "$WAIT_SECONDS"
+    fi
+done

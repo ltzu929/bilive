@@ -1,20 +1,21 @@
 [Unit]
 Description=Bilive B站直播录制
-After=network-online.target
-Wants=network-online.target
+After=network-online.target mnt-win.automount
+Wants=network-online.target mnt-win.automount
 
 [Service]
 Type=simple
 User=ubuntu
-EnvironmentFile=/mnt/win/bilive/.secrets/env
 Environment=BILIVE_VIDEOS_DIR=/mnt/win/bilive/Videos
 Environment=BILIVE_LOG_DIR=/mnt/win/bilive/logs
 Environment=BILIVE_COOKIE_FILE=/mnt/win/bilive/.secrets/bilibili.cookie
+Environment=BILIVE_WAIT_SECONDS=300
+Environment=BILIVE_HEALTHCHECK_SECONDS=30
 ExecStart=/usr/local/bin/bilive-start.sh
-Restart=on-failure
+Restart=always
 RestartSec=10
-StandardOutput=null
-StandardError=null
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
