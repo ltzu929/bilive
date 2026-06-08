@@ -1,1 +1,1 @@
-from db.conn import *
+from .conn import *
