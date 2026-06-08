@@ -17,7 +17,8 @@ Windows / D:\alldata\pi\bilive
   worker_api 127.0.0.1:2235
   src.server.watcher --once 处理 pending 后退出；失败写 task history 并等待人工重排
   faster-whisper ASR -> SRT -> 字幕烧录
-  SQLite 上传队列 -> src.upload.upload
+  worker_api 自动启动单实例 src.upload.upload
+  SQLite 上传队列 -> UPOS 上传 -> Web add/v3 发布
   任务清单 GET /api/tasks（状态：ready/pending/done/failed）
   恢复操作 requeue / cancel-pending / mark-done
   .mp4.task.json 记录处理历史、错误、切片数和输出路径
@@ -34,8 +35,9 @@ Windows / D:\alldata\pi\bilive
 | `src/dashboard/file_store.py` | 切片/房间信息读取；房间下拉优先从本地 jsonl 粉丝牌锚点提取 UP 名 |
 | `src/dashboard/task_state.py` | 任务状态模型：统一展示源录播状态（ready/pending/done/failed等） |
 | `src/dashboard/slice_control.py` | 扫描可处理录播，写 `.mp4.pending` 标记 |
-| `src/server/worker_api.py` | 本机 worker API，默认 `127.0.0.1:2235`，含 `/api/worker/status` |
+| `src/server/worker_api.py` | 本机 worker API，默认 `127.0.0.1:2235`，含切片和上传状态接口 |
 | `src/server/worker_control.py` | worker 生命周期管理，状态含 `started_at`/`command`/`log_path` |
+| `src/server/upload_control.py` | 自动上传消费者的单实例子进程管理 |
 | `src/server/watcher.py` | 一次性处理 `.mp4.pending`；成功写 `.done` 和历史，失败写 `.task.json` 并移除 `.pending` |
 | `src/burn/task_history.py` | 任务历史侧卡（`.mp4.task.json`），记录成功/失败和切片数 |
 | `src/burn/slice_only.py` | 单个录播的切片主流程 |
@@ -86,7 +88,18 @@ python -m src.server.watcher --once --videos-dir .\Videos
 
 ### 上传
 
-上传由 `src.upload.upload` 消费 SQLite 队列。需要上传时单独启动上传进程，避免调试切片时误传。
+`start_pc_worker_api.ps1` 默认自动启动单实例 `src.upload.upload`。LLM 判定保留的
+切片入队后会自动上传并通过 Web `add/v3` 发布。发布失败会保留远端文件名，
+后续只重试发布，不重复上传视频字节。
+
+调试切片而不上传时使用：
+
+```powershell
+.\start_pipeline.ps1 -NoUpload
+```
+
+状态接口：`GET http://127.0.0.1:2235/api/upload/status`。历史 `locked=1/2`
+队列行迁移为 `failed`，不会自动重传。
 
 ## 当前 ASR 配置
 
@@ -120,7 +133,8 @@ logs/runtime/dashboard-*.log          # dashboard 请求
 logs/runtime/pc-worker-*.log          # 页面触发的一次性 worker
 logs/runtime/slice-*.err              # 旧 scan_slice 脚本日志
 logs/runtime/slice-progress.json      # 切片进度/诊断面板数据
-logs/runtime/upload-*.log             # 上传队列消费者
+logs/runtime/upload-process-*.log     # 自动上传消费者
+logs/runtime/upload-status.json       # 上传状态、队列计数和最近 BVID
 ```
 
 判断问题时先看：

@@ -9,7 +9,7 @@
 这个 fork 主要做四件事：
 
 - 用 Pi 上的 `blrec` 录制 B 站直播和弹幕，Web UI 默认在 `http://192.168.31.157:2233`。
-- 通过 `bilitool` 登录 B 站，并把 cookie 持久化到本地私有文件，避免每次重登。
+- 从本地 `.secrets/bilibili.cookie` 读取 B 站凭据并自动发布保留切片。
 - 在 Windows/PC 端扫描录制完成的视频，处理弹幕、ASR、字幕烧录、切片，并把待上传文件写入 SQLite 上传队列。
 - 支持 dashboard 启动的一次性切片 worker：页面只写 `.pending`，Pi 可触发 Windows 计划任务，PC worker 处理完自动退出。
 
@@ -25,7 +25,7 @@
 2. Windows 端在 `D:\alldata\pi\bilive` 编辑和运行切片/上传代码。
 3. 推荐在 Windows 注册 `BiliveSliceOnce` 计划任务，再让 Pi dashboard 点击“启动切片”时触发它。
 4. 切片页面写 `.mp4.pending` 标记，Windows 执行 `src.server.watcher --once`，处理完 `.pending` 后写 `.done` 并退出。
-5. 需要上传时单独启动上传队列消费者，避免调试切片时误传。
+5. `start_pc_worker_api.ps1` 自动启动单实例上传消费者；调试时用 `-NoUpload` 禁用。
 
 Pi 端服务检查：
 
@@ -289,20 +289,27 @@ $env:BILIVE_DELETE_SOURCE_AFTER_SLICE = "1"
 
 ### 上传流
 
-切片会把待上传文件写入 SQLite 上传队列。需要上传时再单独运行上传消费者：
+切片会把待上传文件写入 SQLite 上传队列。推荐的 PC worker API 会自动启动
+上传消费者，无需单独运行命令：
 
 ```powershell
 cd D:\alldata\pi\bilive
-$env:PYTHONPATH = "$PWD;$PWD\src"
-$env:BILIVE_CONFIG = "$PWD\bilive-server.toml"
-python -m src.upload.upload
+.\start_pc_worker_api.ps1
 ```
 
-调试切片时可以先不启动上传进程，避免误传。
+查看状态：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:2235/api/upload/status
+```
+
+调试切片、避免投稿时运行 `.\start_pipeline.ps1 -NoUpload`，或在启动
+worker API 前设置 `BILIVE_AUTO_UPLOAD=0`。
 
 ### 人工反馈精切流
 
-如果使用 dashboard 先人工判断候选，推荐先走上面的“一次性切片流”生成候选，但不要启动上传消费者。当前源录播默认保留，不需要再设置 `BILIVE_KEEP_SOURCE`。
+LLM 判定保留的候选会自动入队；`judge_failed` 候选不会自动上传，仍可在
+dashboard 人工判断。当前源录播默认保留，不需要再设置 `BILIVE_KEEP_SOURCE`。
 
 在 `/tasks` 标注候选后，再运行：
 
@@ -446,11 +453,13 @@ image_gen_model = "minimax"
 src/db/data.db
 ```
 
-它已被 `.gitignore` 忽略。处理流程把待上传文件写入 `upload_queue`，上传进程会循环读取：
+它已被 `.gitignore` 忽略。队列显式记录
+`queued/uploading/uploaded/publishing/published/failed` 状态：
 
-- 上传成功：删除视频文件、删除队列记录。
-- 上传失败：把队列记录标记为 locked。
-- 文件损坏：根据 `reserve_for_fixing` 决定保留还是删除。
+- UPOS 成功后先保存 `remote_filename`，发布失败不会重复上传视频。
+- 发布成功后记录 BVID，并按配置删除本地切片和 `.upload.json`。
+- 网络和服务错误有限重试，达到上限后变为 `failed`。
+- 历史 `locked=1/2` 行不会自动恢复或重传。
 
 ## 日志
 
@@ -469,7 +478,7 @@ logs/upload/      # 上传流程日志
 2. 页面启动切片没反应：看是否启动了 `start_pc_worker_api.ps1`，以及 `logs/runtime/pc-worker-*.log`。
 3. 切片进度异常：看 `logs/runtime/slice-progress.json` 和页面诊断面板。
 4. ASR 失败：看 `logs/runtime/pc-worker-*.log` 里的 HuggingFace 下载、`cublas64_12.dll` 或 faster-whisper 错误。
-5. 不上传：看 `logs/runtime/upload-*.log` 和 `logs/upload/`。
+5. 不上传：看 `/api/upload/status`、`logs/runtime/upload-status.json` 和 `upload-process-*.log`。
 6. 切片被跳过：看 `min_video_size`、弹幕 burst 诊断和 pending/done 标记。
 
 ## 常见问题

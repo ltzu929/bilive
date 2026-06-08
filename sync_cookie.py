@@ -75,11 +75,10 @@ def main():
     # 2. Update bilitool config.json directly
     update_config_json(cookies)
     
-    # 3. Remind about known issue
+    # 3. Explain compatibility scope
     print()
-    print("[NOTE] B站 POST 发布接口 (/x/vu/client/add) 可能返回 code=-101 '账号未登录'。")
-    print("  这是已知未解决问题（见 AGENTS.md），即使 cookie 正确也可能出现。")
-    print("  视频文件会成功上传到 CDN，仅最后发布步骤失败。")
+    print("[NOTE] 自动上传直接读取 .secrets/bilibili.cookie。")
+    print("  cookie.json 和 bilitool config.json 仅供旧命令兼容。")
 
 if __name__ == "__main__":
     main()

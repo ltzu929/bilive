@@ -97,21 +97,17 @@ $env:BILIVE_DELETE_SOURCE_AFTER_SLICE = "1"
 
 才会删除源文件。
 
-## B站上传发布接口 code=-101（未解决）
+## 历史上传失败行不会自动重传
 
-即使 cookie 有效（GET `api.bilibili.com` 已验证登录），POST `/x/vu/client/add` 发布接口仍可能返回 code=-101 "账号未登录"。
+旧消费者调用已失效的 `/x/vu/client/add`，部分队列行可能在视频上传到 CDN
+后留下 `locked=1`。当前消费者已改用 Web `/x/vu/web/add/v3`，并把 UPOS
+上传和发布拆成两个可恢复阶段。
 
-- 视频文件可能已经成功上传到 CDN。
-- 失败点通常在最后发布接口。
-- blrec 录制不受影响。
+迁移时已有 `locked=1/2` 行会变为 `failed`，不会自动解锁，因为无法确认旧
+CDN 对象是否已被使用。新入队切片不受影响。需要处理历史行时应先人工核对
+本地文件和 B 站投稿记录。
 
-cookie 格式问题：bilitool 上传模块期望 JSON 格式，而 `.secrets/bilibili.cookie` 是分号分隔文本。运行：
-
-```powershell
-python sync_cookie.py
-```
-
-可同步转换。
+自动上传直接读取 `.secrets/bilibili.cookie`，不再依赖 `sync_cookie.py`。
 
 ## Windows subprocess 编码
 

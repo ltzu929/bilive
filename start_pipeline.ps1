@@ -2,7 +2,7 @@
 # Starts local helper services for the dashboard workflow:
 # - optional LM Studio
 # - local PC worker API on 127.0.0.1:2235
-# - optional upload queue consumer
+# - upload queue consumer managed by the worker API
 #
 # It does not start the legacy full-directory scan_slice loop by default.
 # Queue slice jobs from /tasks, then the browser will trigger the one-shot worker.
@@ -29,6 +29,13 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:BILIVE_CONFIG = "$ProjectDir\bilive-server.toml"
 $env:BILIVE_VIDEOS_DIR = "$ProjectDir\Videos"
+$env:BILIVE_DB_PATH = "$ProjectDir\src\db\data.db"
+$env:BILIVE_COOKIE_FILE = "$ProjectDir\.secrets\bilibili.cookie"
+if ($NoUpload) {
+    $env:BILIVE_AUTO_UPLOAD = "0"
+} elseif (-not $env:BILIVE_AUTO_UPLOAD) {
+    $env:BILIVE_AUTO_UPLOAD = "1"
+}
 
 $pythonW = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
 if (-not $pythonW) {
@@ -103,20 +110,7 @@ if (-not $NoWorkerApi) {
     }
 }
 
-# 3. Optional upload queue consumer
-if (-not $NoUpload) {
-    $uploadLog = "$logDir\upload-$dateSuffix.log"
-    Write-Host "[upload] Starting (log: upload-$dateSuffix.log)..."
-    $proc = Start-Process -FilePath $pythonW `
-        -ArgumentList "-m", "src.upload.upload" `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $uploadLog `
-        -RedirectStandardError "$logDir\upload-$dateSuffix.err" `
-        -PassThru
-    Write-Host "[upload] PID: $($proc.Id)"
-}
-
-# 4. Legacy compatibility path
+# 3. Legacy compatibility path
 if ($RunLegacyScanSlice) {
     $sliceLog = "$logDir\slice-legacy-$dateSuffix.log"
     Write-Warning "[scan_slice] Running legacy full-directory scan once. Prefer /tasks + PC worker for daily use."
@@ -133,3 +127,4 @@ Write-Host ""
 Write-Host "=== PC helpers started. Safe to close this window. ==="
 Write-Host "Slice workflow: open /tasks and click Start Slice."
 Write-Host "Worker API: http://127.0.0.1:2235/api/worker/status"
+Write-Host "Upload status: http://127.0.0.1:2235/api/upload/status"
