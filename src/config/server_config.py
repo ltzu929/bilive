@@ -64,6 +64,22 @@ GIFT_PRICE_FILTER = config.get("video", {}).get("gift_price_filter")
 RESERVE_FOR_FIXING = config.get("video", {}).get("reserve_for_fixing")
 UPLOAD_LINE = config.get("video", {}).get("upload_line")
 
+# ── 上传消费者配置 ──
+UPLOAD_AUTO_START = config.get("upload", {}).get("auto_start", True)
+UPLOAD_POLL_INTERVAL_SECONDS = config.get("upload", {}).get(
+    "poll_interval_seconds", 10
+)
+UPLOAD_MAX_ATTEMPTS = config.get("upload", {}).get("max_attempts", 3)
+UPLOAD_RETRY_BASE_SECONDS = config.get("upload", {}).get(
+    "retry_base_seconds", 30
+)
+UPLOAD_AUTH_RETRY_SECONDS = config.get("upload", {}).get(
+    "auth_retry_seconds", 120
+)
+UPLOAD_DELETE_AFTER_SUCCESS = config.get("upload", {}).get(
+    "delete_after_success", True
+)
+
 # ── 切片配置 ──
 AUTO_SLICE = config.get("slice", {}).get("auto_slice")
 SLICE_DURATION = config.get("slice", {}).get("slice_duration")

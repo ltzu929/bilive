@@ -37,6 +37,14 @@ gift_price_filter = 1
 reserve_for_fixing = false
 upload_line = "auto"
 
+[upload]
+auto_start = true
+poll_interval_seconds = 10
+max_attempts = 3
+retry_base_seconds = 30
+auth_retry_seconds = 120
+delete_after_success = true
+
 [slice]
 auto_slice = false
 slice_method = "burst"               # "density"(旧) 或 "burst"(新 - 弹幕突增检测)

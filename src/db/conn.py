@@ -182,6 +182,28 @@ def insert_upload_queue(
         return False
 
 
+def peek_next_upload(
+    db_path: str | Path | None = None,
+    *,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    migrate_upload_queue(db_path)
+    due_at = time.time() if now is None else float(now)
+    with connect(db_path) as db:
+        row = db.execute(
+            """
+            select *
+            from upload_queue
+            where status in ('queued', 'uploaded')
+              and coalesce(next_attempt_at, 0) <= ?
+            order by id
+            limit 1
+            """,
+            (due_at,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def claim_next_upload(
     db_path: str | Path | None = None,
     *,
