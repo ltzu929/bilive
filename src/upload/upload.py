@@ -14,6 +14,7 @@ import toml
 
 from src.db.conn import (
     claim_next_upload,
+    defer_upload_for_auth,
     get_upload_queue_counts,
     list_upload_queue,
     mark_upload_complete,
@@ -352,13 +353,18 @@ class UploadWorker:
                 db_path=self.settings.db_path,
                 now=current_time,
             )
+            cleanup_error = ""
             if self.settings.delete_after_success:
-                self._cleanup(video_path, metadata)
+                try:
+                    self._cleanup(video_path, metadata)
+                except Exception as exc:
+                    cleanup_error = self._sanitize_error(exc)
             return self._finish(
                 UploadResult(
                     status="published",
                     video_path=video_path,
                     bvid=bvid,
+                    error=cleanup_error,
                 )
             )
         except Exception as exc:
@@ -408,6 +414,24 @@ class UploadWorker:
         paused_auth: bool = False,
     ) -> UploadResult:
         sanitized = self._sanitize_error(error)
+        if paused_auth:
+            next_attempt_at = now + self.settings.auth_retry_seconds
+            defer_upload_for_auth(
+                video_path,
+                sanitized,
+                retry_at=next_attempt_at,
+                db_path=self.settings.db_path,
+                now=now,
+            )
+            return self._finish(
+                UploadResult(
+                    status="paused_auth",
+                    video_path=video_path,
+                    error=sanitized,
+                    next_attempt_at=next_attempt_at,
+                )
+            )
+
         item = schedule_upload_retry(
             video_path,
             sanitized,
@@ -426,7 +450,7 @@ class UploadWorker:
             )
         return self._finish(
             UploadResult(
-                status="paused_auth" if paused_auth else "retry",
+                status="retry",
                 video_path=video_path,
                 error=sanitized,
                 next_attempt_at=float(item["next_attempt_at"] or 0),

@@ -224,6 +224,28 @@ def test_success_can_keep_local_files(tmp_path):
     assert sidecar.exists()
 
 
+def test_cleanup_failure_does_not_retry_published_submission(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    video_path, _ = queue_slice(tmp_path, settings)
+    client = FakeBilibiliClient()
+    worker = UploadWorker(settings, client)
+    monkeypatch.setattr(
+        worker,
+        "_cleanup",
+        lambda *args: (_ for _ in ()).throw(OSError("file is in use")),
+    )
+
+    result = worker.process_one(now=100)
+
+    assert result.status == "published"
+    assert "file is in use" in result.error
+    row = get_upload_item(str(video_path), settings.db_path)
+    assert row["status"] == "published"
+    assert row["attempts"] == 0
+    assert len(client.submit_calls) == 1
+    assert video_path.exists()
+
+
 def test_auth_error_during_publish_preserves_remote_filename(tmp_path):
     settings = make_settings(tmp_path)
     video_path, _ = queue_slice(tmp_path, settings)
@@ -238,6 +260,8 @@ def test_auth_error_during_publish_preserves_remote_filename(tmp_path):
     row = get_upload_item(str(video_path), settings.db_path)
     assert row["status"] == "uploaded"
     assert row["remote_filename"] == "remote-file"
+    assert row["attempts"] == 0
+    assert row["next_attempt_at"] == 130
     assert len(client.upload_calls) == 1
 
 

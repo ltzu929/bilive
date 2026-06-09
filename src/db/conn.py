@@ -380,6 +380,41 @@ def schedule_upload_retry(
         return _fetch_item(db, video_path)
 
 
+def defer_upload_for_auth(
+    video_path: str,
+    error: str,
+    *,
+    retry_at: float,
+    db_path: str | Path | None = None,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    updated_at = time.time() if now is None else float(now)
+    migrate_upload_queue(db_path)
+    with connect(db_path) as db:
+        db.execute(
+            """
+            update upload_queue
+            set status = case
+                    when remote_filename is not null and remote_filename != ''
+                        then 'uploaded'
+                    else 'queued'
+                end,
+                locked = 0,
+                next_attempt_at = ?,
+                last_error = ?,
+                updated_at = ?
+            where video_path = ?
+            """,
+            (
+                float(retry_at),
+                str(error),
+                updated_at,
+                str(video_path),
+            ),
+        )
+        return _fetch_item(db, video_path)
+
+
 def recover_upload_queue(
     db_path: str | Path | None = None,
     *,
