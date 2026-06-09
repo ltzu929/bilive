@@ -4,7 +4,7 @@
 # 工作流程:
 # 1. 扫描 VIDEOS_DIR 下的 *.pending 文件
 # 2. 读取标记中的相对路径，拼接 PC 本地绝对路径
-# 3. 调用现有处理管线 (slice_only / render_video)
+# 3. 调用唯一支持的 slice_only 处理管线
 # 4. 成功后将 .pending 改为 .done，写 `.mp4.task.json` 历史
 # 5. 失败则写 `.mp4.task.json` (status=failed)，删除 .pending（不再自动重试）
 
@@ -65,7 +65,7 @@ def process_pending_videos(videos_dir: str = None) -> int:
             # 读标记中的 slice_options（burst 参数覆盖）
             slice_options = marker.get("slice_options", {}) or {}
 
-            # 执行处理管线
+            # 执行唯一支持的切片处理管线
             pipeline_result = {}
             if action == "slice":
                 from src.burn.slice_only import slice_only
@@ -74,9 +74,6 @@ def process_pending_videos(videos_dir: str = None) -> int:
                     pipeline_result = result
                 if pipeline_result.get("status") == "failed":
                     raise RuntimeError(pipeline_result.get("error") or "slice pipeline failed")
-            elif action == "render":
-                from src.burn.render_video import render_video
-                render_video(video_path)
             else:
                 raise ValueError(f"Unknown action: {action}")
 

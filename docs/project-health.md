@@ -1,6 +1,6 @@
 # 项目体检
 
-更新时间：2026-06-08
+更新时间：2026-06-09
 
 这份文档记录当前仓库的可用入口、历史包袱和后续清理建议。它不是设计稿，而是按当前实际运行状态整理出来的维护索引。
 
@@ -16,6 +16,7 @@
 | PC worker API | `start_pc_worker_api.ps1` -> `src.server.worker_api` | 浏览器本机调用 `127.0.0.1:2235`，管理切片 worker 和上传消费者 |
 | 切片执行 | `src.server.watcher --once` -> `src.burn.slice_only` | 只处理 `.mp4.pending`，成功后写 `.mp4.done` + `.mp4.task.json` |
 | 任务历史 | `src/burn/task_history.py` | 每次处理后写 `.mp4.task.json` 保存结果（成功/失败、切片数、错误） |
+| 候选分析 | `src/autoslice/candidate_analyzer.py` | ASR 时间戳 + 窗口弹幕交给同一 LLM，明确 keep/drop |
 | ASR/字幕 | `src/autoslice/mllm_sdk/audio_analyzer.py` + `src/burn/subtitle_burn.py` | `faster-whisper large-v3 cpu int8`，只用真实时间戳烧录 |
 | 上传 | `src.server.upload_control` -> `src.upload.upload` | worker API 自动启动单实例消费者，UPOS 与 Web 发布可恢复 |
 
@@ -28,16 +29,14 @@
 | `start_pc_worker_api.ps1` | 推荐。启动本机 worker API、自动上传消费者，并按页面请求运行 one-shot 切片 worker |
 | `run_slice.ps1` | 手动处理 pending 队列一次 |
 | `slice.sh` | Pi/Linux 手动处理 pending 队列一次 |
-| `start_pipeline.ps1` | PC helper 启动器。默认启动 LM Studio、worker API、上传消费者；默认不跑旧 `scan_slice` |
-| `server.sh` | Pi/Linux helper 启动器。默认不跑旧 `scan_slice` |
+| `start_pipeline.ps1` | PC helper 启动器。启动 LM Studio、worker API、上传消费者 |
+| `server.sh` | Linux helper 启动器。切片仍只由 pending worker 触发 |
 | `sync_cookie.py` | 同步 bilitool cookie 格式 |
 
 ### 兼容/历史入口
 
 | 文件 | 问题 |
 |------|------|
-| `src.burn.scan_slice` | 全目录扫描器，不看 pending 队列。仅兼容排查时用 `--once` |
-| `start_pipeline.ps1 -RunLegacyScanSlice` | 显式兼容旧全目录扫描一次 |
 | `run_upload.ps1` / `upload.sh` | 手动上传消费者；进程锁阻止与自动消费者重复运行 |
 | `_slice_daemon.bat` / `_test_slice.bat` | 已改成 pending one-shot，保留给旧快捷方式 |
 | `_upload_daemon.bat` / `_test_upload.bat` | 旧上传快捷方式 |
@@ -50,8 +49,8 @@
 |------|------|------|
 | `src/dashboard/` | 活跃 | dashboard API 和切片页面数据 |
 | `src/server/` | 活跃 | worker API、pending watcher |
-| `src/burn/` | 活跃/混合 | `slice_only.py` 活跃；`scan.py/render_*` 是上游整场渲染遗留 |
-| `src/autoslice/` | 活跃/混合 | burst、ASR、标题分析活跃；多云厂商 SDK 多数是上游遗留 |
+| `src/burn/` | 活跃/混合 | `slice_only.py` 活跃；`scan.py/render_*` 是不可达的上游整场渲染兼容代码 |
+| `src/autoslice/` | 活跃/混合 | burst、candidate analyzer、ASR、LLM judge 活跃；标题云厂商 SDK 多数是上游遗留 |
 | `src/upload/` | 活跃 | 上传队列和 bilitool 封装 |
 | `frontend/` | 活跃 | 无构建静态 dashboard |
 | `docs/` | 混合 | 顶层文档是当前说明；`docs/plans`、`docs/specs`、`docs/superpowers` 是历史设计记录 |
@@ -65,13 +64,14 @@
 1. `cookie.json` 仍被 Git 跟踪，同时属于敏感/本机状态文件。`.gitignore` 已补上 `cookie.json`，但已跟踪文件需要后续用 `git rm --cached cookie.json` 从索引移除。
 2. `.worktrees/slice-edit-instructions` 里有旧 worktree 副本和大文件，占空间但已被 ignore。需要确认不再用后再清理。
 3. `src/subtitle/whisper/` vendored 了完整 Whisper 实现和 tokenizer 资产；当前主路径是 `faster-whisper`，这里应作为后续瘦身候选。
-4. 根目录脚本太多，历史入口和当前入口混在一起。已先把危险的旧全目录扫描从默认脚本里拿掉，后续可继续归档旧脚本。
+4. 根目录脚本仍偏多，历史快捷方式和当前入口混在一起，后续可继续归档旧脚本。
 5. `docs/plans`、`docs/specs`、`docs/superpowers` 记录了很多历史方案，不应被当成当前运行说明。当前说明以 `AGENTS.md`、`README.md`、`docs/scan.md` 为准。
 6. `src/upload/bilitool` 是 submodule。不要把本 fork 的 Web 发布逻辑直接改进子模块；当前封装位于 `src/upload/bilibili_web.py`。
 
 ## 已做的低风险整理
 
-- `start_pipeline.ps1` 默认不再启动旧 `scan_slice`，只在 `-RunLegacyScanSlice` 下兼容跑一次。
+- 删除全目录扫描模块及其兼容启动参数，生产切片只消费 pending 队列。
+- 自动投稿增加严格门禁：ASR 时间戳、窗口弹幕、LLM keep、字幕、元数据和队列均成功才放行。
 - worker API 默认自动启动上传消费者，`-NoUpload` 或 `BILIVE_AUTO_UPLOAD=0` 可禁用。
 - 上传队列改为显式状态机，发布失败保留远端文件名，不重复发送视频字节。
 - `run_slice.ps1`、`slice.sh`、`_slice_daemon.bat`、`_test_slice.bat` 改为处理 pending 队列一次。
@@ -97,7 +97,7 @@
 1. `git rm --cached cookie.json`，把真实 cookie 从版本索引里移走。
 2. 清理 `.worktrees/slice-edit-instructions` 和 prunable worktree。
 3. 移除或外置 `src/subtitle/whisper/` vendored 代码。
-4. 移除旧 `scan_slice` 全目录扫描入口，完全改为 pending 队列。
+4. 评估并删除不可达的 `render_*` 和标题云厂商兼容模块。
 
 ## 判断准则
 

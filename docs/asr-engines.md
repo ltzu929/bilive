@@ -96,6 +96,7 @@ $env:HF_TOKEN = "hf_xxx"
 | `bilive-server.toml` | 当前 ASR 配置 |
 | `src/autoslice/mllm_sdk/audio_analyzer.py` | ASR 引擎加载和转录 |
 | `src/autoslice/mllm_sdk/multi_modal_analyzer.py` | 分析管线参数透传 |
-| `src/autoslice/title_generator.py` | 调用 ASR/标题分析 |
+| `src/autoslice/candidate_analyzer.py` | 生产候选 ASR，并把转录和窗口弹幕交给 LLM |
+| `src/autoslice/title_generator.py` | 上游标题生成兼容模块，不在 pending 生产主路径 |
 | `src/burn/subtitle_burn.py` | SRT 生成和字幕烧录 |
 | `tests/test_subtitle_burn.py` | 字幕烧录测试 |

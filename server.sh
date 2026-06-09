@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start PC-side helper services for the dashboard workflow.
-# This starts the worker API and upload consumer, but not the legacy scan_slice loop.
+# Slicing is only started by pending jobs through the worker API.
 
 set -e
 

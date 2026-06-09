@@ -10,7 +10,7 @@
 
 - 用 Pi 上的 `blrec` 录制 B 站直播和弹幕，Web UI 默认在 `http://192.168.31.157:2233`。
 - 从本地 `.secrets/bilibili.cookie` 读取 B 站凭据并自动发布保留切片。
-- 在 Windows/PC 端扫描录制完成的视频，处理弹幕、ASR、字幕烧录、切片，并把待上传文件写入 SQLite 上传队列。
+- 在 Windows/PC 端消费 dashboard 提交的 pending 录播，处理弹幕、ASR、LLM 判断、字幕烧录，并把合格切片写入 SQLite 上传队列。
 - 支持 dashboard 启动的一次性切片 worker：页面只写 `.pending`，Pi 可触发 Windows 计划任务，PC worker 处理完自动退出。
 
 请先确认录制和上传行为符合主播授权、平台规则和你自己的使用场景。本项目不适合未经授权的大规模录制或商业使用。
@@ -73,7 +73,7 @@ python -m src.server.watcher --once --videos-dir .\Videos
 - 上游 README 中的大量推广、通用部署说明和完整模型矩阵不再是本 fork 的主文档。
 - Docker / Compose 文件仍在仓库里，但当前没有围绕本 fork 的 cookie 持久化和本地配置策略重新整理，不建议作为首选启动方式。
 - `settings.toml` 已从 Git 删除并加入 `.gitignore`，它现在是本机私有配置，不应提交。
-- `src.burn.scan_slice` 是旧的全目录扫描入口，当前不建议做日常切片。`start_pipeline.ps1` 默认不再启动它，只有显式传 `-RunLegacyScanSlice` 才会兼容跑一次。
+- 旧的全目录 `scan_slice` 入口已经删除；生产切片只消费 dashboard 写入的 pending 队列。
 
 ## 目录结构
 
@@ -87,7 +87,7 @@ python -m src.server.watcher --once --videos-dir .\Videos
 ├── start_pc_worker_api.ps1       # Windows 本机 worker API，供 dashboard 触发一次性切片
 ├── run_slice_once.ps1            # Windows 计划任务执行的一次性 pending worker
 ├── install_windows_slice_task.ps1 # 注册 BiliveSliceOnce 手动计划任务
-├── start_pipeline.ps1            # Windows PC helper 启动器，默认不跑旧 scan_slice
+├── start_pipeline.ps1            # Windows PC helper 启动器
 ├── refine_feedback.sh           # 人工反馈驱动的精切 + 入上传队列入口
 ├── src/
 │   ├── burn/                    # 扫描、渲染、切片处理
@@ -257,8 +257,11 @@ timeout = 10
 3. Windows 任务运行 `run_slice_once.ps1`。
 4. 脚本同步启动 `python -m src.server.watcher --once --videos-dir .\Videos`。
 5. watcher 只处理 pending 队列，调用 `slice_only()`。
-6. `slice_only()` 做弹幕 burst 检测、ffmpeg 切片、faster-whisper ASR、SRT 生成、字幕烧录、分析结果和上传队列写入。
-7. 成功后 `.mp4.pending` 变成 `.mp4.done`，worker 自动退出，计划任务结束。
+6. `slice_only()` 做弹幕 burst 检测和 ffmpeg 候选切片。
+7. 每个候选必须获得非空 ASR、有效段级时间戳，并把窗口弹幕和转录一起交给 LLM。
+8. 只有 LLM 明确返回 `keep`、字幕烧录成功、元数据写入成功且队列落库成功，切片才进入自动上传。
+9. ASR、LLM、字幕、元数据或队列失败时保留候选供人工复核；LLM 明确 `drop` 时删除候选。
+10. 处理结束后 `.mp4.pending` 变成 `.mp4.done`，worker 自动退出，计划任务结束。
 
 兼容入口仍可用：
 
@@ -277,15 +280,9 @@ $env:BILIVE_DELETE_SOURCE_AFTER_SLICE = "1"
 
 才会在切片完成后删除源文件。
 
-### 旧独立扫描入口
+### 单一切片入口
 
-`src.burn.scan_slice` 属于旧的全目录扫描路径。它会扫描整个 `Videos/`，不是只处理页面提交的 pending 队列。日常切片不要优先使用它，否则可能：
-
-- 重复处理已经切过但没有 `.done` 的整场录播。
-- 把已生成的 `123s_room_time.mp4` 切片产物也扫一遍，然后报 `No danmaku file`。
-- 在旧循环里每 120 秒再次进入处理。
-
-需要兼容排查时可以手动加 `--once`，或者用 `start_pipeline.ps1 -RunLegacyScanSlice` 跑一次；日常仍推荐走 `src.server.watcher --once`。
+生产切片只允许通过 `src.server.watcher --once` 消费 `.mp4.pending`。旧的全目录扫描入口已经删除，避免重复处理历史录播或误扫切片产物。
 
 ### 上传流
 
@@ -383,17 +380,24 @@ slice_num = 2
 slice_overlap = 30
 slice_step = 1
 min_video_size = 20
-mllm_model = "local-audio"
 ```
 
 `auto_slice` 只影响普通处理流中的附加切片。当前 `slice.sh` 只处理 pending 队列一次，不依赖普通整场渲染流。
 
-当前支持的 `mllm_model`：
+生产路径不再通过 `mllm_model` 选择标题生成器。候选统一由
+`src.autoslice.candidate_analyzer` 执行 ASR，再由 `[slice.llm_judge]`
+配置的 LLM 同时读取转录和窗口弹幕：
 
-- `local-audio`：默认本地音频分析，适合 8GB 显存或关闭视觉分析的场景。
-- `multi-modal`：本地音频 + LM Studio/OpenAI-compatible 视觉模型。
-- `qwen-omni`：DashScope Qwen Omni API，返回标题、描述、标签、质量评分等结构化结果。
-- `qwen` / `gemini` / `zhipu` / `sensenova`：上游保留的云端标题生成模型。
+```toml
+[slice.llm_judge]
+provider = "openai-compatible" # 或 local-subprocess
+local_command = []
+timeout = 120
+```
+
+`openai-compatible` 使用 `[slice.multi_modal]` 中的
+`visual_model_url` 和 `visual_model_name`。`local-subprocess` 每个候选启动
+一次本地命令，从 stdin 读取 JSON，并从 stdout 返回判断 JSON。
 
 ### `[slice.omni]`
 
@@ -404,11 +408,12 @@ enable_deep_analysis = true
 analysis_prompt = ""
 ```
 
-当 `mllm_model = "qwen-omni"` 或返回 `AnalysisResult` 的本地分析模式启用时，这些配置会影响：
+这些配置当前主要影响：
 
-- 是否根据质量评分过滤切片。
 - 是否保存 `_analysis.json`，给后续 MCP/二次剪辑使用。
 - 是否使用自定义分析 prompt。
+
+自动投稿是否放行只看 LLM 的明确 `keep` 状态，不使用启发式分数兜底。
 
 ### `[slice.multi_modal]`
 
@@ -425,14 +430,15 @@ enable_audio = true
 enable_emotion_analysis = false
 ```
 
-当前默认更偏向 `local-audio`：
+当前生产候选分析：
 
 - 关闭视觉分析，减少显存占用。
 - 使用 `faster-whisper` `large-v3` CPU `int8` 做音频转录。
 - 字幕烧录只使用 ASR 返回的真实 `transcript_segments` 时间戳；没有真实时间戳时不烧录伪字幕。
-- 通过启发式关键词/情绪生成标题、标签和质量评分。
+- 把转录文本和同一候选时间窗内的弹幕一起交给 LLM 判断和生成标题。
+- 不做标题或质量判断降级；分析失败的候选保留人工复核且不自动上传。
 
-如果要开 `multi-modal`，需要本地有 OpenAI-compatible 服务，例如 LM Studio，并确认模型支持图片输入。
+本地需有 OpenAI-compatible 服务，例如 LM Studio；当前主路径只发送文本证据，不要求模型支持图片输入。
 
 如果要改成 CUDA，需要先安装可被 faster-whisper/CTranslate2 找到的 CUDA 12 cuBLAS DLL；缺 `cublas64_12.dll` 时会失败。
 
@@ -519,7 +525,7 @@ sudo systemctl status bilive
 
 这是 WSL 下 `blrec --open` 自动开浏览器失败的噪音。只影响本地开发入口；当前 Pi systemd 服务不依赖它。
 
-### `local-audio` 没有生成字幕或标题
+### 候选没有生成字幕或标题
 
 确认环境里有可用的 `faster-whisper` 和模型缓存。当前推荐 `whisper_engine = "faster-whisper"`、`whisper_model = "large-v3"`、`whisper_device = "cpu"`、`whisper_compute_type = "int8"`。
 
@@ -562,7 +568,7 @@ PYTHONPATH=.:./src python -m pytest \
 PYTHONPATH=.:./src python -m pytest -m integration
 ```
 
-旧入口兼容测试标记为 `legacy`。它们仍包含在默认测试套件里，因为对应入口还保留在仓库中；如果只想看当前主路径，可以临时排除：
+部分上游兼容模块测试标记为 `legacy`。它们仍包含在默认测试套件里；如果只想看当前主路径，可以临时排除：
 
 ```bash
 PYTHONPATH=.:./src python -m pytest -m "not integration and not legacy"

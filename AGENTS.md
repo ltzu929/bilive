@@ -1,6 +1,6 @@
 # bilive - B站录播、切片、上传
 
-> 当前架构：Pi 只录制，PC/Windows 做切片、ASR、字幕烧录、标题分析和上传。不要把旧的全目录 `scan_slice` 轮询当作推荐入口。
+> 当前架构：Pi 只录制，PC/Windows 做切片、ASR、LLM 判断、字幕烧录和上传。生产切片只消费 dashboard 提交的 pending 队列。
 
 ## 当前架构
 
@@ -16,7 +16,10 @@ Windows / D:\alldata\pi\bilive
   dashboard /tasks 写 .mp4.pending
   worker_api 127.0.0.1:2235
   src.server.watcher --once 处理 pending 后退出；失败写 task history 并等待人工重排
-  faster-whisper ASR -> SRT -> 字幕烧录
+  弹幕 burst -> 候选切片 -> faster-whisper ASR
+  转录 + 窗口弹幕 -> LLM keep/drop
+  keep -> SRT -> 字幕烧录 -> SQLite 队列
+  任一证据/落库步骤失败 -> 人工复核，不上传
   worker_api 自动启动单实例 src.upload.upload
   SQLite 上传队列 -> UPOS 上传 -> Web add/v3 发布
   任务清单 GET /api/tasks（状态：ready/pending/done/failed）
@@ -41,11 +44,12 @@ Windows / D:\alldata\pi\bilive
 | `src/server/watcher.py` | 一次性处理 `.mp4.pending`；成功写 `.done` 和历史，失败写 `.task.json` 并移除 `.pending` |
 | `src/burn/task_history.py` | 任务历史侧卡（`.mp4.task.json`），记录成功/失败和切片数 |
 | `src/burn/slice_only.py` | 单个录播的切片主流程 |
+| `src/autoslice/candidate_analyzer.py` | 严格候选分析：ASR 时间戳 + 窗口弹幕 + LLM 判断 |
 | `src/burn/subtitle_burn.py` | 使用真实 ASR 时间戳生成 SRT 并烧录字幕 |
 | `src/autoslice/mllm_sdk/audio_analyzer.py` | ASR 引擎分发，当前主路径是 `faster-whisper` |
 | `src/upload/upload.py` | 上传队列消费者 |
 | `start_pc_worker_api.ps1` | 推荐启动本机 worker API |
-| `start_pipeline.ps1` | PC helper 启动器；默认不跑旧 `scan_slice`，`-RunLegacyScanSlice` 才启用兼容扫描 |
+| `start_pipeline.ps1` | PC helper 启动器；启动 LM Studio、worker API 和自动上传消费者 |
 | `run_slice.ps1` / `slice.sh` | 手动处理 pending 队列一次 |
 
 ## 推荐操作
@@ -84,7 +88,7 @@ $env:BILIVE_VIDEOS_DIR = "$PWD\Videos"
 python -m src.server.watcher --once --videos-dir .\Videos
 ```
 
-不要用 `python -m src.burn.scan_slice` 做日常切片。它是旧的全目录扫描入口，会扫描整个 `Videos/`，容易重复处理旧录播和已生成切片。
+旧的全目录扫描入口已经删除。不要新增绕过 `.pending`、`.done` 和任务历史的目录轮询入口。
 
 ### 上传
 
@@ -131,7 +135,6 @@ whisper_compute_type = "int8"
 ```text
 logs/runtime/dashboard-*.log          # dashboard 请求
 logs/runtime/pc-worker-*.log          # 页面触发的一次性 worker
-logs/runtime/slice-*.err              # 旧 scan_slice 脚本日志
 logs/runtime/slice-progress.json      # 切片进度/诊断面板数据
 logs/runtime/upload-process-*.log     # 自动上传消费者
 logs/runtime/upload-status.json       # 上传状态、队列计数和最近 BVID
@@ -143,7 +146,7 @@ logs/runtime/upload-status.json       # 上传状态、队列计数和最近 BVI
 2. `pc-worker-*.log` 是否启动并处理到目标文件。
 3. `slice-progress.json` 当前 `status/phase/source_name`。
 4. ASR 是否报 HuggingFace 下载失败或 CUDA cuBLAS 缺失。
-5. LLM judge 是否返回 502。LLM 失败不应阻止切片，但标题会降级。
+5. LLM judge 是否返回 502。LLM、ASR、字幕或队列失败时，候选应保留人工复核且不得自动上传。
 
 ## 当前状态
 
@@ -155,7 +158,7 @@ logs/runtime/upload-status.json       # 上传状态、队列计数和最近 BVI
 | ASR | `faster-whisper` `large-v3` CPU `int8` |
 | 字幕烧录 | 使用真实 ASR 时间戳生成 `_asr.srt` 并烧录 |
 | 源文件清理 | 默认保留源录播 |
-| LLM judge | 本地 LM Studio/API 不稳定时可能 502，按降级标题继续 |
+| LLM judge | 本地 LM Studio/API 不稳定时可能 502；候选转人工复核，不自动上传 |
 
 ## 详细文档
 

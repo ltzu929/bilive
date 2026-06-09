@@ -1,10 +1,31 @@
 from types import SimpleNamespace
 
 from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment
-from src.autoslice.mllm_sdk import audio_analyzer
 from src.burn import slice_only as slice_only_module
 from src.burn.subtitle_burn import BurnSubtitleResult
-import src.config as config
+
+
+def retained_analysis():
+    return AnalysisResult(
+        title="Clip title",
+        description="Description",
+        tags=["直播"],
+        retain_recommendation=True,
+        judge_status="keep",
+        transcript="第一句",
+        transcript_segments=[
+            TranscriptSegment(start=0.0, end=2.0, text="第一句"),
+        ],
+    )
+
+
+def successful_burn(path, analysis):
+    return BurnSubtitleResult(
+        burned=True,
+        video_path=path,
+        srt_path=str(path) + ".srt",
+        message="subtitles burned",
+    )
 
 
 class FakeProgressWriter:
@@ -65,21 +86,18 @@ def test_slice_only_unloads_audio_models_once_after_batch(tmp_path, monkeypatch)
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
     monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
-    monkeypatch.setattr(slice_only_module, "generate_title", lambda *args, **kwargs: "slice title")
+    monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
+    monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: True)
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
-    monkeypatch.setattr(audio_analyzer, "unload_asr_models", lambda: unload_calls.append("asr"))
-    monkeypatch.setattr(audio_analyzer, "unload_emotion_model", lambda: unload_calls.append("emotion"))
-    monkeypatch.setattr(config, "MLLM_MODEL", "local-audio")
-    monkeypatch.setattr(config, "MULTI_MODAL_UNLOAD_AUDIO_MODEL", True)
-    monkeypatch.setattr(config, "MULTI_MODAL_ENABLE_EMOTION_ANALYSIS", True)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: unload_calls.append("models"))
     monkeypatch.setenv("BILIVE_KEEP_SOURCE", "1")
     monkeypatch.setenv("BILIVE_SKIP_UPLOAD_QUEUE", "1")
 
     slice_only_module.slice_only(str(source))
 
-    assert unload_calls == ["asr", "emotion"]
+    assert unload_calls == ["models"]
 
 
 def test_slice_only_keeps_source_when_no_slices_generated(tmp_path, monkeypatch):
@@ -124,11 +142,12 @@ def test_slice_only_keeps_source_by_default_after_generating_slices(tmp_path, mo
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
     monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
-    monkeypatch.setattr(slice_only_module, "generate_title", lambda *args, **kwargs: "slice title")
+    monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
+    monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: True)
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
-    monkeypatch.setattr(slice_only_module, "unload_local_audio_models_after_batch", lambda: None)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
     monkeypatch.delenv("BILIVE_KEEP_SOURCE", raising=False)
     monkeypatch.delenv("BILIVE_DELETE_SOURCE_AFTER_SLICE", raising=False)
     monkeypatch.setenv("BILIVE_SKIP_UPLOAD_QUEUE", "1")
@@ -162,11 +181,12 @@ def test_slice_only_can_delete_source_when_explicitly_enabled(tmp_path, monkeypa
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
     monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
-    monkeypatch.setattr(slice_only_module, "generate_title", lambda *args, **kwargs: "slice title")
+    monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
+    monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: True)
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
-    monkeypatch.setattr(slice_only_module, "unload_local_audio_models_after_batch", lambda: None)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
     monkeypatch.setenv("BILIVE_DELETE_SOURCE_AFTER_SLICE", "1")
     monkeypatch.setenv("BILIVE_SKIP_UPLOAD_QUEUE", "1")
 
@@ -264,20 +284,12 @@ def test_slice_only_burns_asr_subtitles_for_retained_analysis(tmp_path, monkeypa
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(
         slice_only_module,
-        "generate_title",
-        lambda *args, **kwargs: AnalysisResult(
-            title="Clip title",
-            description="Description",
-            tags=["直播"],
-            retain_recommendation=True,
-            transcript_segments=[
-                TranscriptSegment(start=0.0, end=2.0, text="第一句"),
-            ],
-        ),
+        "analyze_candidate",
+        lambda *args, **kwargs: retained_analysis(),
     )
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: True)
-    monkeypatch.setattr(slice_only_module, "unload_local_audio_models_after_batch", lambda: None)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
     monkeypatch.setenv("BILIVE_KEEP_SOURCE", "1")
     monkeypatch.setenv("BILIVE_SKIP_UPLOAD_QUEUE", "1")
 
@@ -334,7 +346,7 @@ def test_slice_only_retains_judge_failed_candidate_without_upload(tmp_path, monk
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(
         slice_only_module,
-        "generate_title",
+        "analyze_candidate",
         lambda *args, **kwargs: AnalysisResult(
             title="artist精彩片段",
             description="精彩直播片段",
@@ -348,7 +360,7 @@ def test_slice_only_retains_judge_failed_candidate_without_upload(tmp_path, monk
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: queued.append(path) or True)
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", lambda *args: burned.append(args))
-    monkeypatch.setattr(slice_only_module, "unload_local_audio_models_after_batch", lambda: None)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
 
     result = slice_only_module.slice_only(str(source))
 
@@ -362,3 +374,93 @@ def test_slice_only_retains_judge_failed_candidate_without_upload(tmp_path, monk
     assert result["segments"][0]["judge_error"] == "LLM failed: 502"
     assert result["segments"][0]["candidate_path"] == str(slice_path)
     assert result["segments"][0]["danmaku_count"] == 12
+
+
+def test_slice_only_keeps_review_candidate_when_subtitle_burn_fails(tmp_path, monkeypatch):
+    source = tmp_path / "8792912" / "8792912_20260524-13-06-05.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    slice_path = source.parent / "10s_8792912_20260524-13-06-05.mp4"
+    slice_path.write_bytes(b"slice")
+    generated = [
+        SimpleNamespace(
+            path=str(slice_path),
+            context_start=0.0,
+            context_end=60.0,
+            duration=60.0,
+            density_core_start=10.0,
+            density_core_end=20.0,
+            danmaku_count=20,
+        )
+    ]
+    queued = []
+
+    monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
+    monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
+    monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
+    monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
+    monkeypatch.setattr(
+        slice_only_module,
+        "burn_subtitles_from_analysis",
+        lambda *args: BurnSubtitleResult(
+            burned=False,
+            video_path=str(slice_path),
+            message="ffmpeg failed",
+        ),
+    )
+    monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: queued.append(path) or True)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
+
+    result = slice_only_module.slice_only(str(source))
+
+    assert result["slice_count"] == 0
+    assert slice_path.exists()
+    assert queued == []
+    assert not slice_path.with_suffix(".upload.json").exists()
+    assert result["segments"][0]["judge_status"] == "judge_failed"
+    assert result["segments"][0]["upload_status"] == "not_queued"
+    assert "subtitle" in result["segments"][0]["judge_error"].lower()
+
+
+def test_slice_only_does_not_report_queue_failure_as_queued(tmp_path, monkeypatch):
+    source = tmp_path / "8792912" / "8792912_20260524-13-06-05.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    slice_path = source.parent / "10s_8792912_20260524-13-06-05.mp4"
+    slice_path.write_bytes(b"slice")
+    generated = [
+        SimpleNamespace(
+            path=str(slice_path),
+            context_start=0.0,
+            context_end=60.0,
+            duration=60.0,
+            density_core_start=10.0,
+            density_core_end=20.0,
+            danmaku_count=20,
+        )
+    ]
+
+    monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
+    monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
+    monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
+    monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
+    monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
+    monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: False)
+    monkeypatch.setattr(slice_only_module, "get_upload_item", lambda path: None)
+    monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
+
+    result = slice_only_module.slice_only(str(source))
+
+    assert result["slice_count"] == 0
+    assert result["output_slices"] == []
+    assert slice_path.exists()
+    assert not slice_path.with_suffix(".upload.json").exists()
+    assert result["segments"][0]["judge_status"] == "judge_failed"
+    assert result["segments"][0]["upload_status"] == "not_queued"
+    assert "queue" in result["segments"][0]["judge_error"].lower()

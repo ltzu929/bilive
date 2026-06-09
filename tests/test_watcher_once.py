@@ -53,6 +53,27 @@ def test_watcher_marks_unknown_action_failed_and_removes_pending(tmp_path):
     assert "Unknown action" in history["error"]
 
 
+def test_watcher_rejects_legacy_render_action(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    pending = source.with_suffix(".mp4.pending")
+    pending.write_text(
+        '{"video_rel_path":"22384516/22384516_20260527-12-55-32.mp4","action":"render"}',
+        encoding="utf-8",
+    )
+
+    assert watcher.process_pending_videos(str(videos)) == 0
+
+    assert not pending.exists()
+    history = read_task_history(source)
+    assert history is not None
+    assert history["status"] == "failed"
+    assert "Unknown action: render" in history["error"]
+
+
 def test_watcher_marks_slice_pipeline_failed_result_failed(monkeypatch, tmp_path):
     from src.burn import slice_only as slice_module
 

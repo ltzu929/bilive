@@ -4,20 +4,16 @@
 # - local PC worker API on 127.0.0.1:2235
 # - upload queue consumer managed by the worker API
 #
-# It does not start the legacy full-directory scan_slice loop by default.
 # Queue slice jobs from /tasks, then the browser will trigger the one-shot worker.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File start_pipeline.ps1
 #   .\start_pipeline.ps1 -NoUpload
-#   .\start_pipeline.ps1 -RunLegacyScanSlice   # compatibility only, one scan pass
 
 param(
     [switch]$NoLMStudio,
     [switch]$NoWorkerApi,
-    [switch]$NoUpload,
-    [switch]$RunLegacyScanSlice,
-    [switch]$NoSlice
+    [switch]$NoUpload
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,10 +49,6 @@ Write-Host "Python:  $pythonW"
 Write-Host "Logs:    $logDir"
 Write-Host ""
 
-if ($NoSlice) {
-    Write-Warning "-NoSlice is deprecated and now a no-op. Legacy scan_slice is disabled unless -RunLegacyScanSlice is set."
-}
-
 # 1. LM Studio
 $lmPath = "D:\LMStudio\LM Studio\LM Studio.exe"
 if (-not $NoLMStudio) {
@@ -79,11 +71,11 @@ if (-not $NoLMStudio) {
             if ($ready) {
                 Write-Host "[LM Studio] API ready."
             } else {
-                Write-Warning "[LM Studio] API not responding after 60s. LLM title generation may fall back."
+                Write-Warning "[LM Studio] API not responding after 60s. Candidates will remain for manual review and will not upload."
             }
         }
     } else {
-        Write-Warning "[LM Studio] Not found at $lmPath. LLM title generation may fall back."
+        Write-Warning "[LM Studio] Not found at $lmPath. Candidates will remain for manual review and will not upload."
     }
 }
 
@@ -108,19 +100,6 @@ if (-not $NoWorkerApi) {
             -PassThru
         Write-Host "[worker_api] PID: $($proc.Id)"
     }
-}
-
-# 3. Legacy compatibility path
-if ($RunLegacyScanSlice) {
-    $sliceLog = "$logDir\slice-legacy-$dateSuffix.log"
-    Write-Warning "[scan_slice] Running legacy full-directory scan once. Prefer /tasks + PC worker for daily use."
-    $proc = Start-Process -FilePath $pythonW `
-        -ArgumentList "-m", "src.burn.scan_slice", "--once" `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $sliceLog `
-        -RedirectStandardError "$logDir\slice-legacy-$dateSuffix.err" `
-        -PassThru
-    Write-Host "[scan_slice] PID: $($proc.Id)"
 }
 
 Write-Host ""

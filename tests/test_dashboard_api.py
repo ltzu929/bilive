@@ -356,7 +356,7 @@ async def test_segment_action_apis_update_segment_sidecar(
     )
     monkeypatch.setattr(
         source_workbench,
-        "generate_title",
+        "analyze_candidate",
         lambda *args, **kwargs: AnalysisResult(
             title="Retried",
             description="Retried desc",

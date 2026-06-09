@@ -14,7 +14,7 @@ from src.autoslice.danmaku_slice import (
     extract_timestamps_from_xml,
     format_seconds_for_filename,
 )
-from src.autoslice.title_generator import generate_title
+from src.autoslice.candidate_analyzer import analyze_candidate
 from src.burn.task_history import read_task_history
 from src.dashboard.task_state import build_task_inventory, resolve_task_id
 from src.db.conn import insert_upload_queue
@@ -207,7 +207,7 @@ def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, A
         start = _float(segment.get("start_seconds"))
         end = _float(segment.get("end_seconds"))
         danmaku_text = extract_danmaku_text(str(source.with_suffix(".xml")), start, end)
-        result = generate_title(
+        result = analyze_candidate(
             str(candidate),
             source.parent.name,
             danmaku_text=danmaku_text,

@@ -155,7 +155,7 @@ def test_retry_judge_segment_updates_status_from_llm_result(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         source_workbench,
-        "generate_title",
+        "analyze_candidate",
         lambda path, artist, danmaku_text="": AnalysisResult(
             title="Retried title",
             description="Retried desc",
@@ -172,6 +172,43 @@ def test_retry_judge_segment_updates_status_from_llm_result(tmp_path, monkeypatc
     assert updated["judge_status"] == "keep"
     assert updated["title"] == "Retried title"
     assert updated["upload_status"] == "not_queued"
+
+
+def test_retry_judge_preserves_review_state_when_analysis_fails(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos)
+    queued = []
+
+    monkeypatch.setattr(
+        source_workbench,
+        "extract_danmaku_text",
+        lambda *args: "danmaku",
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "analyze_candidate",
+        lambda *args, **kwargs: AnalysisResult(
+            title="候选片段",
+            description="等待人工复核",
+            tags=["直播切片"],
+            retain_recommendation=False,
+            quality_reason="ASR produced no transcript",
+            judge_status="judge_failed",
+            judge_error="ASR produced no transcript",
+        ),
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "insert_upload_queue",
+        lambda path: queued.append(path) or True,
+    )
+
+    updated = source_workbench.retry_segment_judge(videos, "seg_failed")
+
+    assert updated["judge_status"] == "judge_failed"
+    assert updated["judge_error"] == "ASR produced no transcript"
+    assert updated["upload_status"] == "not_queued"
+    assert queued == []
 
 
 def test_render_segment_regenerates_candidate_path(tmp_path, monkeypatch):

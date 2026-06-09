@@ -1,6 +1,6 @@
 # 切片管线
 
-当前推荐管线是 dashboard 提交 `.pending`，PC worker 一次性处理后退出。旧的 `scan_slice.py` 全目录轮询仍保留作兼容入口，但不再作为日常切片主路径。
+当前唯一生产管线是 dashboard 提交 `.pending`，PC worker 一次性处理后退出。全目录轮询入口已经删除。
 
 ## 当前完整流程
 
@@ -32,13 +32,15 @@ slice_only()
   1. 检查 mp4+xml、文件大小和录制状态
   2. 解析弹幕并做 burst 检测
   3. ffmpeg 生成候选切片，默认 top_n=3
-  4. 对每个切片提取音频
-  5. faster-whisper 转录，保留真实 transcript_segments
-  6. LLM judge/标题分析，失败时降级继续
-  7. 根据真实 ASR 时间戳生成 *_asr.srt 并烧录字幕
-  8. 保存 *_analysis.json / *_edit.json
-  9. 写入 SQLite 上传队列
- 10. 默认保留源 mp4/xml，除非 BILIVE_DELETE_SOURCE_AFTER_SLICE=1
+  4. 对每个候选提取音频
+  5. faster-whisper 转录；必须有非空文本和有效 transcript_segments
+  6. 把转录和候选时间窗弹幕一起交给 LLM
+  7. LLM 明确 drop：删除候选；LLM/ASR 失败：保留候选人工复核
+  8. LLM 明确 keep 后，根据真实时间戳生成 *_asr.srt 并烧录字幕
+  9. 保存 *_analysis.json / *_edit.json，写上传元数据
+ 10. SQLite 入队成功后才标记为可自动上传
+ 11. 字幕、元数据或队列失败：删除上传 sidecar，保留候选人工复核
+ 12. 默认保留源 mp4/xml，除非 BILIVE_DELETE_SOURCE_AFTER_SLICE=1
 ```
 
 ## 关键代码
@@ -57,6 +59,7 @@ slice_only()
 | 进度/诊断 | `src/burn/slice_progress.py` | `update_progress()` |
 | 弹幕突增检测 | `src/autoslice/burst_detector.py` | `detect_bursts()` |
 | ASR 转录 | `src/autoslice/mllm_sdk/audio_analyzer.py` | `analyze_audio()` |
+| 候选证据聚合 | `src/autoslice/candidate_analyzer.py` | `analyze_candidate()` |
 | 字幕烧录 | `src/burn/subtitle_burn.py` | `burn_subtitles_from_analysis()` |
 | LLM 判断 | `src/autoslice/mllm_sdk/judge.py` | `judge_and_title()` |
 | 上传队列 | `src/db/conn.py` | SQLite `upload_queue` 表 |
@@ -131,27 +134,29 @@ timeout = 10
 
 `GET /api/worker/status` (端口 `2235`) 返回扩展信息，dashboard 首页工具栏实时显示徽章。
 
-## 旧入口
+## 自动投稿门禁
 
-`src.burn.scan_slice` 仍存在：
+候选只有同时满足以下条件才会写入上传队列：
 
-```powershell
-python -m src.burn.scan_slice --once
-```
+1. ASR 返回非空转录。
+2. ASR 返回至少一个有效段级时间戳。
+3. LLM 返回可解析的明确 `keep` 和非空标题。
+4. 字幕成功烧录到候选视频。
+5. 上传元数据成功写入。
+6. SQLite 队列插入成功，或已存在于可恢复的上传状态中。
 
-它会扫描整个 `Videos/`，不是只处理 pending 队列。常驻模式还会每 120 秒重复扫描。当前只建议在兼容排查时临时使用，日常切片请走 `src.server.watcher --once`。
+`manual_keep` 是 dashboard 中唯一允许人工覆盖自动判断的状态。自动流程不会用默认标题、启发式分数或异常兜底绕过上述门禁。
 
 ## 常见排查
 
 | 现象 | 优先看 |
 |------|------|
 | 页面启动后只有 pending | `start_pc_worker_api.ps1` 是否运行，`pc-worker-*.log` |
-| 切片扫到整个 Videos | 是否误用了 `src.burn.scan_slice` 或 `start_pipeline.ps1 -RunLegacyScanSlice` |
 | 生成 0 个切片 | 诊断面板 burst 阈值、弹幕数、`burst_ratio` |
 | 字幕没有烧录 | ASR 是否返回 `transcript_segments`，是否有 `*_asr.srt` |
 | ASR 下载失败 | HuggingFace/代理、模型缓存、`HF_TOKEN` |
 | CUDA ASR 失败 | 是否缺 `cublas64_12.dll` |
-| 标题降级 | LM Studio/OpenAI-compatible 接口是否 502 |
+| 候选停在人工复核 | 检查 ASR、LLM、字幕、元数据和队列错误；这些失败不会自动上传 |
 
 ## 已知问题
 

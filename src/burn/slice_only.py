@@ -14,8 +14,11 @@ from src.config import (
     BURST_TOP_N,
 )
 from autoslice import slice_video_by_danmaku
+from src.autoslice.candidate_analyzer import (
+    analyze_candidate,
+    unload_candidate_models,
+)
 from src.autoslice.danmaku_slice import extract_danmaku_text
-from src.autoslice.title_generator import generate_title
 from src.burn.subtitle_burn import burn_subtitles_from_analysis
 from src.upload.slice_metadata import (
     delete_slice_upload_metadata,
@@ -24,7 +27,7 @@ from src.upload.slice_metadata import (
 from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
 from src.burn.slice_progress import SliceProgressWriter
-from db.conn import insert_upload_queue
+from db.conn import get_upload_item, insert_upload_queue
 
 
 def check_file_size(file_path):
@@ -32,26 +35,6 @@ def check_file_size(file_path):
     file_size = os.path.getsize(file_path)
     file_size_mb = file_size / (1024 * 1024)
     return file_size_mb
-
-
-def unload_local_audio_models_after_batch() -> None:
-    """Release local ASR/emotion models after one recording batch is done."""
-    import src.config as runtime_config
-
-    if getattr(runtime_config, "MLLM_MODEL", "") not in {"multi-modal", "local-audio"}:
-        return
-    if not getattr(runtime_config, "MULTI_MODAL_UNLOAD_AUDIO_MODEL", True):
-        return
-
-    from src.autoslice.mllm_sdk.audio_analyzer import (
-        unload_asr_models,
-        unload_emotion_model,
-    )
-
-    scan_log.info("Unloading local audio models after slice batch")
-    unload_asr_models()
-    if getattr(runtime_config, "MULTI_MODAL_ENABLE_EMOTION_ANALYSIS", False):
-        unload_emotion_model()
 
 
 def slice_only(video_path, **_slice_options):
@@ -326,101 +309,89 @@ def slice_only(video_path, **_slice_options):
                 generated_slice.context_start,
                 generated_slice.context_end,
             )
-            result = generate_title(slice_path, artist, danmaku_text=danmaku_text)
+            from src.autoslice.analysis_result import AnalysisResult
 
-            if result is None:
-                scan_log.error(f"Failed to generate title for {slice_path}")
+            result = analyze_candidate(
+                slice_path,
+                artist,
+                danmaku_text=danmaku_text,
+            )
+            if not isinstance(result, AnalysisResult):
+                raise TypeError("candidate analyzer must return AnalysisResult")
+
+            segment = build_segment_record(
+                original_video_path,
+                generated_slice,
+                result,
+                upload_status="not_queued",
+            )
+            if result.judge_status == "judge_failed":
+                judge_failed_count += 1
+                scan_log.warning(
+                    f"Slice {slice_path} kept for manual review: "
+                    f"{result.judge_error or result.quality_reason}"
+                )
+                segments.append(segment)
+                continue
+
+            if result.judge_status == "drop" or not result.retain_recommendation:
+                scan_log.info(
+                    f"Slice {slice_path} filtered by LLM judge: "
+                    f"retain=False, reason={result.quality_reason}"
+                )
+                segment["judge_status"] = "drop"
+                segments.append(segment)
                 os.remove(slice_path)
                 continue
 
-            from src.autoslice.analysis_result import AnalysisResult
+            from src.config import OMNI_ENABLE_DEEP_ANALYSIS
 
-            if isinstance(result, AnalysisResult):
-                segment = build_segment_record(
-                    original_video_path,
-                    generated_slice,
-                    result,
-                    upload_status="not_queued",
-                )
-                if result.judge_status == "judge_failed":
-                    judge_failed_count += 1
-                    scan_log.warning(
-                        f"Slice {slice_path} kept for manual review after LLM judge failure: "
-                        f"{result.judge_error or result.quality_reason}"
-                    )
-                    segments.append(segment)
-                    continue
+            if OMNI_ENABLE_DEEP_ANALYSIS:
+                analysis_json_path = slice_path[:-4] + "_analysis.json"
+                result.to_json_file(analysis_json_path)
+                scan_log.info(f"Analysis result saved: {analysis_json_path}")
 
-                if not result.retain_recommendation:
-                    scan_log.info(
-                        f"Slice {slice_path} filtered by LLM judge: "
-                        f"retain=False, reason={result.quality_reason}"
-                    )
-                    segment["judge_status"] = "drop"
-                    segments.append(segment)
-                    os.remove(slice_path)
-                    continue
+            burn_result = burn_subtitles_from_analysis(slice_path, result)
+            if not burn_result.burned:
+                reason = f"Subtitle burn failed: {burn_result.message}"
+                judge_failed_count += 1
+                segment["judge_status"] = "judge_failed"
+                segment["judge_error"] = reason
+                segment["quality_reason"] = reason
+                scan_log.warning(f"{reason}: {slice_path}")
+                segments.append(segment)
+                continue
+            scan_log.info(f"ASR subtitles burned into slice: {slice_path}")
 
-                from src.config import OMNI_ENABLE_DEEP_ANALYSIS
+            from src.config import (
+                EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+                EDIT_ENABLE_INSTRUCTION,
+                EDIT_ENABLE_PROMPT_PACKAGE,
+                EDIT_MAX_SUBTITLE_EVIDENCE,
+            )
+            from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
+            from src.autoslice.edit_instruction import TimeRange
 
-                if OMNI_ENABLE_DEEP_ANALYSIS:
-                    analysis_json_path = slice_path[:-4] + "_analysis.json"
-                    result.to_json_file(analysis_json_path)
-                    scan_log.info(f"Analysis result saved: {analysis_json_path}")
-
-                burn_result = burn_subtitles_from_analysis(slice_path, result)
-                if burn_result.burned:
-                    scan_log.info(f"ASR subtitles burned into slice: {slice_path}")
-                elif result.transcript_segments:
-                    scan_log.warning(
-                        f"ASR subtitle burn skipped for {slice_path}: "
-                        f"{burn_result.message}"
-                    )
-
-                slice_title = result.title
-                slice_desc = result.description
-                slice_tags = result.tags
-            else:
-                slice_title = result
-                slice_desc = "精彩直播片段"
-                slice_tags = ["直播切片"]
-                segment = build_segment_record(
-                    original_video_path,
-                    generated_slice,
-                    None,
-                    upload_status="not_queued",
-                )
-
-            if isinstance(result, AnalysisResult):
-                from src.config import (
-                    EDIT_DEFAULT_HIGHLIGHT_WINDOW,
-                    EDIT_ENABLE_INSTRUCTION,
-                    EDIT_ENABLE_PROMPT_PACKAGE,
-                    EDIT_MAX_SUBTITLE_EVIDENCE,
-                )
-                from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
-                from src.autoslice.edit_instruction import TimeRange
-
-                maybe_write_edit_outputs(
-                    analysis=result,
-                    source_video=original_video_path,
-                    slice_video=slice_path,
-                    artist=artist,
-                    slice_duration=generated_slice.duration,
-                    output_video=slice_path,
-                    enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
-                    enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
-                    max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
-                    default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
-                    density_core=TimeRange(
-                        start=generated_slice.density_core_start,
-                        end=generated_slice.density_core_end,
-                    ),
-                    context_window=TimeRange(
-                        start=generated_slice.context_start,
-                        end=generated_slice.context_end,
-                    ),
-                )
+            maybe_write_edit_outputs(
+                analysis=result,
+                source_video=original_video_path,
+                slice_video=slice_path,
+                artist=artist,
+                slice_duration=generated_slice.duration,
+                output_video=slice_path,
+                enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
+                enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
+                max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
+                default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+                density_core=TimeRange(
+                    start=generated_slice.density_core_start,
+                    end=generated_slice.density_core_end,
+                ),
+                context_window=TimeRange(
+                    start=generated_slice.context_start,
+                    end=generated_slice.context_end,
+                ),
+            )
 
             progress.update(
                 force=True,
@@ -433,13 +404,23 @@ def slice_only(video_path, **_slice_options):
                 message="正在写入上传参数",
                 diagnostics=diagnostics,
             )
-            write_slice_upload_metadata(
-                slice_path,
-                title=slice_title,
-                desc=slice_desc,
-                tag=slice_tags,
-                source=f"https://live.bilibili.com/{room_id}",
-            )
+            try:
+                write_slice_upload_metadata(
+                    slice_path,
+                    title=result.title,
+                    desc=result.description,
+                    tag=result.tags,
+                    source=f"https://live.bilibili.com/{room_id}",
+                )
+            except Exception as exc:
+                reason = f"Upload metadata failed: {exc}"
+                judge_failed_count += 1
+                segment["judge_status"] = "judge_failed"
+                segment["judge_error"] = reason
+                segment["quality_reason"] = reason
+                delete_slice_upload_metadata(slice_path)
+                segments.append(segment)
+                continue
 
             progress.update(
                 force=True,
@@ -454,12 +435,51 @@ def slice_only(video_path, **_slice_options):
             )
             if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1":
                 scan_log.info(f"Skip upload queue for local test: {slice_path}")
-            elif not insert_upload_queue(slice_path):
-                scan_log.error(f"Cannot insert slice to upload queue: {slice_path}")
+                segment["upload_status"] = "skipped"
             else:
-                scan_log.info(f"Slice ready for upload: {slice_path}")
+                try:
+                    queued = insert_upload_queue(slice_path)
+                except Exception as exc:
+                    queued = False
+                    queue_error = str(exc)
+                else:
+                    queue_error = "queue insert returned false"
+                if not queued:
+                    existing = get_upload_item(slice_path)
+                    existing_status = (
+                        str(existing.get("status") or "")
+                        if isinstance(existing, dict)
+                        else ""
+                    )
+                    if existing_status in {
+                        "queued",
+                        "uploading",
+                        "uploaded",
+                        "publishing",
+                        "published",
+                    }:
+                        segment["upload_status"] = existing_status
+                        scan_log.info(
+                            f"Slice already exists in upload queue "
+                            f"({existing_status}): {slice_path}"
+                        )
+                    else:
+                        reason = f"Upload queue failed: {queue_error}"
+                        judge_failed_count += 1
+                        segment["judge_status"] = "judge_failed"
+                        segment["judge_error"] = reason
+                        segment["quality_reason"] = reason
+                        delete_slice_upload_metadata(slice_path)
+                        segments.append(segment)
+                        scan_log.error(f"{reason}: {slice_path}")
+                        continue
+                else:
+                    segment["upload_status"] = "queued"
+                    scan_log.info(f"Slice ready for upload: {slice_path}")
+
+            if segment["upload_status"] == "skipped":
+                scan_log.info(f"Slice finalized without queueing: {slice_path}")
             output_slices.append(slice_path)
-            segment["upload_status"] = "skipped" if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1" else "queued"
             segments.append(segment)
 
         except Exception as e:
@@ -479,7 +499,8 @@ def slice_only(video_path, **_slice_options):
         }
 
     if total_slices:
-        unload_local_audio_models_after_batch()
+        scan_log.info("Unloading candidate analysis models after slice batch")
+        unload_candidate_models()
 
     if total_slices == 0:
         scan_log.info("No slices generated; keep original video/danmaku files.")

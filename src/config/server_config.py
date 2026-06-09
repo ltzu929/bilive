@@ -89,7 +89,9 @@ SLICE_STEP = config.get("slice", {}).get("slice_step")
 SLICE_PRE_CONTEXT = config.get("slice", {}).get("slice_pre_context", 30)
 SLICE_POST_CONTEXT = config.get("slice", {}).get("slice_post_context", 40)
 MIN_VIDEO_SIZE = config.get("slice", {}).get("min_video_size")
-MLLM_MODEL = config.get("slice", {}).get("mllm_model")
+# Compatibility default for legacy title-only modules. The production pending
+# pipeline uses candidate_analyzer and slice.llm_judge instead.
+MLLM_MODEL = config.get("slice", {}).get("mllm_model", "local-audio")
 ZHIPU_API_KEY = config.get("slice", {}).get("zhipu_api_key")
 GEMINI_API_KEY = config.get("slice", {}).get("gemini_api_key")
 QWEN_API_KEY = config.get("slice", {}).get("qwen_api_key")
