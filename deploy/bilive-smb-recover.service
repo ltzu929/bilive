@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover bilive Windows SMB mount
+After=network-online.target mnt-win.automount
+Wants=network-online.target mnt-win.automount
+
+[Service]
+Type=oneshot
+Environment=BILIVE_SMB_HOST=192.168.31.202
+Environment=BILIVE_SMB_PORT=445
+Environment=BILIVE_MOUNT_UNIT=mnt-win.mount
+Environment=BILIVE_MOUNT_POINT=/mnt/win
+Environment=BILIVE_PROBE_PATH=/mnt/win/bilive
+ExecStart=/usr/local/sbin/bilive-smb-recover
+TimeoutStartSec=60
+

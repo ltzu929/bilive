@@ -35,6 +35,33 @@ sudo systemctl status bilive
 sudo systemctl restart bilive
 ```
 
+### Pi 端 SMB 自动恢复
+
+Windows 每晚关机时，Pi 上的 `bilive.service` 会停止 `blrec` 并等待，不会把
+录像改写到 Pi 本地盘。`x-systemd.automount` 只负责按需触发挂载；首次挂载
+失败后，`mnt-win.mount` 可能停留在 `failed`，因此项目额外使用
+`bilive-smb-recover.timer` 每 15 秒检查一次：
+
+- Windows `192.168.31.202:445` 离线：安静等待。
+- Windows 上线且挂载失败：清除失败状态并重新挂载。
+- CIFS 挂载失效：先停止录制，再清理旧挂载并重挂。
+- 挂载恢复：自动重启 `bilive.service`，恢复 `2233`。
+
+在 Pi 上安装或更新本地 systemd 文件：
+
+```bash
+ssh pi
+cd /mnt/win/bilive
+sudo ./deploy/install-bilive-services.sh
+```
+
+检查恢复器：
+
+```bash
+systemctl status bilive-smb-recover.timer
+sudo journalctl -u bilive-smb-recover.service -n 50 --no-pager
+```
+
 Windows 端推荐注册一次性切片计划任务：
 
 ```powershell
@@ -225,6 +252,9 @@ http://192.168.31.157:2233
 ```
 
 在 Web UI 中管理房间任务、录制开关和录制状态。
+
+如果 Windows 刚开机，通常等待 15 到 30 秒即可恢复访问。不要手工把录制
+目录改到 Pi SD 卡；恢复 timer 会重新建立 `/mnt/win` 并启动录制。
 
 `record.sh` 仍可用于 WSL/Linux 本地开发或重新搭环境，但不是当前 Pi + Windows 分布式运行的日常入口。
 

@@ -64,6 +64,20 @@ sudo systemctl restart bilive
 
 `bilive.service` 当前只负责 `blrec`，端口是 `2233`。它不负责切片、ASR 或上传。
 
+Windows SMB 每晚离线属于正常运行场景。Pi 本地
+`bilive-smb-recover.timer` 每 15 秒运行一次 root oneshot：Windows 445
+离线时等待，恢复上线后清除 `mnt-win.mount` 的失败状态、处理 stale CIFS
+挂载并重启 `bilive.service`。不要只依赖 `x-systemd.automount`，也不要把
+录像临时迁到 Pi SD 卡。
+
+安装/更新 Pi 本地服务：
+
+```bash
+ssh pi
+cd /mnt/win/bilive
+sudo ./deploy/install-bilive-services.sh
+```
+
 ### PC 端切片
 
 ```powershell
