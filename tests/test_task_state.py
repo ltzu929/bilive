@@ -7,7 +7,7 @@ import base64
 import pytest
 
 from src.dashboard import task_state
-from src.burn.task_history import write_task_history
+from src.burn.task_history import read_task_history, write_task_history
 
 
 def test_build_task_inventory_returns_ready_state(tmp_path):
@@ -51,6 +51,43 @@ def test_build_task_inventory_returns_pending_state(tmp_path):
     assert len(tasks) == 1
     assert tasks[0]["status"] == "pending"
     assert tasks[0]["pending_path"] == "22384516/22384516_20260527-12-55-32.mp4.pending"
+
+
+def test_build_task_inventory_returns_processing_state(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
+    source.with_suffix(".mp4.processing").write_text(
+        json.dumps({"worker_pid": 123}),
+        encoding="utf-8",
+    )
+
+    task = task_state.build_task_inventory(videos)[0]
+
+    assert task["status"] == "processing"
+    assert task["processing_path"].endswith(".mp4.processing")
+
+
+def test_build_task_inventory_returns_structured_failed_state(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
+    source.with_suffix(".mp4.failed").write_text(
+        json.dumps({"error": "LM Studio unavailable", "error_type": "RuntimeError"}),
+        encoding="utf-8",
+    )
+
+    task = task_state.build_task_inventory(videos)[0]
+
+    assert task["status"] == "failed"
+    assert task["message"] == "LM Studio unavailable"
+    assert task["failure"]["error_type"] == "RuntimeError"
 
 
 def test_build_task_inventory_returns_done_state(tmp_path):
@@ -161,6 +198,64 @@ def test_pending_marker_overrides_old_failed_history(tmp_path):
 
     assert tasks[0]["status"] == "pending"
     assert tasks[0]["message"] == "已排队，等待 PC worker"
+
+
+def test_requeue_task_updates_history_to_pending(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video data")
+    source.with_suffix(".xml").write_text("<danmaku/>", encoding="utf-8")
+    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+    task_id = task_state.build_task_inventory(videos)[0]["task_id"]
+
+    result = task_state.requeue_task(videos, task_id)
+
+    assert result["status"] == "requeued"
+    assert source.with_suffix(".mp4.pending").is_file()
+    assert read_task_history(source)["status"] == "pending"
+
+
+def test_requeue_task_preserves_done_marker_when_history_write_fails(
+    tmp_path,
+    monkeypatch,
+):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video data")
+    source.with_suffix(".xml").write_text("<danmaku/>", encoding="utf-8")
+    done = source.with_suffix(".mp4.done")
+    done.write_text("{}", encoding="utf-8")
+    task_id = task_state.build_task_inventory(videos)[0]["task_id"]
+    monkeypatch.setattr(
+        task_state,
+        "write_task_history",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        task_state.requeue_task(videos, task_id)
+
+    assert done.is_file()
+    assert not source.with_suffix(".mp4.pending").exists()
+
+
+def test_mark_done_task_updates_terminal_history(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video data")
+    source.with_suffix(".xml").write_text("<danmaku/>", encoding="utf-8")
+    task_id = task_state.build_task_inventory(videos)[0]["task_id"]
+
+    result = task_state.mark_done_task(videos, task_id)
+
+    assert result["status"] == "marked_done"
+    assert read_task_history(source)["status"] == "done"
 
 
 def test_build_task_inventory_returns_skipped_when_no_xml(tmp_path):

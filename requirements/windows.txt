@@ -1,0 +1,13 @@
+fastapi==0.119.0
+uvicorn==0.37.0
+requests==2.32.3
+toml==0.10.2
+openai==2.32.0
+faster-whisper==1.2.1
+zhconv==1.4.3
+pysrt==1.1.2
+chardet==5.2.0
+PyYAML==6.0.2
+qrcode==8.2
+tqdm==4.67.1
+Pillow==11.2.1

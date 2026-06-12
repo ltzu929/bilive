@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.burn.task_history import read_task_history
+from src.burn.task_history import read_task_history, write_task_history
 
 
 # Matches slice output names like "120s_22384516_20260527-12-55-32.mp4"
@@ -27,6 +28,7 @@ _STATUS_MESSAGES: Dict[str, str] = {
     "recording": "录制中",
     "ready": "待处理",
     "pending": "已排队，等待 PC worker",
+    "processing": "PC worker 处理中",
     "running": "PC worker 处理中",
     "done": "已处理",
     "failed": "处理失败",
@@ -80,15 +82,28 @@ def _rel_path(p: Path, root: Path) -> str:
     return p.relative_to(root).as_posix()
 
 
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
     """Build a single task dict from a source .mp4 file."""
     source_name = source.name
     xml_path = source.with_suffix(".xml")
     pending_path = source.with_suffix(".mp4.pending")
+    processing_path = source.with_suffix(".mp4.processing")
+    failed_path = source.with_suffix(".mp4.failed")
     done_path = source.with_suffix(".mp4.done")
 
     has_xml = xml_path.is_file()
     has_pending = pending_path.is_file()
+    has_processing = processing_path.is_file()
+    has_failed = failed_path.is_file()
     has_done = done_path.is_file()
 
     source_rel = _rel_path(source, root)
@@ -96,18 +111,36 @@ def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
     status = _determine_status(
         has_xml=has_xml,
         has_pending=has_pending,
+        has_processing=has_processing,
+        has_failed=has_failed,
         has_done=has_done,
         source=source,
     )
 
     message = _STATUS_MESSAGES.get(status, "")
+    failure = None
+    if has_failed and status == "failed":
+        try:
+            failure = json.loads(failed_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            failure = {
+                "error": "Invalid failure marker",
+                "error_type": "MarkerError",
+            }
+        message = str(failure.get("error") or message)
 
     # Enrich with task history if available. Active queue/done markers remain
     # authoritative so a stale failed sidecar does not hide a requeue/skip.
     history = read_task_history(source)
     if history:
         history_status = history.get("status")
-        if history_status == "failed" and not has_pending and not has_done:
+        if (
+            history_status == "failed"
+            and not has_pending
+            and not has_processing
+            and not has_failed
+            and not has_done
+        ):
             status = "failed"
             message = history.get("error", "处理失败")
         elif history_status in {"done", "skipped"} and has_done:
@@ -125,11 +158,16 @@ def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
         "source_rel_path": source_rel,
         "status": status,
         "pending_path": _rel_path(pending_path, root) if has_pending else None,
+        "processing_path": (
+            _rel_path(processing_path, root) if has_processing else None
+        ),
+        "failed_path": _rel_path(failed_path, root) if has_failed else None,
         "done_path": _rel_path(done_path, root) if has_done else None,
         "has_xml": has_xml,
         "source_size_mb": round(source.stat().st_size / (1024 * 1024), 1) if source.is_file() else 0.0,
         "updated_at": source.stat().st_mtime if source.is_file() else 0.0,
         "message": message,
+        "failure": failure,
     }
 
     return task
@@ -158,6 +196,8 @@ def _determine_status(
     *,
     has_xml: bool,
     has_pending: bool,
+    has_processing: bool,
+    has_failed: bool,
     has_done: bool,
     source: Path,
 ) -> str:
@@ -166,13 +206,18 @@ def _determine_status(
     if has_done:
         return "done"
 
+    if has_processing:
+        return "processing"
+
+    if has_pending:
+        return "pending"
+
+    if has_failed:
+        return "failed"
+
     # Without XML, the source is not sliceable
     if not has_xml:
         return "skipped"
-
-    # Pending means it's queued for the worker
-    if has_pending:
-        return "pending"
 
     # Ready: has XML, no pending, no done
     return "ready"
@@ -212,18 +257,33 @@ def requeue_task(videos_root: str | Path, task_id: str) -> Dict[str, Any]:
     root = Path(videos_root).expanduser().resolve()
     done = source.with_suffix(".mp4.done")
     pending = source.with_suffix(".mp4.pending")
+    processing = source.with_suffix(".mp4.processing")
+    failed = source.with_suffix(".mp4.failed")
 
-    if done.exists():
-        done.unlink()
+    if processing.exists():
+        raise ValueError("Task is currently processing")
 
     rel = source.relative_to(root).as_posix()
     marker = {
         "video_rel_path": rel,
         "room_id": source.parent.name,
         "action": "slice",
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "created_by": "dashboard-requeue",
     }
-    pending.write_text(json.dumps(marker, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json_atomic(pending, marker)
+    try:
+        write_task_history(
+            source,
+            status="pending",
+            videos_root=root,
+            started_at=marker["created_at"],
+        )
+    except Exception:
+        pending.unlink(missing_ok=True)
+        raise
+    done.unlink(missing_ok=True)
+    failed.unlink(missing_ok=True)
 
     return {"status": "requeued", "task_id": task_id, "source_rel_path": rel}
 
@@ -232,6 +292,10 @@ def cancel_pending_task(videos_root: str | Path, task_id: str) -> Dict[str, Any]
     """Remove .pending marker only. Source .mp4 and .xml are preserved."""
     source = resolve_task_id(videos_root, task_id)
     pending = source.with_suffix(".mp4.pending")
+    processing = source.with_suffix(".mp4.processing")
+
+    if processing.exists():
+        raise ValueError("Task is currently processing")
 
     if not pending.exists():
         return {"status": "no_pending", "task_id": task_id}
@@ -246,6 +310,11 @@ def mark_done_task(videos_root: str | Path, task_id: str) -> Dict[str, Any]:
     root = Path(videos_root).expanduser().resolve()
     done = source.with_suffix(".mp4.done")
     pending = source.with_suffix(".mp4.pending")
+    processing = source.with_suffix(".mp4.processing")
+    failed = source.with_suffix(".mp4.failed")
+
+    if processing.exists():
+        raise ValueError("Task is currently processing")
 
     rel = source.relative_to(root).as_posix()
     marker = {
@@ -255,8 +324,17 @@ def mark_done_task(videos_root: str | Path, task_id: str) -> Dict[str, Any]:
         "created_by": "dashboard-mark-done",
         "processed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    done.write_text(json.dumps(marker, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json_atomic(done, marker)
     if pending.exists():
         pending.unlink()
+    if failed.exists():
+        failed.unlink()
+    write_task_history(
+        source,
+        status="done",
+        videos_root=root,
+        started_at=marker["processed_at"],
+        finished_at=marker["processed_at"],
+    )
 
     return {"status": "marked_done", "task_id": task_id, "source_rel_path": rel}

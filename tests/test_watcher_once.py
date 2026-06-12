@@ -1,3 +1,6 @@
+import json
+from concurrent.futures import ThreadPoolExecutor
+
 from src.server import watcher
 from src.burn.task_history import read_task_history
 
@@ -47,6 +50,9 @@ def test_watcher_marks_unknown_action_failed_and_removes_pending(tmp_path):
     assert watcher.process_pending_videos(str(videos)) == 0
 
     assert not pending.exists()
+    failed = source.with_suffix(".mp4.failed")
+    assert failed.exists()
+    assert json.loads(failed.read_text(encoding="utf-8"))["error_type"] == "ValueError"
     history = read_task_history(source)
     assert history is not None
     assert history["status"] == "failed"
@@ -121,6 +127,9 @@ def test_watcher_writes_slice_count_to_done_history(monkeypatch, tmp_path):
     output_b = room / "200s_22384516_20260527-12-55-32.mp4"
 
     def fake_slice_only(_video_path, **_options):
+        assert not source.with_suffix(".mp4.pending").exists()
+        assert source.with_suffix(".mp4.processing").exists()
+        assert read_task_history(source)["status"] == "processing"
         return {
             "status": "done",
             "slice_count": 2,
@@ -130,6 +139,8 @@ def test_watcher_writes_slice_count_to_done_history(monkeypatch, tmp_path):
     monkeypatch.setattr(slice_module, "slice_only", fake_slice_only)
 
     assert watcher.process_pending_videos(str(videos)) == 1
+    assert not source.with_suffix(".mp4.processing").exists()
+    assert source.with_suffix(".mp4.done").exists()
 
     history = read_task_history(source)
     assert history is not None
@@ -139,3 +150,51 @@ def test_watcher_writes_slice_count_to_done_history(monkeypatch, tmp_path):
         "22384516/100s_22384516_20260527-12-55-32.mp4",
         "22384516/200s_22384516_20260527-12-55-32.mp4",
     ]
+
+
+def test_watcher_recovers_stale_processing_marker(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    processing = source.with_suffix(".mp4.processing")
+    processing.write_text(
+        json.dumps(
+            {
+                "video_rel_path": source.relative_to(videos).as_posix(),
+                "worker_pid": 999999,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recovered = watcher.recover_processing_markers(
+        videos,
+        pid_checker=lambda _pid: False,
+    )
+
+    assert recovered == 1
+    assert not processing.exists()
+    pending = source.with_suffix(".mp4.pending")
+    assert pending.exists()
+    assert json.loads(pending.read_text(encoding="utf-8"))["recovered_from"] == "processing"
+
+
+def test_two_claimers_cannot_own_the_same_pending_marker(tmp_path):
+    for attempt in range(20):
+        room = tmp_path / str(attempt)
+        room.mkdir()
+        pending = room / "source.mp4.pending"
+        pending.write_text('{"action":"slice"}', encoding="utf-8")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda _index: watcher._claim_pending(pending),
+                    range(2),
+                )
+            )
+
+        assert sum(result is not None for result in results) == 1
+        assert (room / "source.mp4.processing").is_file()

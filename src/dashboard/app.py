@@ -12,15 +12,6 @@ from fastapi.staticfiles import StaticFiles
 from src.dashboard.file_store import DashboardFileStore
 from src.dashboard.remote_worker import remote_worker_status, trigger_remote_worker
 from src.dashboard.slice_control import load_pending_queue_state, start_slice_scan
-from src.dashboard.source_workbench import (
-    build_source_recording_detail,
-    build_source_recording_list,
-    drop_segment,
-    manual_keep_segment,
-    render_segment,
-    retry_segment_judge,
-    update_segment_range,
-)
 from src.dashboard.task_state import (
     build_task_inventory,
     cancel_pending_task,
@@ -28,10 +19,57 @@ from src.dashboard.task_state import (
     requeue_task,
 )
 from src.burn.slice_progress import load_progress_state
-from src.burn.feedback_refine import process_feedback_directory
 
 
 CHUNK_SIZE = 1024 * 1024
+
+
+def _source_workbench_call(name: str, *args, **kwargs):
+    from src.dashboard import source_workbench
+
+    return getattr(source_workbench, name)(*args, **kwargs)
+
+
+def build_source_recording_detail(*args, **kwargs):
+    return _source_workbench_call(
+        "build_source_recording_detail",
+        *args,
+        **kwargs,
+    )
+
+
+def build_source_recording_list(*args, **kwargs):
+    return _source_workbench_call(
+        "build_source_recording_list",
+        *args,
+        **kwargs,
+    )
+
+
+def drop_segment(*args, **kwargs):
+    return _source_workbench_call("drop_segment", *args, **kwargs)
+
+
+def manual_keep_segment(*args, **kwargs):
+    return _source_workbench_call("manual_keep_segment", *args, **kwargs)
+
+
+def render_segment(*args, **kwargs):
+    return _source_workbench_call("render_segment", *args, **kwargs)
+
+
+def retry_segment_judge(*args, **kwargs):
+    return _source_workbench_call("retry_segment_judge", *args, **kwargs)
+
+
+def update_segment_range(*args, **kwargs):
+    return _source_workbench_call("update_segment_range", *args, **kwargs)
+
+
+def process_feedback_directory(*args, **kwargs):
+    from src.burn.feedback_refine import process_feedback_directory as process
+
+    return process(*args, **kwargs)
 
 
 def default_videos_root() -> Path:
@@ -297,7 +335,9 @@ def create_app(
     @app.post("/api/tasks/{task_id}/requeue")
     async def task_requeue(task_id: str) -> Dict[str, Any]:
         try:
-            return requeue_task(store.videos_root, task_id)
+            result = requeue_task(store.videos_root, task_id)
+            result["worker_trigger"] = trigger_worker(1)
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:

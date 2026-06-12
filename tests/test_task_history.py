@@ -63,6 +63,42 @@ def test_task_history_includes_timestamps(tmp_path):
     assert "finished_at" in data
 
 
+def test_active_task_history_has_no_finished_timestamp(tmp_path):
+    source = tmp_path / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+
+    write_task_history(source, status="pending")
+
+    data = read_task_history(source)
+    assert data is not None
+    assert data["status"] == "pending"
+    assert "finished_at" not in data
+
+
+def test_failed_task_history_contains_structured_failure(tmp_path):
+    source = tmp_path / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+
+    write_task_history(
+        source,
+        status="failed",
+        error="database is locked",
+        failure={
+            "type": "OperationalError",
+            "message": "database is locked",
+            "stage": "queue",
+        },
+    )
+
+    data = read_task_history(source)
+    assert data is not None
+    assert data["failure"] == {
+        "type": "OperationalError",
+        "message": "database is locked",
+        "stage": "queue",
+    }
+
+
 def test_task_history_uses_explicit_videos_root_for_relative_path(tmp_path, monkeypatch):
     videos = tmp_path / "CustomVideos"
     room = videos / "22384516"

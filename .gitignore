@@ -285,6 +285,7 @@ celerybeat.pid
 # .env
 .env/
 .venv/
+.venv-win/
 env/
 venv/
 ENV/

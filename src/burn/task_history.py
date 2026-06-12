@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+ACTIVE_STATUSES = {"pending", "processing"}
+
+
 def write_task_history(
     source_path: str | Path,
     *,
@@ -27,24 +30,39 @@ def write_task_history(
     diagnostics: Optional[List[Dict[str, Any]]] = None,
     log_path: Optional[str] = None,
     error: Optional[str] = None,
+    failure: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Write a `.mp4.task.json` sidecar for a processed source recording.
 
     Args:
         source_path: Path to the source .mp4 file.
-        status: One of "done", "failed", "skipped", "cancelled".
+        status: One of "pending", "processing", "done", "failed",
+            "skipped", or "cancelled".
         All other args: optional metadata.
 
     Returns:
         Path to the written .task.json file.
     """
     source = Path(source_path)
+    previous = read_task_history(source) or {}
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
     history: Dict[str, Any] = {
         "source_rel_path": "",  # filled below if we can determine root
         "status": status,
-        "started_at": started_at or time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "finished_at": finished_at or time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "updated_at": now,
     }
+    queued_at = previous.get("queued_at")
+    if status == "pending":
+        history["queued_at"] = queued_at or started_at or now
+    elif status == "processing":
+        if queued_at:
+            history["queued_at"] = queued_at
+        history["started_at"] = started_at or now
+    else:
+        if queued_at:
+            history["queued_at"] = queued_at
+        history["started_at"] = started_at or previous.get("started_at") or now
+        history["finished_at"] = finished_at or now
 
     if worker_pid is not None:
         history["worker_pid"] = worker_pid
@@ -66,6 +84,9 @@ def write_task_history(
 
     if error:
         history["error"] = error
+
+    if failure:
+        history["failure"] = dict(failure)
 
     # Determine source_rel_path from explicit root, VIDEOS_DIR env, or project root.
     videos_root = _videos_root(videos_root)

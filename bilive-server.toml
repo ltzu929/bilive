@@ -1,40 +1,13 @@
-# bilive-server.toml — PC 端完整配置
-# 包含所有 GPU/模型/ASR/切片/封面配置
-# 基于现有 bilive.toml，增加 [paths] section
-
-[paths]
-# PC 端本地路径（环境变量可覆盖）
-# videos_dir 环境变量: BILIVE_VIDEOS_DIR
-# log_dir 环境变量: BILIVE_LOG_DIR
-# db_path 环境变量: BILIVE_DB_PATH
-
 [dashboard.remote_worker]
-# Pi dashboard can trigger a fixed Windows Scheduled Task after writing .pending.
-# Keep disabled until Windows OpenSSH and install_windows_slice_task.ps1 are configured.
 enabled = true
-command = ["ssh", "zk@192.168.31.202", "schtasks", "/Run", "/TN", "BiliveSliceOnce"]
+command = ["ssh", "zk@192.168.31.202", "curl.exe", "-sS", "-X", "POST", "http://127.0.0.1:2235/api/worker/run-once"]
+status_command = ["ssh", "zk@192.168.31.202", "curl.exe", "-sS", "http://127.0.0.1:2235/api/worker/status"]
 timeout = 10
 
-[model]
-model_type = "append" # Can be pipeline, append, merge
-
-# WARNING!: If you choose "deploy" local inference:
-# 1. Please check the VRAM requirements twice!
-# 2. Please make sure you have installed the Nvidia GPU driver and can check the cuda via `nvcc -V`!
-# WARNING!: If you choose "api":
-# due to the limitation of free tier, you should keep every video less than 30 minutes(around)
-# which means your MODEL_TYPE should not be "merge".
-[asr]
-asr_method = "none" # can be "deploy" or "api" or "none"
-whisper_api_key = "" # Apply for your own API key at https://console.groq.com/keys
-inference_model = "small" # If you choose "deploy", you should download the inference model
-
 [video]
-title = "{artist}直播-{date}" # Key words: {artist}, {date}, {title}, {source_link}
-description = "录制请征求主播同意，若未经同意就录制，所引起的任何法律问题均由该违规录制的 b 站账号承担。"
+title = "{artist}直播-{date}"
+description = "直播录制切片，来源见转载信息。"
 tid = 138
-gift_price_filter = 1
-reserve_for_fixing = false
 upload_line = "auto"
 
 [upload]
@@ -46,71 +19,31 @@ auth_retry_seconds = 120
 delete_after_success = true
 
 [slice]
-auto_slice = false
-slice_method = "burst"               # "density"(旧) 或 "burst"(新 - 弹幕突增检测)
-slice_prompt = ""
-slice_duration = 60                  # density 模式用
-slice_pre_context = 30               # density 模式用
-slice_post_context = 40               # density 模式用
-slice_num = 2                         # density 模式用
-slice_overlap = 30                    # density 模式用
-slice_step = 1                        # density 模式用
 min_video_size = 20
 
 [slice.burst]
-burst_ratio = 3.0                    # 突增阈值：局部密度/背景密度 ≥ 此值
-burst_window = 10                     # 突增检测窗口（秒）
-burst_context = 60                    # 峰值前后各取的秒数（切片总长 = 2 × context）
-burst_merge_gap = 5                   # 相邻突增合并间隔（秒）
-burst_top_n = 3                       # 最多选几个突增事件
+burst_ratio = 3.0
+burst_window = 10
+burst_context = 60
+burst_merge_gap = 5
+burst_top_n = 3
 
 [slice.llm_judge]
-# The production candidate gate always sends timestamped ASR plus window danmaku
-# to this provider. Failures remain for manual review and are never auto-uploaded.
-# openai-compatible uses visual_model_url/visual_model_name, for LM Studio.
-# local-subprocess runs a local command once per clip and reads JSON from stdout.
 provider = "openai-compatible"
 local_command = []
 timeout = 120
 
-[cover]
-generate_cover = false
-image_gen_model = "siliconflow"
-cover_prompt = ""
-minimax_api_key = ""
-siliconflow_api_key = ""
-tencent_secret_id = ""
-tencent_secret_key = ""
-baidu_api_key = ""
-stability_api_key = ""
-luma_api_key = ""
-ideogram_api_key = ""
-recraft_api_key = ""
-aws_access_key_id = ""
-aws_secret_access_key = ""
-hidream_api_key = ""
-dmx_api_token = ""
-
-[slice.omni]
-enable_quality_filter = true
-quality_threshold = 0.5
-enable_deep_analysis = true
-analysis_prompt = ""
-
 [slice.multi_modal]
-visual_model_url = "http://100.118.141.26:6542/v1"
+visual_model_url = "http://127.0.0.1:1234/v1"
 visual_model_name = "qwen/qwen3.5-9b"
-audio_model = "whisper"
-whisper_model = "large-v3"               # faster-whisper model: large-v3 / large-v3-turbo / medium
-whisper_engine = "faster-whisper"        # "faster-whisper" returns timestamped segments for subtitle burning
-whisper_device = "cpu"                   # "cuda"(GPU) 或 "cpu"
-whisper_compute_type = "int8"            # faster-whisper compute type
-unload_audio_model_after_analysis = true  # unload ASR/Qwen model after each clip
-frame_fps = 0.5
-enable_visual = false
-enable_audio = true
-enable_emotion_analysis = false
-emotion_model = "facebook/wav2vec2-base-robust-emotion"
+whisper_model = "large-v3"
+whisper_engine = "faster-whisper"
+whisper_device = "cpu"
+whisper_compute_type = "int8"
+unload_audio_model_after_analysis = true
+
+[slice.analysis]
+write_analysis_json = true
 
 [slice.edit]
 enable_edit_instruction = true

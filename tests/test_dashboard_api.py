@@ -489,7 +489,7 @@ async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(
 
     def fake_trigger(pending_tasks):
         trigger_calls.append(pending_tasks)
-        return {"status": "triggered", "returncode": 0}
+        return {"status": "accepted", "pid": 1234}
 
     async with dashboard_client(
         tmp_path / "Videos",
@@ -499,8 +499,32 @@ async def test_start_slice_api_triggers_remote_worker_when_tasks_are_pending(
         response = await client.post("/api/slice/start")
 
     assert response.status_code == 200
-    assert response.json()["worker_trigger"] == {"status": "triggered", "returncode": 0}
+    assert response.json()["worker_trigger"] == {"status": "accepted", "pid": 1234}
     assert trigger_calls == [1]
+
+
+@pytest.mark.anyio
+async def test_requeue_api_uses_same_remote_worker_trigger(tmp_path, dashboard_client):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
+    task_id = __import__("base64").urlsafe_b64encode(
+        source.relative_to(videos).as_posix().encode()
+    ).decode().rstrip("=")
+    calls = []
+
+    async with dashboard_client(
+        videos,
+        remote_worker_trigger=lambda pending: calls.append(pending)
+        or {"status": "accepted", "pid": 22},
+    ) as client:
+        response = await client.post(f"/api/tasks/{task_id}/requeue")
+
+    assert response.json()["worker_trigger"] == {"status": "accepted", "pid": 22}
+    assert calls == [1]
 
 
 @pytest.mark.anyio

@@ -15,7 +15,8 @@ def test_load_remote_worker_config_reads_toml_command(tmp_path):
             [
                 "[dashboard.remote_worker]",
                 "enabled = true",
-                'command = ["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"]',
+                'command = ["ssh", "win", "curl.exe", "-sS", "-X", "POST", "http://127.0.0.1:2235/api/worker/run-once"]',
+                'status_command = ["ssh", "win", "curl.exe", "-sS", "http://127.0.0.1:2235/api/worker/status"]',
                 "timeout = 8",
             ]
         ),
@@ -26,7 +27,22 @@ def test_load_remote_worker_config_reads_toml_command(tmp_path):
 
     assert config == RemoteWorkerConfig(
         enabled=True,
-        command=["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"],
+        command=[
+            "ssh",
+            "win",
+            "curl.exe",
+            "-sS",
+            "-X",
+            "POST",
+            "http://127.0.0.1:2235/api/worker/run-once",
+        ],
+        status_command=[
+            "ssh",
+            "win",
+            "curl.exe",
+            "-sS",
+            "http://127.0.0.1:2235/api/worker/status",
+        ],
         timeout=8.0,
     )
 
@@ -36,7 +52,7 @@ def test_trigger_remote_worker_runs_configured_command():
 
     class Result:
         returncode = 0
-        stdout = "SUCCESS: Attempted to run the scheduled task."
+        stdout = '{"status":"accepted","pid":1234}'
         stderr = ""
 
     def fake_runner(command, **kwargs):
@@ -46,19 +62,18 @@ def test_trigger_remote_worker_runs_configured_command():
     result = trigger_remote_worker(
         RemoteWorkerConfig(
             enabled=True,
-            command=["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"],
+            command=["ssh", "win", "curl.exe"],
             timeout=8,
         ),
         pending_tasks=2,
         runner=fake_runner,
     )
 
-    assert result["status"] == "triggered"
-    assert result["returncode"] == 0
-    assert result["stdout"] == "SUCCESS: Attempted to run the scheduled task."
+    assert result["status"] == "accepted"
+    assert result["pid"] == 1234
     assert calls == [
         (
-            ["ssh", "win", "schtasks", "/Run", "/TN", "BiliveSliceOnce"],
+            ["ssh", "win", "curl.exe"],
             {"capture_output": True, "text": True, "timeout": 8},
         )
     ]
@@ -107,25 +122,35 @@ def test_remote_worker_status_reports_remote_mode_when_enabled():
     status = remote_worker_status(
         RemoteWorkerConfig(
             enabled=True,
-            command=["ssh", "zk@192.168.31.202", "schtasks", "/Run"],
+            command=["ssh", "win", "curl.exe"],
+            status_command=["ssh", "win", "curl.exe", "status"],
             timeout=10,
-        )
+        ),
+        runner=lambda *args, **kwargs: type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": '{"status":"idle","pending_tasks":0}',
+                "stderr": "",
+            },
+        )(),
     )
 
-    assert status == {
-        "mode": "remote",
-        "enabled": True,
-        "message": "Pi remote Windows task trigger is enabled",
-    }
+    assert status["mode"] == "remote"
+    assert status["enabled"] is True
+    assert status["status"] == "idle"
+    assert status["pending_tasks"] == 0
 
 
-def test_remote_worker_status_reports_local_fallback_when_disabled():
+def test_remote_worker_status_reports_unavailable_when_disabled():
     status = remote_worker_status(
-        RemoteWorkerConfig(enabled=False, command=[], timeout=10)
+        RemoteWorkerConfig(enabled=False, command=[], status_command=[], timeout=10)
     )
 
     assert status == {
-        "mode": "local",
+        "mode": "disabled",
         "enabled": False,
-        "message": "Using browser-local PC worker API fallback",
+        "status": "unavailable",
+        "message": "Remote Windows Worker API is disabled",
     }

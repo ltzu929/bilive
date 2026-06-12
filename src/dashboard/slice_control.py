@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.burn.task_history import write_task_history
+
 
 SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
 
@@ -121,4 +123,14 @@ def _write_pending_marker(
         encoding="utf-8",
     )
     tmp_path.replace(pending_path)
+    try:
+        write_task_history(
+            video_path,
+            status="pending",
+            videos_root=videos_root,
+            started_at=marker_data["created_at"],
+        )
+    except Exception:
+        pending_path.unlink(missing_ok=True)
+        raise
     return pending_path

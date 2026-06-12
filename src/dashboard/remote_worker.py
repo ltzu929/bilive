@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -17,6 +18,7 @@ DEFAULT_TIMEOUT = 10.0
 class RemoteWorkerConfig:
     enabled: bool = False
     command: list[str] = field(default_factory=list)
+    status_command: list[str] = field(default_factory=list)
     timeout: float = DEFAULT_TIMEOUT
 
 
@@ -32,11 +34,22 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
     command = _command_from_value(
         os.environ.get("BILIVE_REMOTE_WORKER_COMMAND", section.get("command", []))
     )
+    status_command = _command_from_value(
+        os.environ.get(
+            "BILIVE_REMOTE_WORKER_STATUS_COMMAND",
+            section.get("status_command", []),
+        )
+    )
     timeout = _as_timeout(
         os.environ.get("BILIVE_REMOTE_WORKER_TIMEOUT", section.get("timeout", DEFAULT_TIMEOUT))
     )
 
-    return RemoteWorkerConfig(enabled=enabled, command=command, timeout=timeout)
+    return RemoteWorkerConfig(
+        enabled=enabled,
+        command=command,
+        status_command=status_command,
+        timeout=timeout,
+    )
 
 
 def trigger_remote_worker(
@@ -77,9 +90,24 @@ def trigger_remote_worker(
             "stderr": "",
         }
 
-    status = "triggered" if completed.returncode == 0 else "failed"
+    if completed.returncode != 0:
+        return {
+            "status": "failed",
+            "returncode": completed.returncode,
+            "command": cfg.command,
+            "stdout": (completed.stdout or "").strip(),
+            "stderr": (completed.stderr or "").strip(),
+        }
+
+    try:
+        payload = json.loads((completed.stdout or "").strip())
+    except json.JSONDecodeError:
+        payload = {
+            "status": "failed",
+            "message": "Windows worker API returned invalid JSON",
+        }
     return {
-        "status": status,
+        **payload,
         "returncode": completed.returncode,
         "command": cfg.command,
         "stdout": (completed.stdout or "").strip(),
@@ -87,18 +115,51 @@ def trigger_remote_worker(
     }
 
 
-def remote_worker_status(config: RemoteWorkerConfig | None = None) -> dict[str, Any]:
+def remote_worker_status(
+    config: RemoteWorkerConfig | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, Any]:
     cfg = config or load_remote_worker_config()
-    if cfg.enabled:
+    if cfg.enabled and cfg.status_command:
+        try:
+            completed = runner(
+                cfg.status_command,
+                capture_output=True,
+                text=True,
+                timeout=cfg.timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                "mode": "remote",
+                "enabled": True,
+                "status": "unavailable",
+                "message": str(exc),
+            }
+        if completed.returncode != 0:
+            return {
+                "mode": "remote",
+                "enabled": True,
+                "status": "unavailable",
+                "message": (completed.stderr or "").strip(),
+            }
+        try:
+            payload = json.loads((completed.stdout or "").strip())
+        except json.JSONDecodeError:
+            payload = {
+                "status": "unavailable",
+                "message": "Windows worker API returned invalid JSON",
+            }
         return {
+            **payload,
             "mode": "remote",
             "enabled": True,
-            "message": "Pi remote Windows task trigger is enabled",
+            "message": payload.get("message") or "Windows Worker API",
         }
     return {
-        "mode": "local",
+        "mode": "disabled",
         "enabled": False,
-        "message": "Using browser-local PC worker API fallback",
+        "status": "unavailable",
+        "message": "Remote Windows Worker API is disabled",
     }
 
 

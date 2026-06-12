@@ -1,5 +1,6 @@
 import json
 
+from src.burn.task_history import read_task_history
 from src.dashboard import slice_control
 
 
@@ -23,6 +24,7 @@ def test_start_slice_scan_writes_pending_markers_for_pc_worker(tmp_path):
     assert marker["room_id"] == "22384516"
     assert marker["action"] == "slice"
     assert not (room / "120s_22384516_20260524-12-57-08.mp4.pending").exists()
+    assert read_task_history(source)["status"] == "pending"
 
 
 def test_start_slice_scan_reports_empty_queue_when_nothing_is_ready(tmp_path):

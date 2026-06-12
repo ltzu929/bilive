@@ -83,14 +83,15 @@ def test_frontend_api_endpoint_contract():
 def test_frontend_worker_trigger_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")
 
-    assert "PC_WORKER_RUN_ONCE_URL" in text
-    assert "http://127.0.0.1:2235/api/worker/run-once" in text
-    assert "startPcWorkerOnce" in text
+    assert "PC_WORKER_RUN_ONCE_URL" not in text
+    assert "PC_WORKER_STATUS_URL" not in text
+    assert "http://127.0.0.1:2235" not in text
+    assert "startPcWorkerOnce" not in text
     assert "pendingTasks" in text
     assert "worker_trigger" in text
     assert "describeWorkerTrigger" in text
-    assert "start_pc_worker_api.ps1" in text
-    assert "start_pipeline.ps1" not in text
+    assert "dependency_unavailable" in text
+    assert "start_pipeline.ps1" in text
 
 
 def test_frontend_style_contract_for_slice_panels_and_rows():

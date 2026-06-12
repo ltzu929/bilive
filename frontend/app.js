@@ -43,9 +43,6 @@ const state = {
   decision: "review",
 };
 
-const PC_WORKER_RUN_ONCE_URL = "http://127.0.0.1:2235/api/worker/run-once";
-const PC_WORKER_STATUS_URL = "http://127.0.0.1:2235/api/worker/status";
-
 const elements = {
   roomFilter: document.querySelector("#room-filter"),
   statusFilter: document.querySelector("#status-filter"),
@@ -160,6 +157,7 @@ const DECISION_TAG = {
 const TASK_STATUS_TAG = {
   ready: { cls: "tag-blue", label: "ready" },
   pending: { cls: "tag-orange", label: "pending" },
+  processing: { cls: "tag-blue", label: "processing" },
   done: { cls: "tag-green", label: "done" },
   failed: { cls: "tag-red", label: "failed" },
   skipped: { cls: "tag-orange", label: "skipped" },
@@ -351,7 +349,7 @@ function taskActions(task) {
   if (status === "ready" || status === "done" || status === "failed") {
     actions.push({ action: "requeue", label: status === "done" ? "重跑" : "排队" });
   }
-  if (status !== "done") {
+  if (status !== "done" && status !== "processing") {
     actions.push({ action: "mark-done", label: "标记完成" });
   }
   return actions;
@@ -804,32 +802,37 @@ function renderRoomOptions(rooms) {
   }
 }
 
-async function startPcWorkerOnce() {
-  const response = await fetch(PC_WORKER_RUN_ONCE_URL, { method: "POST" });
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return response.json();
-}
-
 function describeWorkerTrigger(trigger) {
   if (!trigger || trigger.status === "disabled" || trigger.status === "skipped") {
     return {
-      handled: false,
+      handled: true,
       message: trigger?.message || "remote worker trigger is disabled",
     };
   }
-  if (trigger.status === "triggered") {
+  if (trigger.status === "accepted") {
     return {
       handled: true,
-      message: "Windows 计划任务已触发，切片进程会在 PC 上运行并自动退出",
+      message: "Windows Worker API 已接受任务",
+    };
+  }
+  if (trigger.status === "already_running") {
+    return { handled: true, message: "Windows Worker 正在处理现有任务" };
+  }
+  if (trigger.status === "no_pending") {
+    return { handled: true, message: "没有待处理任务" };
+  }
+  if (trigger.status === "dependency_unavailable") {
+    const missing = trigger.dependencies?.unavailable?.join(", ") || "未知依赖";
+    return {
+      handled: true,
+      message: `任务已保留，Windows 依赖不可用：${missing}。请运行 .\\start_pipeline.ps1 检查状态`,
     };
   }
   if (trigger.status === "failed") {
     const detail = trigger.stderr || trigger.message || "未知错误";
     return {
       handled: true,
-      message: `已排队，但 Pi 触发 Windows 计划任务失败：${detail}`,
+      message: `任务已保留，但 Windows Worker 调用失败：${detail}`,
     };
   }
   return {
@@ -841,15 +844,13 @@ function describeWorkerTrigger(trigger) {
 async function runTaskAction(task, action) {
   showError("");
   try {
-    let workerError = "";
-    await request(`/api/tasks/${encodeURIComponent(task.task_id)}/${action}`, {
+    const result = await request(`/api/tasks/${encodeURIComponent(task.task_id)}/${action}`, {
       method: "POST",
     });
     if (action === "requeue") {
-      try {
-        await startPcWorkerOnce();
-      } catch {
-        workerError = "已重新排队，但未连接到本机 PC worker。请先运行 .\\start_pc_worker_api.ps1";
+      const worker = describeWorkerTrigger(result.worker_trigger);
+      if (worker.message) {
+        showError(worker.message);
       }
     }
     await refreshTasks();
@@ -857,9 +858,6 @@ async function runTaskAction(task, action) {
     await refreshSliceProgress();
     await refreshSliceDiagnostics();
     await refreshWorkerStatus();
-    if (workerError) {
-      showError(workerError);
-    }
   } catch (error) {
     showError(error.message);
   }
@@ -878,18 +876,7 @@ async function startSlicing() {
     let workerMessage = "";
     if (pendingTasks > 0) {
       const remoteWorker = describeWorkerTrigger(result.worker_trigger);
-      if (remoteWorker.handled) {
-        workerMessage = remoteWorker.message;
-      } else {
-        try {
-          const worker = await startPcWorkerOnce();
-          workerMessage = worker.status === "already_running"
-            ? "PC worker 已在处理，处理完会自动退出"
-            : "PC worker 已启动，处理完会自动退出";
-        } catch (error) {
-          workerMessage = "已提交任务，但未连接到本机 PC worker。请先运行 .\\start_pc_worker_api.ps1，再从页面启动切片";
-        }
-      }
+      workerMessage = remoteWorker.message;
     }
     renderSliceProgress({
       status: pendingTasks > 0 ? "queued" : "idle",
@@ -1025,31 +1012,18 @@ function renderRemoteWorkerStatus(data) {
   const badge = elements.workerBadge;
   if (!badge) return false;
   if (data?.mode !== "remote" || !data.enabled) return false;
-  badge.className = "worker-badge worker-idle";
-  badge.textContent = "Windows task: 已配置";
-  badge.title = data.message || "Pi 会通过 SSH 触发 Windows 计划任务";
-  return true;
-}
-
-async function refreshLocalWorkerStatus() {
-  const badge = elements.workerBadge;
-  if (!badge) return;
-  try {
-    const resp = await fetch(PC_WORKER_STATUS_URL, { signal: AbortSignal.timeout(3000) });
-    if (!resp.ok) throw new Error("not ok");
-    const data = await resp.json();
-    badge.className = `worker-badge ${data.status === "running" ? "worker-running" : "worker-idle"}`;
-    if (data.status === "running") {
-      badge.textContent = `PC worker: 处理中 PID ${data.pid}`;
-    } else if (data.last_returncode !== undefined) {
-      badge.textContent = `PC worker: 上次退出 ${data.last_returncode}`;
-    } else {
-      badge.textContent = "PC worker: 空闲";
-    }
-  } catch {
-    badge.className = "worker-badge worker-idle";
+  const running = data.status === "running";
+  badge.className = `worker-badge ${running ? "worker-running" : "worker-idle"}`;
+  if (running) {
+    const pid = data.watcher?.pid || data.lock?.pid || "";
+    badge.textContent = `PC worker: 处理中${pid ? ` PID ${pid}` : ""}`;
+  } else if (data.status === "unavailable") {
     badge.textContent = "PC worker: 未连接";
+  } else {
+    badge.textContent = `PC worker: 空闲，待处理 ${Number(data.pending_tasks || 0)}`;
   }
+  badge.title = data.message || "Windows Worker API";
+  return true;
 }
 
 async function refreshWorkerStatus() {
@@ -1057,9 +1031,12 @@ async function refreshWorkerStatus() {
     const remoteStatus = await request("/api/worker-trigger/status");
     if (renderRemoteWorkerStatus(remoteStatus)) return;
   } catch {
-    // Older dashboard builds do not expose remote worker status; use legacy badge.
+    // The badge below reports the unavailable Windows worker.
   }
-  await refreshLocalWorkerStatus();
+  if (elements.workerBadge) {
+    elements.workerBadge.className = "worker-badge worker-idle";
+    elements.workerBadge.textContent = "PC worker: 未连接";
+  }
 }
 
 refresh();
