@@ -1,8 +1,0 @@
-# Pi 端最小依赖（不含 torch/whisper/librosa 等重型包）
-# 仅用于 Pi 上的 agent 扫描器
-#
-# blrec 需要单独安装: pip install ./wheel/blrec-2.0.0b4-py3-none-any.whl
-# 在 Pi (aarch64) 上可能需要先编译部分依赖
-
-httpx>=0.24.0
-toml>=0.10.0
