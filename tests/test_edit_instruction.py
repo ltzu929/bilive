@@ -402,28 +402,3 @@ def test_maybe_write_edit_outputs_points_to_final_output_video(tmp_path):
     assert output == str(tmp_path / "0s_source_edit.json")
     data = json.loads((tmp_path / "0s_source_edit.json").read_text(encoding="utf-8"))
     assert data["slice_video"] == str(final_slice)
-
-
-def test_combine_analysis_preserves_whisper_segments():
-    from src.autoslice.mllm_sdk.multi_modal_analyzer import combine_analysis
-
-    combined = combine_analysis(
-        visual_result={},
-        audio_result={
-            "transcript": "第一句。第二句。",
-            "segments": [
-                {"start": 1.0, "end": 2.5, "text": "第一句"},
-                {"start": 3.0, "end": 4.5, "text": "第二句"},
-            ],
-            "audio_keywords": ["第一句"],
-            "audio_quality": 0.7,
-            "emotion": "happy",
-        },
-        artist="主播",
-    )
-
-    result = AnalysisResult.from_dict(combined)
-
-    assert result.transcript == "第一句。第二句。"
-    assert result.transcript_segments[0].start == 1.0
-    assert result.transcript_segments[1].text == "第二句"

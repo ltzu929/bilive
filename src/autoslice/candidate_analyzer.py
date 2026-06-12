@@ -6,19 +6,15 @@ from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment
 from src.autoslice.mllm_sdk.audio_analyzer import (
     analyze_audio,
     unload_asr_models,
-    unload_emotion_model,
 )
 from src.autoslice.mllm_sdk.judge import judge_and_title
 from src.config import (
-    MULTI_MODAL_ENABLE_EMOTION_ANALYSIS,
-    MULTI_MODAL_EMOTION_MODEL,
     MULTI_MODAL_UNLOAD_AUDIO_MODEL,
     MULTI_MODAL_WHISPER_MODEL,
     MULTI_MODAL_VISUAL_NAME,
     MULTI_MODAL_VISUAL_URL,
     WHISPER_COMPUTE_TYPE,
     WHISPER_DEVICE,
-    WHISPER_ENGINE,
 )
 
 
@@ -31,9 +27,6 @@ def analyze_candidate(
         audio = analyze_audio(
             video_path,
             MULTI_MODAL_WHISPER_MODEL,
-            enable_emotion=False,
-            emotion_model=MULTI_MODAL_EMOTION_MODEL,
-            whisper_engine=WHISPER_ENGINE,
             whisper_device=WHISPER_DEVICE,
             whisper_compute_type=WHISPER_COMPUTE_TYPE,
         )
@@ -76,8 +69,6 @@ def unload_candidate_models() -> None:
     if not MULTI_MODAL_UNLOAD_AUDIO_MODEL:
         return
     unload_asr_models()
-    if MULTI_MODAL_ENABLE_EMOTION_ANALYSIS:
-        unload_emotion_model()
 
 
 def _valid_transcript_segments(raw_segments: Any) -> list[TranscriptSegment]:

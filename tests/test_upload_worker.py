@@ -2,6 +2,7 @@ import json
 import os
 
 import pytest
+import toml
 
 from src.db.conn import (
     get_upload_item,
@@ -396,6 +397,15 @@ def test_server_config_exports_upload_runtime_settings():
     assert server_config.UPLOAD_RETRY_BASE_SECONDS == 30
     assert server_config.UPLOAD_AUTH_RETRY_SECONDS == 120
     assert server_config.UPLOAD_DELETE_AFTER_SUCCESS is True
+
+
+def test_production_config_omits_legacy_gift_filter():
+    from src.config import server_config
+
+    config = toml.load("bilive-server.toml")
+
+    assert "gift_price_filter" not in config["video"]
+    assert not hasattr(server_config, "GIFT_PRICE_FILTER")
 
 
 def test_run_forever_reloads_client_after_auth_configuration_recovers(tmp_path):

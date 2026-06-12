@@ -1,160 +1,84 @@
-# src/config/server_config.py
-# PC 端完整配置 — 包含所有模型、GPU、ASR、切片等配置
-#
-# GPU 检测使用 lazy import，在无 torch 环境下不会崩溃（返回 False）
+"""Production configuration for the Windows processing pipeline."""
+
+from __future__ import annotations
 
 import os
-import configparser
-from pathlib import Path
-from .base import load_config_from_toml, SRC_DIR, BILIVE_DIR, VIDEOS_DIR, LOG_DIR, DB_PATH
+
+from .base import (
+    BILIVE_DIR,
+    DB_PATH,
+    LOG_DIR,
+    SRC_DIR,
+    VIDEOS_DIR,
+    load_config_from_toml,
+)
 
 
-# ── GPU 检测 — lazy import，无 torch 时返回 False ──
-def _check_gpu():
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
-
-
-# ── 加载配置文件 ──
-_config_path = os.environ.get("BILIVE_CONFIG", os.path.join(BILIVE_DIR, "bilive-server.toml"))
+_config_path = os.environ.get(
+    "BILIVE_CONFIG",
+    os.path.join(BILIVE_DIR, "bilive-server.toml"),
+)
 config = load_config_from_toml(_config_path)
 if config is None:
-    print("failed to load server config file, please check bilive-server.toml", flush=True)
-    exit(1)
+    raise RuntimeError(f"Cannot load bilive configuration: {_config_path}")
 
-# ── 初始化数据库 ──
-if not os.path.exists(DB_PATH):
-    print("Initialize the database", flush=True)
-    from db.conn import create_table
-    create_table()
+video = config.get("video", {})
+upload = config.get("upload", {})
+slice_config = config.get("slice", {})
+burst = slice_config.get("burst", {})
+judge = slice_config.get("llm_judge", {})
+multi_modal = slice_config.get("multi_modal", {})
+analysis = slice_config.get("analysis", {})
+edit = slice_config.get("edit", {})
 
+TITLE = video.get("title", "{artist}直播-{date}")
+DESC = video.get("description", "直播录制切片")
+TID = int(video.get("tid", 138))
+UPLOAD_LINE = str(video.get("upload_line", "auto"))
 
-# ── 模型配置 ──
-GPU_EXIST = _check_gpu()
-MODEL_TYPE = config.get("model", {}).get("model_type")
+UPLOAD_AUTO_START = bool(upload.get("auto_start", True))
+UPLOAD_POLL_INTERVAL_SECONDS = float(upload.get("poll_interval_seconds", 10))
+UPLOAD_MAX_ATTEMPTS = int(upload.get("max_attempts", 3))
+UPLOAD_RETRY_BASE_SECONDS = float(upload.get("retry_base_seconds", 30))
+UPLOAD_AUTH_RETRY_SECONDS = float(upload.get("auth_retry_seconds", 120))
+UPLOAD_DELETE_AFTER_SUCCESS = bool(upload.get("delete_after_success", True))
 
-# ── ASR 配置 ──
-ASR_METHOD = config.get("asr", {}).get("asr_method")
-WHISPER_API_KEY = config.get("asr", {}).get("whisper_api_key")
-INFERENCE_MODEL = config.get("asr", {}).get("inference_model")
+MIN_VIDEO_SIZE = float(slice_config.get("min_video_size", 20))
+BURST_RATIO = float(burst.get("burst_ratio", 3.0))
+BURST_WINDOW = int(burst.get("burst_window", 10))
+BURST_CONTEXT = int(burst.get("burst_context", 60))
+BURST_MERGE_GAP = int(burst.get("burst_merge_gap", 5))
+BURST_TOP_N = int(burst.get("burst_top_n", 3))
 
+LLM_JUDGE_PROVIDER = str(judge.get("provider", "openai-compatible"))
+LOCAL_LLM_COMMAND = list(judge.get("local_command", []))
+LOCAL_LLM_TIMEOUT = float(judge.get("timeout", 120))
 
-def get_model_path():
-    model_dir = os.path.join(SRC_DIR, "subtitle", "models")
-    model_path = os.path.join(model_dir, f"{INFERENCE_MODEL}.pt")
-    return model_path
-
-
-def get_interface_config():
-    interface_config = configparser.ConfigParser()
-    interface_dir = os.path.join(SRC_DIR, "subtitle")
-    interface_file = os.path.join(interface_dir, "en.ini")
-    interface_config.read(interface_file, encoding="utf-8")
-    return interface_config
-
-
-# ── 视频配置 ──
-TITLE = config.get("video", {}).get("title")
-DESC = config.get("video", {}).get("description")
-TID = config.get("video", {}).get("tid")
-GIFT_PRICE_FILTER = config.get("video", {}).get("gift_price_filter")
-RESERVE_FOR_FIXING = config.get("video", {}).get("reserve_for_fixing")
-UPLOAD_LINE = config.get("video", {}).get("upload_line")
-
-# ── 上传消费者配置 ──
-UPLOAD_AUTO_START = config.get("upload", {}).get("auto_start", True)
-UPLOAD_POLL_INTERVAL_SECONDS = config.get("upload", {}).get(
-    "poll_interval_seconds", 10
+MULTI_MODAL_VISUAL_URL = str(
+    multi_modal.get("visual_model_url", "http://127.0.0.1:1234/v1")
 )
-UPLOAD_MAX_ATTEMPTS = config.get("upload", {}).get("max_attempts", 3)
-UPLOAD_RETRY_BASE_SECONDS = config.get("upload", {}).get(
-    "retry_base_seconds", 30
+MULTI_MODAL_VISUAL_NAME = str(
+    multi_modal.get("visual_model_name", "local-model")
 )
-UPLOAD_AUTH_RETRY_SECONDS = config.get("upload", {}).get(
-    "auth_retry_seconds", 120
+MULTI_MODAL_WHISPER_MODEL = str(
+    multi_modal.get("whisper_model", "large-v3")
 )
-UPLOAD_DELETE_AFTER_SUCCESS = config.get("upload", {}).get(
-    "delete_after_success", True
+WHISPER_ENGINE = str(multi_modal.get("whisper_engine", "faster-whisper"))
+WHISPER_DEVICE = str(multi_modal.get("whisper_device", "cpu"))
+WHISPER_COMPUTE_TYPE = str(
+    multi_modal.get("whisper_compute_type", "int8")
+)
+MULTI_MODAL_UNLOAD_AUDIO_MODEL = bool(
+    multi_modal.get("unload_audio_model_after_analysis", True)
 )
 
-# ── 切片配置 ──
-AUTO_SLICE = config.get("slice", {}).get("auto_slice")
-SLICE_DURATION = config.get("slice", {}).get("slice_duration")
-SLICE_NUM = config.get("slice", {}).get("slice_num")
-SLICE_OVERLAP = config.get("slice", {}).get("slice_overlap")
-SLICE_STEP = config.get("slice", {}).get("slice_step")
-SLICE_PRE_CONTEXT = config.get("slice", {}).get("slice_pre_context", 30)
-SLICE_POST_CONTEXT = config.get("slice", {}).get("slice_post_context", 40)
-MIN_VIDEO_SIZE = config.get("slice", {}).get("min_video_size")
-# Compatibility default for legacy title-only modules. The production pending
-# pipeline uses candidate_analyzer and slice.llm_judge instead.
-MLLM_MODEL = config.get("slice", {}).get("mllm_model", "local-audio")
-ZHIPU_API_KEY = config.get("slice", {}).get("zhipu_api_key")
-GEMINI_API_KEY = config.get("slice", {}).get("gemini_api_key")
-QWEN_API_KEY = config.get("slice", {}).get("qwen_api_key")
-SENSENOVA_API_KEY = config.get("slice", {}).get("sensenova_api_key")
+OMNI_ENABLE_DEEP_ANALYSIS = bool(
+    analysis.get("write_analysis_json", True)
+)
 
-# ── 封面配置 ──
-GENERATE_COVER = config.get("cover", {}).get("generate_cover")
-IMAGE_GEN_MODEL = config.get("cover", {}).get("image_gen_model")
-MINIMAX_API_KEY = config.get("cover", {}).get("minimax_api_key")
-SILICONFLOW_API_KEY = config.get("cover", {}).get("siliconflow_api_key")
-TENCENT_SECRET_ID = config.get("cover", {}).get("tencent_secret_id")
-TENCENT_SECRET_KEY = config.get("cover", {}).get("tencent_secret_key")
-BAIDU_API_KEY = config.get("cover", {}).get("baidu_api_key")
-STABILITY_API_KEY = config.get("cover", {}).get("stability_api_key")
-LUMA_API_KEY = config.get("cover", {}).get("luma_api_key")
-IDEOGRAM_API_KEY = config.get("cover", {}).get("ideogram_api_key")
-RECRAFT_API_KEY = config.get("cover", {}).get("recraft_api_key")
-AWS_ACCESS_KEY_ID = config.get("cover", {}).get("aws_access_key_id")
-AWS_SECRET_ACCESS_KEY = config.get("cover", {}).get("aws_secret_access_key")
-HIDREAM_API_KEY = config.get("cover", {}).get("hidream_api_key")
-DMX_API_TOKEN = config.get("cover", {}).get("dmx_api_token")
-SLICE_PROMPT = config.get("slice", {}).get("slice_prompt")
-COVER_PROMPT = config.get("cover", {}).get("cover_prompt")
-
-# ── OMNI 分析配置 ──
-OMNI_ENABLE_QUALITY_FILTER = config.get("slice", {}).get("omni", {}).get("enable_quality_filter", True)
-OMNI_QUALITY_THRESHOLD = config.get("slice", {}).get("omni", {}).get("quality_threshold", 0.6)
-OMNI_ENABLE_DEEP_ANALYSIS = config.get("slice", {}).get("omni", {}).get("enable_deep_analysis", True)
-OMNI_ANALYSIS_PROMPT = config.get("slice", {}).get("omni", {}).get("analysis_prompt", "")
-
-# ── 多模型协作配置 ──
-MULTI_MODAL_VISUAL_URL = config.get("slice", {}).get("multi_modal", {}).get("visual_model_url", "http://localhost:1234/v1")
-MULTI_MODAL_VISUAL_NAME = config.get("slice", {}).get("multi_modal", {}).get("visual_model_name", "local-model")
-MULTI_MODAL_WHISPER_MODEL = config.get("slice", {}).get("multi_modal", {}).get("whisper_model", "base")
-MULTI_MODAL_FRAME_FPS = config.get("slice", {}).get("multi_modal", {}).get("frame_fps", 0.5)
-MULTI_MODAL_ENABLE_VISUAL = config.get("slice", {}).get("multi_modal", {}).get("enable_visual", True)
-MULTI_MODAL_ENABLE_AUDIO = config.get("slice", {}).get("multi_modal", {}).get("enable_audio", True)
-WHISPER_ENGINE = config.get("slice", {}).get("multi_modal", {}).get("whisper_engine", "openai-whisper")
-WHISPER_DEVICE = config.get("slice", {}).get("multi_modal", {}).get("whisper_device", "cpu")
-WHISPER_COMPUTE_TYPE = config.get("slice", {}).get("multi_modal", {}).get("whisper_compute_type")
-MULTI_MODAL_UNLOAD_AUDIO_MODEL = config.get("slice", {}).get("multi_modal", {}).get("unload_audio_model_after_analysis", True)
-
-# LLM judge provider:
-# - openai-compatible: LM Studio or another /v1 chat completion server.
-# - local-subprocess: run LOCAL_LLM_COMMAND once per clip and read JSON from stdout.
-LLM_JUDGE_PROVIDER = config.get("slice", {}).get("llm_judge", {}).get("provider", "openai-compatible")
-LOCAL_LLM_COMMAND = config.get("slice", {}).get("llm_judge", {}).get("local_command", [])
-LOCAL_LLM_TIMEOUT = config.get("slice", {}).get("llm_judge", {}).get("timeout", 120)
-
-# ── 情感分析配置 ──
-MULTI_MODAL_ENABLE_EMOTION_ANALYSIS = config.get("slice", {}).get("multi_modal", {}).get("enable_emotion_analysis", False)
-MULTI_MODAL_EMOTION_MODEL = config.get("slice", {}).get("multi_modal", {}).get("emotion_model", "facebook/wav2vec2-base-robust-emotion")
-
-# ── 切片方法配置 ──
-SLICE_METHOD = "burst"
-BURST_RATIO = config.get("slice", {}).get("burst", {}).get("burst_ratio", 3.0)
-BURST_WINDOW = config.get("slice", {}).get("burst", {}).get("burst_window", 10)
-BURST_CONTEXT = config.get("slice", {}).get("burst", {}).get("burst_context", 60)
-BURST_MERGE_GAP = config.get("slice", {}).get("burst", {}).get("burst_merge_gap", 5)
-BURST_TOP_N = config.get("slice", {}).get("burst", {}).get("burst_top_n", 3)
-
-# ── Edit instruction 配置 ──
-EDIT_ENABLE_INSTRUCTION = config.get("slice", {}).get("edit", {}).get("enable_edit_instruction", True)
-EDIT_ENABLE_PROMPT_PACKAGE = config.get("slice", {}).get("edit", {}).get("enable_prompt_package", False)
-EDIT_MAX_SUBTITLE_EVIDENCE = config.get("slice", {}).get("edit", {}).get("max_subtitle_evidence", 6)
-EDIT_DEFAULT_HIGHLIGHT_WINDOW = config.get("slice", {}).get("edit", {}).get("default_highlight_window", 12)
+EDIT_ENABLE_INSTRUCTION = bool(edit.get("enable_edit_instruction", True))
+EDIT_ENABLE_PROMPT_PACKAGE = bool(edit.get("enable_prompt_package", False))
+EDIT_MAX_SUBTITLE_EVIDENCE = int(edit.get("max_subtitle_evidence", 6))
+EDIT_DEFAULT_HIGHLIGHT_WINDOW = float(
+    edit.get("default_highlight_window", 12)
+)

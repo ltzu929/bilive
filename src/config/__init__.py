@@ -1,4 +1,3 @@
-# src/config 包 — 重导出 server_config 的所有名称以保持向后兼容
-# PC 端新代码建议直接使用: from src.config.server_config import ...
-# Pi 端代码使用: from src.config.agent_config import ...
+"""Convenience exports for the Windows production configuration."""
+
 from src.config.server_config import *  # noqa: F401,F403

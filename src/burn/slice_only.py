@@ -20,6 +20,12 @@ from src.autoslice.candidate_analyzer import (
 )
 from src.autoslice.danmaku_slice import extract_danmaku_text
 from src.burn.subtitle_burn import burn_subtitles_from_analysis
+from src.burn.pipeline_stages import (
+    analyze_stage,
+    enqueue_stage,
+    metadata_stage,
+    subtitle_stage,
+)
 from src.upload.slice_metadata import (
     delete_slice_upload_metadata,
     write_slice_upload_metadata,
@@ -27,7 +33,7 @@ from src.upload.slice_metadata import (
 from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
 from src.burn.slice_progress import SliceProgressWriter
-from db.conn import get_upload_item, insert_upload_queue
+from db.conn import delete_upload_queue, get_upload_item, insert_upload_queue
 
 
 def check_file_size(file_path):
@@ -290,6 +296,8 @@ def slice_only(video_path, **_slice_options):
     judge_failed_count = 0
     for index, generated_slice in enumerate(slices_path, start=1):
         slice_path = generated_slice.path
+        segment = None
+        queue_created = False
         try:
             progress.update(
                 force=True,
@@ -309,15 +317,12 @@ def slice_only(video_path, **_slice_options):
                 generated_slice.context_start,
                 generated_slice.context_end,
             )
-            from src.autoslice.analysis_result import AnalysisResult
-
-            result = analyze_candidate(
+            result = analyze_stage(
                 slice_path,
-                artist,
+                artist=artist,
                 danmaku_text=danmaku_text,
+                analyzer=analyze_candidate,
             )
-            if not isinstance(result, AnalysisResult):
-                raise TypeError("candidate analyzer must return AnalysisResult")
 
             segment = build_segment_record(
                 original_video_path,
@@ -351,9 +356,13 @@ def slice_only(video_path, **_slice_options):
                 result.to_json_file(analysis_json_path)
                 scan_log.info(f"Analysis result saved: {analysis_json_path}")
 
-            burn_result = burn_subtitles_from_analysis(slice_path, result)
-            if not burn_result.burned:
-                reason = f"Subtitle burn failed: {burn_result.message}"
+            burn_result = subtitle_stage(
+                slice_path,
+                result,
+                burner=burn_subtitles_from_analysis,
+            )
+            if not burn_result["ok"]:
+                reason = burn_result["error"]
                 judge_failed_count += 1
                 segment["judge_status"] = "judge_failed"
                 segment["judge_error"] = reason
@@ -404,16 +413,14 @@ def slice_only(video_path, **_slice_options):
                 message="正在写入上传参数",
                 diagnostics=diagnostics,
             )
-            try:
-                write_slice_upload_metadata(
-                    slice_path,
-                    title=result.title,
-                    desc=result.description,
-                    tag=result.tags,
-                    source=f"https://live.bilibili.com/{room_id}",
-                )
-            except Exception as exc:
-                reason = f"Upload metadata failed: {exc}"
+            metadata_result = metadata_stage(
+                slice_path,
+                result,
+                room_id=room_id,
+                writer=write_slice_upload_metadata,
+            )
+            if not metadata_result["ok"]:
+                reason = metadata_result["error"]
                 judge_failed_count += 1
                 segment["judge_status"] = "judge_failed"
                 segment["judge_error"] = reason
@@ -433,49 +440,33 @@ def slice_only(video_path, **_slice_options):
                 message="正在加入上传队列",
                 diagnostics=diagnostics,
             )
-            if os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1":
+            queue_result = enqueue_stage(
+                slice_path,
+                insert=insert_upload_queue,
+                lookup=get_upload_item,
+                skip=os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1",
+            )
+            if not queue_result["ok"]:
+                reason = queue_result["error"]
+                judge_failed_count += 1
+                segment["judge_status"] = "judge_failed"
+                segment["judge_error"] = reason
+                segment["quality_reason"] = reason
+                delete_slice_upload_metadata(slice_path)
+                segments.append(segment)
+                scan_log.error(f"{reason}: {slice_path}")
+                continue
+            queue_created = bool(queue_result.get("created"))
+            segment["upload_status"] = queue_result["status"]
+            if queue_result["status"] == "skipped":
                 scan_log.info(f"Skip upload queue for local test: {slice_path}")
-                segment["upload_status"] = "skipped"
+            elif queue_result["status"] == "queued":
+                scan_log.info(f"Slice ready for upload: {slice_path}")
             else:
-                try:
-                    queued = insert_upload_queue(slice_path)
-                except Exception as exc:
-                    queued = False
-                    queue_error = str(exc)
-                else:
-                    queue_error = "queue insert returned false"
-                if not queued:
-                    existing = get_upload_item(slice_path)
-                    existing_status = (
-                        str(existing.get("status") or "")
-                        if isinstance(existing, dict)
-                        else ""
-                    )
-                    if existing_status in {
-                        "queued",
-                        "uploading",
-                        "uploaded",
-                        "publishing",
-                        "published",
-                    }:
-                        segment["upload_status"] = existing_status
-                        scan_log.info(
-                            f"Slice already exists in upload queue "
-                            f"({existing_status}): {slice_path}"
-                        )
-                    else:
-                        reason = f"Upload queue failed: {queue_error}"
-                        judge_failed_count += 1
-                        segment["judge_status"] = "judge_failed"
-                        segment["judge_error"] = reason
-                        segment["quality_reason"] = reason
-                        delete_slice_upload_metadata(slice_path)
-                        segments.append(segment)
-                        scan_log.error(f"{reason}: {slice_path}")
-                        continue
-                else:
-                    segment["upload_status"] = "queued"
-                    scan_log.info(f"Slice ready for upload: {slice_path}")
+                scan_log.info(
+                    f"Slice already exists in upload queue "
+                    f"({queue_result['status']}): {slice_path}"
+                )
 
             if segment["upload_status"] == "skipped":
                 scan_log.info(f"Slice finalized without queueing: {slice_path}")
@@ -485,8 +476,21 @@ def slice_only(video_path, **_slice_options):
         except Exception as e:
             scan_log.error(f"Error processing slice {slice_path}: {e}")
             progress.error(str(e), current_slice=index, total_slices=total_slices)
-            if os.path.exists(slice_path):
-                os.remove(slice_path)
+            judge_failed_count += 1
+            if segment is None:
+                segment = build_segment_record(
+                    original_video_path,
+                    generated_slice,
+                    None,
+                    upload_status="not_queued",
+                )
+            segment["judge_status"] = "judge_failed"
+            segment["judge_error"] = str(e)
+            segment["quality_reason"] = str(e)
+            if queue_created:
+                delete_upload_queue(slice_path)
+            segment["upload_status"] = "not_queued"
+            segments.append(segment)
             delete_slice_upload_metadata(slice_path)
 
     if total_slices and not output_slices and not segments:

@@ -80,6 +80,12 @@ def _setup_pipeline(tmp_path, monkeypatch, analysis):
         lambda path: conn.get_upload_item(path, db_path=db_path),
         raising=False,
     )
+    monkeypatch.setattr(
+        slice_only_module,
+        "delete_upload_queue",
+        lambda path: conn.delete_upload_queue(path, db_path=db_path),
+        raising=False,
+    )
     monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
     monkeypatch.delenv("BILIVE_SKIP_UPLOAD_QUEUE", raising=False)
     return source, candidate, db_path
@@ -183,6 +189,79 @@ def test_metadata_failure_keeps_candidate_for_review_without_queue(
     assert result["slice_count"] == 0
     assert result["segments"][0]["judge_status"] == "judge_failed"
     assert "metadata" in result["segments"][0]["judge_error"].lower()
+    assert candidate.exists()
+    assert not candidate.with_suffix(".upload.json").exists()
+    assert conn.list_upload_queue(db_path) == []
+
+
+def test_unexpected_candidate_stage_failure_keeps_candidate_for_review(
+    tmp_path,
+    monkeypatch,
+):
+    analysis = AnalysisResult(
+        title="值得保留的候选",
+        description="分析成功，但后续阶段发生未预料异常。",
+        tags=["直播", "高能"],
+        retain_recommendation=True,
+        judge_status="keep",
+        transcript="有效转录",
+        transcript_segments=[
+            TranscriptSegment(start=0.0, end=2.0, text="有效转录"),
+        ],
+    )
+    source, candidate, db_path = _setup_pipeline(tmp_path, monkeypatch, analysis)
+
+    monkeypatch.setattr(
+        "src.autoslice.edit_instruction_builder.maybe_write_edit_outputs",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("edit output failed")),
+    )
+
+    result = slice_only_module.slice_only(str(source))
+
+    assert result["slice_count"] == 0
+    assert result["judge_failed_count"] == 1
+    assert result["segments"][0]["judge_status"] == "judge_failed"
+    assert result["segments"][0]["judge_error"] == "edit output failed"
+    assert candidate.exists()
+    assert not candidate.with_suffix(".upload.json").exists()
+    assert conn.list_upload_queue(db_path) == []
+
+
+def test_unexpected_failure_after_enqueue_rolls_back_new_queue_row(
+    tmp_path,
+    monkeypatch,
+):
+    analysis = AnalysisResult(
+        title="值得保留的候选",
+        description="所有自动投稿证据完整。",
+        tags=["直播", "高能"],
+        retain_recommendation=True,
+        judge_status="keep",
+        transcript="有效转录",
+        transcript_segments=[
+            TranscriptSegment(start=0.0, end=2.0, text="有效转录"),
+        ],
+    )
+    source, candidate, db_path = _setup_pipeline(tmp_path, monkeypatch, analysis)
+    real_log = slice_only_module.scan_log
+
+    class FailAfterEnqueue:
+        def info(self, message):
+            if "Slice ready for upload" in message:
+                raise OSError("post-enqueue failure")
+            return real_log.info(message)
+
+        def __getattr__(self, name):
+            return getattr(real_log, name)
+
+    monkeypatch.setattr(slice_only_module, "scan_log", FailAfterEnqueue())
+
+    result = slice_only_module.slice_only(str(source))
+
+    assert result["slice_count"] == 0
+    assert result["judge_failed_count"] == 1
+    assert result["segments"][0]["judge_status"] == "judge_failed"
+    assert result["segments"][0]["upload_status"] == "not_queued"
     assert candidate.exists()
     assert not candidate.with_suffix(".upload.json").exists()
     assert conn.list_upload_queue(db_path) == []

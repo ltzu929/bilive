@@ -135,14 +135,8 @@ def test_unload_candidate_models_releases_configured_models(monkeypatch):
         "unload_asr_models",
         lambda: calls.append("asr"),
     )
-    monkeypatch.setattr(
-        candidate_analyzer,
-        "unload_emotion_model",
-        lambda: calls.append("emotion"),
-    )
     monkeypatch.setattr(candidate_analyzer, "MULTI_MODAL_UNLOAD_AUDIO_MODEL", True)
-    monkeypatch.setattr(candidate_analyzer, "MULTI_MODAL_ENABLE_EMOTION_ANALYSIS", True)
 
     candidate_analyzer.unload_candidate_models()
 
-    assert calls == ["asr", "emotion"]
+    assert calls == ["asr"]
