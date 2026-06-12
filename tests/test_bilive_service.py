@@ -18,6 +18,8 @@ def test_service_stays_active_while_windows_share_is_offline():
     assert "Environment=BILIVE_WAIT_SECONDS=15" in text
     assert "Environment=BILIVE_HEALTHCHECK_SECONDS=15" in text
     assert "TimeoutStopSec=30" in text
+    assert "MemoryHigh=2500M" in text
+    assert "MemoryMax=3200M" in text
     assert "Restart=always" in text
     assert "StandardOutput=journal" in text
     assert "StandardError=journal" in text
@@ -33,6 +35,10 @@ def test_wrapper_waits_for_share_and_stops_recorder_when_it_disappears():
     assert 'source "$ENV_FILE"' in text
     assert "storage_ready" in text
     assert 'kill -TERM "$BLREC_PID"' in text
+    assert 'STOP_TIMEOUT_SECONDS="${BILIVE_STOP_TIMEOUT_SECONDS:-20}"' in text
+    assert 'kill -KILL "$BLREC_PID"' in text
+    assert 'VmRSS' in text
+    assert 'export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"' in text
     assert "python -m src.agent.scanner" not in text
 
 
@@ -58,20 +64,30 @@ def test_recovery_script_repairs_failed_and_stale_cifs_mounts():
     assert 'timeout "$CONNECT_TIMEOUT_SECONDS" bash -c' in text
     assert 'timeout "$PROBE_TIMEOUT_SECONDS" stat "$PROBE_PATH"' in text
     assert 'systemctl stop "$BILIVE_SERVICE"' in text
+    assert 'systemctl stop "$DASHBOARD_SERVICE"' in text
     assert 'systemctl stop "$MOUNT_UNIT"' in text
     assert 'umount -l "$MOUNT_POINT"' in text
     assert 'systemctl reset-failed "$MOUNT_UNIT"' in text
     assert 'systemctl start "$MOUNT_UNIT"' in text
     assert 'systemctl restart "$BILIVE_SERVICE"' in text
+    assert 'systemctl restart "$DASHBOARD_SERVICE"' in text
 
 
 def test_installer_copies_local_recovery_units_and_enables_timer():
     text = INSTALLER.read_text(encoding="utf-8")
 
     assert "/usr/local/bin/bilive-start.sh" in text
+    assert "/usr/local/bin/bilive-dashboard-start.sh" in text
     assert "/usr/local/sbin/bilive-smb-recover" in text
     assert "/etc/systemd/system/bilive-smb-recover.service" in text
     assert "/etc/systemd/system/bilive-smb-recover.timer" in text
+    assert "/etc/systemd/system/bilive-dashboard.service" in text
+    assert "-m src.blrec_patch" in text
+    assert "-m src.blrec_settings" in text
+    assert 'requirements/pi.txt' in text
+    assert '-m pip install' in text
+    assert '-m pip check' in text
     assert "systemctl daemon-reload" in text
     assert "systemctl enable --now bilive-smb-recover.timer" in text
     assert "systemctl restart bilive.service" in text
+    assert "systemctl restart bilive-dashboard.service" in text

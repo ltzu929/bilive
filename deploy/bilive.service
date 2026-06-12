@@ -16,6 +16,9 @@ ExecStart=/usr/local/bin/bilive-start.sh
 Restart=always
 RestartSec=10
 TimeoutStopSec=30
+MemoryAccounting=yes
+MemoryHigh=2500M
+MemoryMax=3200M
 StandardOutput=journal
 StandardError=journal
 

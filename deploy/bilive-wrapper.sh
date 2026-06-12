@@ -14,9 +14,12 @@ HEALTHCHECK_SECONDS="${BILIVE_HEALTHCHECK_SECONDS:-15}"
 RESTART_SECONDS="${BILIVE_RESTART_SECONDS:-10}"
 PROBE_TIMEOUT_SECONDS="${BILIVE_PROBE_TIMEOUT_SECONDS:-5}"
 CONNECT_TIMEOUT_SECONDS="${BILIVE_CONNECT_TIMEOUT_SECONDS:-3}"
+STOP_TIMEOUT_SECONDS="${BILIVE_STOP_TIMEOUT_SECONDS:-20}"
+RSS_LOG_SECONDS="${BILIVE_RSS_LOG_SECONDS:-300}"
 
 export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$PROJECT_DIR/Videos}"
 export BILIVE_LOG_DIR="${BILIVE_LOG_DIR:-$PROJECT_DIR/logs}"
+export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 BLREC_PID=""
 
@@ -39,6 +42,16 @@ stop_blrec() {
     if [ -n "$BLREC_PID" ] && kill -0 "$BLREC_PID" 2>/dev/null; then
         log "[INFO] Stopping blrec (PID $BLREC_PID)..."
         kill -TERM "$BLREC_PID" 2>/dev/null || true
+        elapsed=0
+        while kill -0 "$BLREC_PID" 2>/dev/null &&
+            [ "$elapsed" -lt "$STOP_TIMEOUT_SECONDS" ]; do
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        if kill -0 "$BLREC_PID" 2>/dev/null; then
+            log "[WARN] blrec did not stop after ${STOP_TIMEOUT_SECONDS}s; killing it"
+            kill -KILL "$BLREC_PID" 2>/dev/null || true
+        fi
         wait "$BLREC_PID" 2>/dev/null || true
     fi
     BLREC_PID=""
@@ -83,9 +96,16 @@ while true; do
         -c "$SETTINGS_FILE" \
         --api-key "$RECORD_KEY" &
     BLREC_PID=$!
+    last_rss_log=0
 
     while kill -0 "$BLREC_PID" 2>/dev/null; do
         sleep "$HEALTHCHECK_SECONDS"
+        now="$(date +%s)"
+        if [ $((now - last_rss_log)) -ge "$RSS_LOG_SECONDS" ]; then
+            rss="$(awk '/^VmRSS:/ {print $2 " " $3}' "/proc/$BLREC_PID/status" 2>/dev/null || true)"
+            [ -n "$rss" ] && log "[INFO] blrec PID $BLREC_PID VmRSS: $rss"
+            last_rss_log="$now"
+        fi
         if ! storage_ready; then
             log "[WAIT] Windows SMB share was disconnected"
             stop_blrec

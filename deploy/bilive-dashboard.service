@@ -1,20 +1,22 @@
 [Unit]
 Description=Bilive slice dashboard
-After=network-online.target bilive.service
-Wants=network-online.target
-Requires=bilive.service
+After=network-online.target mnt-win.automount
+Wants=network-online.target mnt-win.automount bilive-smb-recover.timer
 
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/mnt/win/bilive
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=BILIVE_VIDEOS_DIR=/mnt/win/bilive/Videos
-EnvironmentFile=-/mnt/win/bilive/.secrets/env
-ExecStart=/mnt/win/bilive/start_dashboard_pi.sh
-Restart=on-failure
+Environment=BILIVE_WAIT_SECONDS=15
+Environment=BILIVE_HEALTHCHECK_SECONDS=15
+ExecStart=/usr/local/bin/bilive-dashboard-start.sh
+Restart=always
 RestartSec=10
+TimeoutStopSec=30
+MemoryAccounting=yes
+MemoryMax=512M
 StandardOutput=null
 StandardError=journal
 

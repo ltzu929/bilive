@@ -9,6 +9,7 @@ MOUNT_UNIT="${BILIVE_MOUNT_UNIT:-mnt-win.mount}"
 MOUNT_POINT="${BILIVE_MOUNT_POINT:-/mnt/win}"
 PROBE_PATH="${BILIVE_PROBE_PATH:-/mnt/win/bilive}"
 BILIVE_SERVICE="${BILIVE_SERVICE:-bilive.service}"
+DASHBOARD_SERVICE="${BILIVE_DASHBOARD_SERVICE:-bilive-dashboard.service}"
 CONNECT_TIMEOUT_SECONDS="${BILIVE_CONNECT_TIMEOUT_SECONDS:-3}"
 PROBE_TIMEOUT_SECONDS="${BILIVE_PROBE_TIMEOUT_SECONDS:-5}"
 STOP_TIMEOUT_SECONDS="${BILIVE_STOP_TIMEOUT_SECONDS:-15}"
@@ -28,7 +29,17 @@ mount_healthy() {
         timeout "$PROBE_TIMEOUT_SECONDS" stat "$PROBE_PATH" >/dev/null 2>&1
 }
 
+ensure_services_running() {
+    for service in "$BILIVE_SERVICE" "$DASHBOARD_SERVICE"; do
+        if ! systemctl is-active --quiet "$service"; then
+            systemctl start "$service"
+            log "[INFO] Started inactive $service"
+        fi
+    done
+}
+
 if mount_healthy; then
+    ensure_services_running
     exit 0
 fi
 
@@ -39,6 +50,7 @@ fi
 
 if findmnt -rn -t cifs --target "$MOUNT_POINT" >/dev/null 2>&1; then
     log "[WARN] CIFS mount is stale; stopping recorder before remount"
+    timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$DASHBOARD_SERVICE" || true
     timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$BILIVE_SERVICE" || true
     if ! timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$MOUNT_UNIT"; then
         log "[WARN] Normal unmount timed out; using lazy unmount"
@@ -58,5 +70,5 @@ if ! mount_healthy; then
 fi
 
 systemctl restart "$BILIVE_SERVICE"
-log "[INFO] CIFS mount recovered; restarted $BILIVE_SERVICE"
-
+systemctl restart "$DASHBOARD_SERVICE"
+log "[INFO] CIFS mount recovered; restarted $BILIVE_SERVICE and $DASHBOARD_SERVICE"
