@@ -36,6 +36,7 @@ def _setup_pipeline(tmp_path, monkeypatch, analysis):
         )
     ]
     db_path = tmp_path / "upload.db"
+    conn.migrate_upload_queue(db_path)
 
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)

@@ -4,8 +4,16 @@ from dataclasses import dataclass
 import os
 from xml.etree import ElementTree
 
-from .auto_slice_video.autosv.slice.slice_video import slice_video
 from .burst_detector import BurstEvent, detect_bursts
+
+
+def slice_video(*args, **kwargs):
+    """Load the ffmpeg-backed slicer only when a slice is executed."""
+    from .auto_slice_video.autosv.slice.slice_video import (
+        slice_video as implementation,
+    )
+
+    return implementation(*args, **kwargs)
 
 
 @dataclass

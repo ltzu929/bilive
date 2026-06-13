@@ -12,6 +12,7 @@ from typing import Callable
 from src.burn.task_history import write_task_history
 from src.config.server_config import VIDEOS_DIR
 from src.log.logger import scan_log
+from src.server.action_jobs import process_action_jobs
 from src.server.worker_lock import (
     WorkerAlreadyRunning,
     WorkerProcessLock,
@@ -121,7 +122,7 @@ def process_pending_videos(videos_dir: str | Path | None = None) -> int:
         return 0
 
     recover_processing_markers(root)
-    processed = 0
+    processed = process_action_jobs(root)
     for pending in sorted(root.rglob("*.mp4.pending")):
         processing: Path | None = None
         marker: dict = {}

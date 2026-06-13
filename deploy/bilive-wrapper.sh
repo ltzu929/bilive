@@ -78,6 +78,8 @@ while true; do
         sleep "$WAIT_SECONDS"
         continue
     fi
+    export BLREC_API_KEY="$RECORD_KEY"
+    unset RECORD_KEY
 
     if ! cd "$PROJECT_DIR" ||
         ! mkdir -p "$BILIVE_VIDEOS_DIR" "$BILIVE_LOG_DIR/record"; then
@@ -93,8 +95,7 @@ while true; do
     "$PYTHON_BIN" -m blrec \
         --host "$BLREC_HOST" \
         --port "$BLREC_PORT" \
-        -c "$SETTINGS_FILE" \
-        --api-key "$RECORD_KEY" &
+        -c "$SETTINGS_FILE" &
     BLREC_PID=$!
     last_rss_log=0
 

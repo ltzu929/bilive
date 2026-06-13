@@ -1,7 +1,5 @@
 [dashboard.remote_worker]
 enabled = true
-command = ["ssh", "zk@192.168.31.202", "curl.exe", "-sS", "-X", "POST", "http://127.0.0.1:2235/api/worker/run-once"]
-status_command = ["ssh", "zk@192.168.31.202", "curl.exe", "-sS", "http://127.0.0.1:2235/api/worker/status"]
 timeout = 10
 
 [video]

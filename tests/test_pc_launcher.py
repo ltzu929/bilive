@@ -7,6 +7,7 @@ INSTALL_PI_SSH_KEY_SCRIPT = Path("install_windows_pi_ssh_key.ps1")
 SETUP_WINDOWS_ENV_SCRIPT = Path("setup_windows_env.ps1")
 START_PC_WORKER_API_SCRIPT = Path("start_pc_worker_api.ps1")
 RUN_UPLOAD_SCRIPT = Path("run_upload.ps1")
+HEALTH_SCRIPT = Path("check_windows_health.ps1")
 
 
 def test_pipeline_launcher_starts_pc_worker_api():
@@ -27,6 +28,8 @@ def test_pipeline_launcher_starts_pc_worker_api():
     assert 'BILIVE_AUTO_UPLOAD' in text
     assert 'NO_PROXY' in text
     assert 'if ($NoUpload)' in text
+    assert 'BILIVE_LM_STUDIO_PATH' in text
+    assert '$ProjectDir;$ProjectDir\\src' not in text
     assert '& $python "-m" "uvicorn"' in text
 
 
@@ -44,8 +47,12 @@ def test_install_windows_worker_task_registers_logon_supervisor():
     assert "-WindowStyle Hidden" in text
     assert "[switch]$NoLMStudio" in text
     assert "[switch]$NoUpload" in text
+    assert "[switch]$EnableUpload" in text
     assert '" -NoLMStudio"' in text
     assert '" -NoUpload"' in text
+    assert "Invoke-RestMethod" in text
+    assert "Get-NetTCPConnection" in text
+    assert "Get-ScheduledTaskInfo" in text
     assert "BiliveSliceOnce" in text
     assert "Unregister-ScheduledTask" in text
 
@@ -73,7 +80,23 @@ def test_windows_environment_is_dedicated_and_pinned():
     assert ".venv-win" in text
     assert "requirements\\windows.txt" in text
     assert "-m pip check" in text
+    assert "[switch]$Dev" in text
+    assert "requirements\\dev.txt" in text
     assert "faster-whisper==" in requirements
     assert "openai==" in requirements
     assert "fastapi==" in requirements
     assert not Path("requirements.txt").exists()
+
+
+def test_windows_health_check_is_read_only_and_reports_all_dependencies():
+    text = HEALTH_SCRIPT.read_text(encoding="utf-8")
+
+    assert "Get-ScheduledTask" in text
+    assert "Get-NetTCPConnection" in text
+    assert "api/worker/status" in text
+    assert "faster_whisper" in text
+    assert "snapshot_download" in text
+    assert "integrity_check" in text
+    assert "upload.lock" in text
+    assert "Register-ScheduledTask" not in text
+    assert "Start-ScheduledTask" not in text

@@ -43,6 +43,30 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
     timeout = _as_timeout(
         os.environ.get("BILIVE_REMOTE_WORKER_TIMEOUT", section.get("timeout", DEFAULT_TIMEOUT))
     )
+    target = str(
+        os.environ.get(
+            "BILIVE_WINDOWS_SSH_TARGET",
+            section.get("target", ""),
+        )
+    ).strip()
+    if target and not command:
+        command = [
+            "ssh",
+            target,
+            "curl.exe",
+            "-sS",
+            "-X",
+            "POST",
+            "http://127.0.0.1:2235/api/worker/run-once",
+        ]
+    if target and not status_command:
+        status_command = [
+            "ssh",
+            target,
+            "curl.exe",
+            "-sS",
+            "http://127.0.0.1:2235/api/worker/status",
+        ]
 
     return RemoteWorkerConfig(
         enabled=enabled,

@@ -92,6 +92,9 @@ def test_frontend_worker_trigger_contract():
     assert "describeWorkerTrigger" in text
     assert "dependency_unavailable" in text
     assert "start_pipeline.ps1" in text
+    assert "pollActionJob" in text
+    assert "status_url" in text
+    assert "动作执行失败" in text
 
 
 def test_frontend_style_contract_for_slice_panels_and_rows():

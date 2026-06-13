@@ -13,7 +13,7 @@ from src.config import (
     BURST_MERGE_GAP,
     BURST_TOP_N,
 )
-from autoslice import slice_video_by_danmaku
+from src.autoslice import slice_video_by_danmaku
 from src.autoslice.candidate_analyzer import (
     analyze_candidate,
     unload_candidate_models,
@@ -33,7 +33,7 @@ from src.upload.slice_metadata import (
 from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
 from src.burn.slice_progress import SliceProgressWriter
-from db.conn import delete_upload_queue, get_upload_item, insert_upload_queue
+from src.db.conn import delete_upload_queue, get_upload_item, insert_upload_queue
 
 
 def check_file_size(file_path):

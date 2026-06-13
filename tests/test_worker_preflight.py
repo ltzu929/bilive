@@ -9,8 +9,11 @@ def _module():
 
 def test_worker_preflight_reports_ready_dependencies(tmp_path):
     preflight = _module()
+    from src.db.conn import migrate_upload_queue
+
     videos = tmp_path / "Videos"
     videos.mkdir()
+    migrate_upload_queue(tmp_path / "queue.db")
 
     result = preflight.run_worker_preflight(
         project_root=tmp_path,
@@ -28,8 +31,11 @@ def test_worker_preflight_reports_ready_dependencies(tmp_path):
 
 def test_worker_preflight_blocks_when_lm_studio_is_unavailable(tmp_path):
     preflight = _module()
+    from src.db.conn import migrate_upload_queue
+
     videos = tmp_path / "Videos"
     videos.mkdir()
+    migrate_upload_queue(tmp_path / "queue.db")
 
     result = preflight.run_worker_preflight(
         project_root=tmp_path,
@@ -105,3 +111,21 @@ def test_lm_studio_check_does_not_use_environment_proxy(monkeypatch):
     assert ready is True
     assert calls["trust_env"] is False
     assert calls["url"] == "http://127.0.0.1:1234/v1/models"
+
+
+def test_worker_preflight_does_not_create_missing_database(tmp_path):
+    preflight = _module()
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    database = tmp_path / "queue.db"
+
+    result = preflight.run_worker_preflight(
+        project_root=tmp_path,
+        videos_root=videos,
+        db_path=database,
+        lm_studio_checker=lambda _config: (True, "ready"),
+        asr_checker=lambda _config: (True, "cached"),
+    )
+
+    assert result["checks"]["database"]["status"] == "unavailable"
+    assert not database.exists()

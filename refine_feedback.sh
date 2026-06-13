@@ -7,6 +7,6 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 source venv/bin/activate
-export PYTHONPATH=.:./src
+export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 python -m src.burn.feedback_refine "$@"

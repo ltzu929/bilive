@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict
 from fastapi import FastAPI, HTTPException
 
 from src.server.preflight import run_worker_preflight
+from src.server.action_jobs import count_pending_action_jobs
 from src.server.upload_control import (
     start_upload_worker,
     stop_upload_worker,
@@ -44,7 +45,10 @@ def create_app(
         os.environ.get("BILIVE_DB_PATH", project_root / "src" / "db" / "data.db")
     ).resolve()
     count_pending = pending_counter or (
-        lambda: len(list(videos_root.rglob("*.mp4.pending")))
+        lambda: (
+            len(list(videos_root.rglob("*.mp4.pending")))
+            + count_pending_action_jobs(videos_root)
+        )
         if videos_root.is_dir()
         else 0
     )

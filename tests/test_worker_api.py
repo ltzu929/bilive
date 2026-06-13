@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from src.server.action_jobs import enqueue_action_job
 from src.server.worker_api import _auto_upload_enabled, create_app
 
 
@@ -210,3 +211,31 @@ def test_auto_upload_environment_override(monkeypatch):
 
     monkeypatch.setenv("BILIVE_AUTO_UPLOAD", "true")
     assert _auto_upload_enabled() is True
+
+
+@pytest.mark.anyio
+async def test_worker_api_counts_action_jobs_as_pending(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    enqueue_action_job(
+        videos,
+        action="retry_judge",
+        segment_id="segment-1",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.setenv("BILIVE_VIDEOS_DIR", str(videos))
+
+    app = create_app(
+        worker_starter=lambda: {"status": "started", "pid": 1234},
+        preflight_reader=lambda: {"ready": True, "checks": {}},
+        auto_upload=False,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/worker/run-once")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "accepted",
+        "pid": 1234,
+    }

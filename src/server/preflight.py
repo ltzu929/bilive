@@ -11,9 +11,6 @@ from typing import Any, Callable
 import requests
 import toml
 
-from src.db.conn import migrate_upload_queue
-
-
 DependencyChecker = Callable[[dict[str, Any]], tuple[bool, str]]
 
 
@@ -104,10 +101,16 @@ def run_worker_preflight(
     database_ready = False
     database_message = str(database)
     try:
-        migrate_upload_queue(database)
-        with sqlite3.connect(database, timeout=5) as connection:
-            connection.execute("select 1").fetchone()
-        database_ready = True
+        uri = f"file:{database.as_posix()}?mode=ro"
+        with sqlite3.connect(uri, timeout=5, uri=True) as connection:
+            version = int(connection.execute("pragma user_version").fetchone()[0])
+            table = connection.execute(
+                "select 1 from sqlite_master "
+                "where type = 'table' and name = 'upload_queue'"
+            ).fetchone()
+        database_ready = version >= 1 and table is not None
+        if not database_ready:
+            database_message = "upload database schema is not initialized"
     except (OSError, sqlite3.Error) as exc:
         database_message = str(exc)
     checks["database"] = _result(database_ready, database_message)

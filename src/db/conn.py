@@ -38,6 +38,9 @@ def migrate_upload_queue(db_path: str | Path | None = None) -> None:
     now = time.time()
 
     with connect(path) as db:
+        version = int(db.execute("pragma user_version").fetchone()[0])
+        if version >= 1:
+            return
         db.execute(
             """
             create table if not exists upload_queue (
@@ -91,6 +94,7 @@ def migrate_upload_queue(db_path: str | Path | None = None) -> None:
             """,
             (now,),
         )
+        db.execute("pragma user_version = 1")
         db.execute(
             """
             update upload_queue
@@ -132,7 +136,6 @@ def get_upload_item(
     video_path: str,
     db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         return _fetch_item(db, video_path)
 
@@ -140,7 +143,6 @@ def get_upload_item(
 def list_upload_queue(
     db_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         rows = db.execute("select * from upload_queue order by id").fetchall()
     return [dict(row) for row in rows]
@@ -156,7 +158,6 @@ def insert_upload_queue(
     video_path: str,
     db_path: str | Path | None = None,
 ) -> bool:
-    migrate_upload_queue(db_path)
     now = time.time()
     try:
         with connect(db_path) as db:
@@ -187,7 +188,6 @@ def peek_next_upload(
     *,
     now: float | None = None,
 ) -> dict[str, Any] | None:
-    migrate_upload_queue(db_path)
     due_at = time.time() if now is None else float(now)
     with connect(db_path) as db:
         row = db.execute(
@@ -209,7 +209,6 @@ def claim_next_upload(
     *,
     now: float | None = None,
 ) -> dict[str, Any] | None:
-    migrate_upload_queue(db_path)
     claimed_at = time.time() if now is None else float(now)
     db = connect(db_path)
     try:
@@ -259,7 +258,6 @@ def mark_upload_complete(
     now: float | None = None,
 ) -> dict[str, Any] | None:
     updated_at = time.time() if now is None else float(now)
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         db.execute(
             """
@@ -285,7 +283,6 @@ def mark_upload_published(
     now: float | None = None,
 ) -> dict[str, Any] | None:
     updated_at = time.time() if now is None else float(now)
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         db.execute(
             """
@@ -311,7 +308,6 @@ def mark_upload_failed(
     now: float | None = None,
 ) -> dict[str, Any] | None:
     updated_at = time.time() if now is None else float(now)
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         db.execute(
             """
@@ -338,7 +334,6 @@ def schedule_upload_retry(
     now: float | None = None,
 ) -> dict[str, Any] | None:
     updated_at = time.time() if now is None else float(now)
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         item = _fetch_item(db, video_path)
         if item is None:
@@ -389,7 +384,6 @@ def defer_upload_for_auth(
     now: float | None = None,
 ) -> dict[str, Any] | None:
     updated_at = time.time() if now is None else float(now)
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         db.execute(
             """
@@ -421,7 +415,6 @@ def recover_upload_queue(
     now: float | None = None,
 ) -> None:
     updated_at = time.time() if now is None else float(now)
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         db.execute(
             """
@@ -450,7 +443,6 @@ def recover_upload_queue(
 def get_upload_queue_counts(
     db_path: str | Path | None = None,
 ) -> dict[str, int]:
-    migrate_upload_queue(db_path)
     counts = {status: 0 for status in UPLOAD_STATUSES}
     with connect(db_path) as db:
         rows = db.execute(
@@ -469,7 +461,6 @@ def delete_upload_queue(
     db_path: str | Path | None = None,
 ) -> bool:
     try:
-        migrate_upload_queue(db_path)
         with connect(db_path) as db:
             db.execute(
                 "delete from upload_queue where video_path = ?",
@@ -487,7 +478,6 @@ def update_upload_queue_lock(
     db_path: str | Path | None = None,
 ) -> bool:
     try:
-        migrate_upload_queue(db_path)
         status = "queued" if int(locked) == 0 else "failed"
         with connect(db_path) as db:
             db.execute(
@@ -507,7 +497,6 @@ def update_upload_queue_lock(
 def get_single_upload_queue(
     db_path: str | Path | None = None,
 ) -> dict[str, str] | None:
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         row = db.execute(
             """
@@ -524,7 +513,6 @@ def get_single_upload_queue(
 def get_single_lock_queue(
     db_path: str | Path | None = None,
 ) -> dict[str, str] | None:
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         row = db.execute(
             """
@@ -541,7 +529,6 @@ def get_single_lock_queue(
 def get_all_reserve_for_fixing_queue(
     db_path: str | Path | None = None,
 ) -> list[dict[str, str]]:
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         rows = db.execute(
             "select video_path from upload_queue where locked = 2 order by id"
@@ -550,7 +537,6 @@ def get_all_reserve_for_fixing_queue(
 
 
 def delete_all_queue(db_path: str | Path | None = None) -> None:
-    migrate_upload_queue(db_path)
     with connect(db_path) as db:
         db.execute("delete from upload_queue")
 

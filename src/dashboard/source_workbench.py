@@ -8,13 +8,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from src.autoslice.auto_slice_video.autosv.slice.slice_video import slice_video
 from src.autoslice.danmaku_slice import (
-    extract_danmaku_text,
     extract_timestamps_from_xml,
     format_seconds_for_filename,
 )
-from src.autoslice.candidate_analyzer import analyze_candidate
 from src.burn.task_history import read_task_history
 from src.dashboard.task_state import build_task_inventory, resolve_task_id
 from src.db.conn import insert_upload_queue
@@ -22,6 +19,26 @@ from src.upload.slice_metadata import write_slice_upload_metadata
 
 
 SUMMARY_KEYS = ("keep", "manual_keep", "judge_failed", "drop", "review")
+
+
+def extract_danmaku_text(*args, **kwargs):
+    from src.autoslice.danmaku_slice import extract_danmaku_text as extract
+
+    return extract(*args, **kwargs)
+
+
+def analyze_candidate(*args, **kwargs):
+    from src.autoslice.candidate_analyzer import analyze_candidate as analyze
+
+    return analyze(*args, **kwargs)
+
+
+def slice_video(*args, **kwargs):
+    from src.autoslice.auto_slice_video.autosv.slice.slice_video import (
+        slice_video as render,
+    )
+
+    return render(*args, **kwargs)
 
 
 def build_source_recording_list(

@@ -339,36 +339,24 @@ async def test_segment_action_apis_update_segment_sidecar(
     dashboard_client,
     monkeypatch,
 ):
-    from pathlib import Path
-
-    from src.autoslice.analysis_result import AnalysisResult
     from src.dashboard import source_workbench
 
     _write_source_workbench_fixture(videos_root)
     queued = []
+    heavy_calls = []
 
     monkeypatch.setattr(source_workbench, "insert_upload_queue", lambda path: queued.append(path) or True)
     monkeypatch.setattr(source_workbench, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         source_workbench,
-        "extract_danmaku_text",
-        lambda *args, **kwargs: "danmaku",
+        "retry_segment_judge",
+        lambda *args, **kwargs: heavy_calls.append("retry"),
     )
     monkeypatch.setattr(
         source_workbench,
-        "analyze_candidate",
-        lambda *args, **kwargs: AnalysisResult(
-            title="Retried",
-            description="Retried desc",
-            retain_recommendation=True,
-            judge_status="keep",
-        ),
+        "render_segment",
+        lambda *args, **kwargs: heavy_calls.append("render"),
     )
-
-    def fake_slice(_source, output_path, _start, _duration):
-        Path(output_path).write_bytes(b"rendered")
-
-    monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
 
     async with dashboard_client(videos_root) as client:
         keep = await client.post(
@@ -382,14 +370,24 @@ async def test_segment_action_apis_update_segment_sidecar(
         dropped = await client.post("/api/segments/seg1/drop", json={"reason": "bad"})
         retried = await client.post("/api/segments/seg1/retry-judge")
         rendered = await client.post("/api/segments/seg1/render")
+        retry_job = await client.get(retried.json()["status_url"])
+        render_job = await client.get(rendered.json()["status_url"])
 
     assert keep.status_code == 200
     assert keep.json()["judge_status"] == "manual_keep"
     assert queued
     assert ranged.json()["start_seconds"] == 5.0
     assert dropped.json()["judge_status"] == "drop"
-    assert retried.json()["judge_status"] == "keep"
-    assert rendered.json()["candidate_rel_path"].endswith("5s_22384516_20260602-12-56-49.mp4")
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "accepted"
+    assert retried.json()["job"]["action"] == "retry_judge"
+    assert rendered.status_code == 200
+    assert rendered.json()["status"] == "accepted"
+    assert rendered.json()["job"]["action"] == "render_segment"
+    assert heavy_calls == []
+
+    assert retry_job.json()["status"] == "pending"
+    assert render_job.json()["status"] == "pending"
 
 
 @pytest.mark.anyio
@@ -822,6 +820,33 @@ async def test_tasks_route_serves_static_frontend(tmp_path, dashboard_client):
 
     assert response.status_code == 200
     assert "id=\"app\"" in response.text
+
+
+@pytest.mark.anyio
+async def test_dashboard_rejects_non_private_host(videos_root, dashboard_client):
+    async with dashboard_client(videos_root) as client:
+        response = await client.get("/api/tasks", headers={"Host": "attacker.example"})
+
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_dashboard_allows_ipv6_loopback_host(videos_root, dashboard_client):
+    async with dashboard_client(videos_root) as client:
+        response = await client.get("/api/tasks", headers={"Host": "[::1]:2234"})
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_dashboard_rejects_cross_origin_write(videos_root, dashboard_client):
+    async with dashboard_client(videos_root) as client:
+        response = await client.post(
+            "/api/slice/start",
+            headers={"Origin": "https://attacker.example"},
+        )
+
+    assert response.status_code == 403
 
 
 @pytest.mark.anyio

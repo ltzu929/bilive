@@ -5,7 +5,7 @@ import time
 import os
 from typing import Optional
 from functools import partial
-from config import LOG_DIR
+from src.config import LOG_DIR
 
 
 class Logger:

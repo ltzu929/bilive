@@ -8,6 +8,7 @@ from src.db.conn import (
     get_upload_item,
     insert_upload_queue,
     list_upload_queue,
+    migrate_upload_queue,
 )
 from src.upload.slice_metadata import write_slice_upload_metadata
 from src.upload.upload import (
@@ -70,7 +71,9 @@ def make_settings(tmp_path, **overrides):
         "tid": 138,
     }
     values.update(overrides)
-    return UploadSettings(**values)
+    settings = UploadSettings(**values)
+    migrate_upload_queue(settings.db_path)
+    return settings
 
 
 def queue_slice(tmp_path, settings, name="clip.mp4"):
@@ -386,6 +389,8 @@ poll_interval_seconds = 10
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["queue_counts"]["total"] == 0
+    assert payload["database"] == "missing"
+    assert not (tmp_path / "queue.db").exists()
 
 
 def test_server_config_exports_upload_runtime_settings():

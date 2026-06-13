@@ -4,7 +4,10 @@ param(
     [string]$TaskName = "BiliveWorkerApi",
     [string]$ProjectDir = (Split-Path -Parent $MyInvocation.MyCommand.Path),
     [switch]$NoLMStudio,
-    [switch]$NoUpload
+    [switch]$NoUpload,
+    [switch]$EnableUpload,
+    [string]$LMStudioPath = $env:BILIVE_LM_STUDIO_PATH,
+    [int]$VerifyTimeoutSeconds = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,13 +17,19 @@ $runScript = Join-Path $ProjectDir "start_pipeline.ps1"
 if (-not (Test-Path -LiteralPath $runScript)) {
     throw "Cannot find Worker API launcher: $runScript"
 }
+if ($NoUpload -and $EnableUpload) {
+    throw "Use either -NoUpload or -EnableUpload, not both."
+}
 
 $pipelineArguments = ""
 if ($NoLMStudio) {
     $pipelineArguments += " -NoLMStudio"
 }
-if ($NoUpload) {
+if (-not $EnableUpload) {
     $pipelineArguments += " -NoUpload"
+}
+if ($LMStudioPath) {
+    $pipelineArguments += " -LMStudioPath `"$LMStudioPath`""
 }
 
 $action = New-ScheduledTaskAction `
@@ -51,4 +60,37 @@ if (Get-ScheduledTask -TaskName "BiliveSliceOnce" -ErrorAction SilentlyContinue)
 }
 
 Start-ScheduledTask -TaskName $TaskName
-Write-Host "Registered and started scheduled task: $TaskName"
+
+$deadline = (Get-Date).AddSeconds($VerifyTimeoutSeconds)
+$status = $null
+do {
+    Start-Sleep -Seconds 1
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop
+    $listener = Get-NetTCPConnection `
+        -LocalAddress "127.0.0.1" `
+        -LocalPort 2235 `
+        -State Listen `
+        -ErrorAction SilentlyContinue
+    if ($task.State -eq "Running" -and $listener) {
+        try {
+            $status = Invoke-RestMethod `
+                -Uri "http://127.0.0.1:2235/api/worker/status" `
+                -TimeoutSec 3
+        } catch {
+            $status = $null
+        }
+    }
+} while (-not $status -and (Get-Date) -lt $deadline)
+
+if (-not $status) {
+    throw (
+        "BiliveWorkerApi verification failed. " +
+        "TaskState=$($task.State), LastTaskResult=$($taskInfo.LastTaskResult), " +
+        "Port2235Listening=$([bool]$listener)"
+    )
+}
+
+Write-Host "Registered and verified scheduled task: $TaskName"
+Write-Host "Upload enabled: $EnableUpload"
+$status | ConvertTo-Json -Depth 8

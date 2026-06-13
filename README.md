@@ -1,61 +1,54 @@
 # Bilive
 
-Bilive 是自维护的 B 站直播录制、切片分析和投稿队列项目。生产环境分为两部分：
+Bilive 是自维护的 B 站直播录制、切片分析和投稿队列项目。
 
-- Raspberry Pi：运行 blrec 录制和仪表盘，写入 Windows SMB。
-- Windows：运行唯一入口 Worker API，负责切片、faster-whisper ASR、LM Studio 判断、字幕、元数据和上传队列。
-
-## 生产拓扑
+## 生产边界
 
 | 节点 | 服务 | 地址 | 责任 |
 |---|---|---|---|
 | Pi | `bilive.service` | `0.0.0.0:2233` | blrec 录制 |
-| Pi | `bilive-dashboard.service` | `0.0.0.0:2234` | 仪表盘和远程 Worker 触发 |
-| Pi | `bilive-smb-recover.timer` | 每 15 秒 | SMB 检查和双服务恢复 |
-| Windows | `BiliveWorkerApi` | `127.0.0.1:2235` | Worker API 和上传消费者 |
+| Pi | `bilive-dashboard.service` | `0.0.0.0:2234` | 仪表盘、任务落盘、远程触发 |
+| Pi | `bilive-smb-recover.timer` | 每 15 秒 | SMB 和服务恢复 |
+| Windows | `BiliveWorkerApi` | `127.0.0.1:2235` | 切片、ASR、LLM、字幕、上传 |
 
-浏览器只访问 Pi 仪表盘。Pi 通过 SSH 在 Windows 本机请求
-`127.0.0.1:2235`，Worker API 不监听局域网地址。
+Pi 不执行 ffmpeg、faster-whisper 或 LLM。浏览器在仪表盘发起的重试判断和渲染
+请求会写入 `Videos/.bilive-jobs/`，再由 Windows worker 领取。
+
+仪表盘继续对局域网开放且不要求登录，但拒绝公网 Host 和跨 Origin 写请求。
+Worker API 只监听 Windows localhost。
 
 ## Windows 安装
 
 ```powershell
-.\setup_windows_env.ps1
+.\setup_windows_env.ps1 -Dev
+$env:BILIVE_LM_STUDIO_PATH = "D:\LMStudio\LM Studio\LM Studio.exe"
 .\install_windows_pi_ssh_key.ps1
-.\install_windows_worker_task.ps1
+.\install_windows_worker_task.ps1 -NoUpload
+.\check_windows_health.ps1
 ```
 
-`setup_windows_env.ps1` 创建独立的 `.venv-win`，安装
-`requirements/windows.txt` 并执行 `pip check`。
-
-`install_windows_pi_ssh_key.ps1` 需要在管理员 PowerShell 中执行一次，
-用于允许 Pi 通过 Windows OpenSSH 调用本机 Worker API。Windows 的
-`sshd` 服务必须设为自动启动。
-
-`install_windows_worker_task.ps1` 注册登录任务 `BiliveWorkerApi`，入口固定为：
+任务安装器会幂等注册并启动 `BiliveWorkerApi`，同时验证计划任务、端口 `2235`
+和 Worker API。默认安全模式等同于 `-NoUpload`。确认 cookie 有效且上传队列为空后：
 
 ```powershell
-.\start_pipeline.ps1
+.\install_windows_worker_task.ps1 -EnableUpload
 ```
 
-该脚本检查并启动 LM Studio，然后以前台方式启动 Worker API。上传消费者由
-Worker API 生命周期管理，不应再单独启动 watcher 或上传脚本。
+Windows 端可配置项：
 
-调试时关闭真实上传：
-
-```powershell
-.\start_pipeline.ps1 -NoUpload
-```
-
-或设置：
-
-```powershell
-$env:BILIVE_AUTO_UPLOAD = "0"
-```
+- `BILIVE_LM_STUDIO_PATH`：LM Studio 可执行文件。
+- `BILIVE_AUTO_UPLOAD=0`：禁用上传消费者。
+- `BILIVE_CONFIG`、`BILIVE_VIDEOS_DIR`、`BILIVE_DB_PATH`、`BILIVE_COOKIE_FILE`。
 
 ## Pi 安装
 
-Pi 上的代码路径为 `/mnt/win/bilive`：
+Pi 的 `.secrets/env` 至少配置：
+
+```bash
+BILIVE_WINDOWS_SSH_TARGET=zk@192.168.31.202
+```
+
+安装或更新：
 
 ```bash
 ssh pi
@@ -63,77 +56,45 @@ cd /mnt/win/bilive
 sudo ./deploy/install-bilive-services.sh
 ```
 
-安装器负责：
-
-- 安装 Pi 依赖和 `blrec==2.0.0b4`。
-- 校验版本与目标文件哈希后应用无限 FPS 补丁。
-- 强制 blrec 保留源 FLV。
-- 安装录制器、仪表盘、SMB 恢复 service/timer。
-- 启用内存限制、有限 TERM/KILL 等待和 RSS 日志。
-
-检查状态：
-
-```bash
-sudo systemctl status bilive bilive-dashboard bilive-smb-recover.timer
-ss -ltnp | grep -E ':2233|:2234'
-```
+blrec 通过环境变量 `BLREC_API_KEY` 读取密钥，密钥不会出现在进程参数中。
+Windows 夜间关机和次日 SMB 恢复是正常运行场景，保留
+`bilive-smb-recover.timer`，不要删除或改成只依赖 automount。
 
 ## 任务状态
 
-仪表盘创建任务后，标记按以下顺序流转：
+完整录像处理：
 
 ```text
-.mp4.pending -> .mp4.processing -> .mp4.done
-                                  -> .mp4.failed
+*.mp4.pending -> *.mp4.processing -> *.mp4.done
+                                  -> *.mp4.failed
 ```
 
-Worker 使用跨进程 PID 锁和原子重命名。启动时只恢复确认失去所有者的
-`.processing`。同一 `video_path` 在 SQLite 上传队列中具有唯一约束。
+仪表盘动作：
 
-`POST /api/worker/run-once` 返回：
+```text
+<job>.pending.json -> <job>.processing.json -> <job>.done.json
+                                           -> <job>.failed.json
+```
 
-- `accepted`
-- `already_running`
-- `no_pending`
-- `dependency_unavailable`
+动作支持 `retry_judge` 和 `render_segment`。重复提交会复用仍在 pending/processing
+的同一任务。`GET /api/jobs/{job_id}` 返回进度和失败原因。
 
-`GET /api/worker/status` 报告 watcher、锁所有者、上传消费者、LM Studio、
-ASR 和待处理数量。
-
-## Fail-closed 规则
-
-自动入队必须依次满足：
-
-1. 视频、数据库和输出目录可用。
-2. faster-whisper `large-v3` 可用并产生非空转录。
-3. 转录包含有效的段级时间戳。
-4. 转录和时间窗口内弹幕共同送入 LLM。
-5. LLM 明确返回 `keep` 和有效标题。
-6. 字幕烧录成功。
-7. 投稿元数据写入成功。
-8. SQLite 入队成功。
-
-任一步失败都保留候选并记录结构化失败原因；只有 LLM 明确 `drop` 才删除候选。
-
-## 上传恢复
-
-上传和投稿是两个可恢复阶段。视频已上传到 CDN 后，投稿重试复用
+上传和投稿是两个可恢复阶段。CDN 上传成功后，投稿重试复用
 `remote_filename`，不会重复上传视频字节。
 
-默认 cookie 路径：
+## Fail-closed
 
-```text
-.secrets/bilibili.cookie
-```
+自动入队要求非空 ASR、有效段级时间戳、窗口弹幕与转录共同送入 LLM、明确
+`keep`、字幕烧录成功、元数据成功和 SQLite 入队成功。任一步失败都保留候选供
+人工复核；只有明确 `drop` 才删除候选。
 
-仓库只保留 `cookie.example.json`，不得提交真实 cookie。
-
-## 测试
+## 验证
 
 ```powershell
 python -m pytest -q
 python -m compileall src tests
+.\.venv-win\Scripts\python.exe -m pip check
 ```
 
-PowerShell、shell、systemd 和部署检查见 [运维手册](docs/operations.md)。
-历史媒体和数据库维护见 [维护手册](docs/maintenance.md)。
+部署和恢复步骤见 [运维手册](docs/operations.md)，结构说明见
+[架构文档](docs/architecture.md)，媒体维护见 [维护手册](docs/maintenance.md)。

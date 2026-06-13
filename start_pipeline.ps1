@@ -2,7 +2,8 @@
 
 param(
     [switch]$NoLMStudio,
-    [switch]$NoUpload
+    [switch]$NoUpload,
+    [string]$LMStudioPath = $env:BILIVE_LM_STUDIO_PATH
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,7 +15,7 @@ if (-not (Test-Path -LiteralPath $python)) {
     throw "Windows environment missing: $python. Run setup_windows_env.ps1 first."
 }
 
-$env:PYTHONPATH = "$ProjectDir;$ProjectDir\src"
+$env:PYTHONPATH = $ProjectDir
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:NO_PROXY = "127.0.0.1,localhost"
@@ -34,15 +35,21 @@ $logDir = Join-Path $ProjectDir "logs\runtime"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 if (-not $NoLMStudio) {
-    $lmPath = "D:\LMStudio\LM Studio\LM Studio.exe"
-    if ((Test-Path -LiteralPath $lmPath) -and
+    if ($LMStudioPath -and
+        (Test-Path -LiteralPath $LMStudioPath) -and
         -not (Get-Process "LM Studio" -ErrorAction SilentlyContinue)) {
-        Start-Process -FilePath $lmPath -WindowStyle Minimized
+        Start-Process -FilePath $LMStudioPath -WindowStyle Minimized
+    } elseif (-not $LMStudioPath) {
+        Write-Warning "BILIVE_LM_STUDIO_PATH is not set; LM Studio was not started."
     }
 }
 
 Write-Host "Bilive Worker API: http://127.0.0.1:2235"
 Write-Host "Upload consumer is managed by the Worker API."
+& $python "-c" "from src.db.conn import migrate_upload_queue; migrate_upload_queue()"
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to initialize the upload database"
+}
 $uvicornNetworkArgs = @("--host", "127.0.0.1", "--port", "2235")
 & $python "-m" "uvicorn" "src.server.worker_api:api" @uvicornNetworkArgs
 exit $LASTEXITCODE

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import signal
+import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -13,6 +14,7 @@ import requests
 import toml
 
 from src.db.conn import (
+    UPLOAD_STATUSES,
     claim_next_upload,
     defer_upload_for_auth,
     get_upload_queue_counts,
@@ -253,7 +255,6 @@ class UploadWorker:
 
     def process_one(self, *, now: float | None = None) -> UploadResult:
         current_time = time.time() if now is None else float(now)
-        migrate_upload_queue(self.settings.db_path)
         pending = peek_next_upload(self.settings.db_path, now=current_time)
         if pending is None:
             return self._finish(UploadResult(status="idle"))
@@ -641,10 +642,28 @@ def run_forever(
 
 
 def _status_payload(settings: UploadSettings) -> dict[str, Any]:
-    migrate_upload_queue(settings.db_path)
+    empty_counts = {status: 0 for status in UPLOAD_STATUSES}
+    empty_counts["total"] = 0
+    if not settings.db_path.is_file():
+        return {
+            "queue_counts": empty_counts,
+            "items": [],
+            "database": "missing",
+            "status_file": str(settings.status_file),
+            "lock_file": str(settings.lock_file),
+        }
+    try:
+        counts = get_upload_queue_counts(settings.db_path)
+        items = list_upload_queue(settings.db_path)
+        database = "ready"
+    except sqlite3.Error as exc:
+        counts = empty_counts
+        items = []
+        database = f"unavailable: {exc}"
     return {
-        "queue_counts": get_upload_queue_counts(settings.db_path),
-        "items": list_upload_queue(settings.db_path),
+        "queue_counts": counts,
+        "items": items,
+        "database": database,
         "status_file": str(settings.status_file),
         "lock_file": str(settings.lock_file),
     }

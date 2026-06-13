@@ -1,5 +1,7 @@
 param(
-    [switch]$Recreate
+    [switch]$Recreate,
+    [switch]$Dev,
+    [switch]$UpgradePip
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,6 +9,7 @@ $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvDir = Join-Path $ProjectDir ".venv-win"
 $Python = Join-Path $VenvDir "Scripts\python.exe"
 $Requirements = Join-Path $ProjectDir "requirements\windows.txt"
+$DevRequirements = Join-Path $ProjectDir "requirements\dev.txt"
 
 if ($Recreate -and (Test-Path -LiteralPath $VenvDir)) {
     Remove-Item -LiteralPath $VenvDir -Recurse -Force
@@ -19,14 +22,22 @@ if (-not (Test-Path -LiteralPath $Python)) {
     }
 }
 
-& $Python -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to upgrade pip"
+if ($UpgradePip) {
+    & $Python -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to upgrade pip"
+    }
 }
 
 & $Python -m pip install --requirement $Requirements
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to install Windows dependencies"
+}
+if ($Dev) {
+    & $Python -m pip install --requirement $DevRequirements
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install Windows development dependencies"
+    }
 }
 
 & $Python -m pip check

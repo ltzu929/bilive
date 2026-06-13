@@ -154,3 +154,31 @@ def test_remote_worker_status_reports_unavailable_when_disabled():
         "status": "unavailable",
         "message": "Remote Windows Worker API is disabled",
     }
+
+
+def test_load_remote_worker_config_builds_commands_from_environment(tmp_path, monkeypatch):
+    config_path = tmp_path / "bilive-server.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[dashboard.remote_worker]",
+                "enabled = true",
+                "timeout = 8",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_WINDOWS_SSH_TARGET", "worker-host")
+
+    config = load_remote_worker_config(config_path)
+
+    assert config.command == [
+        "ssh",
+        "worker-host",
+        "curl.exe",
+        "-sS",
+        "-X",
+        "POST",
+        "http://127.0.0.1:2235/api/worker/run-once",
+    ]
+    assert config.status_command[-1] == "http://127.0.0.1:2235/api/worker/status"

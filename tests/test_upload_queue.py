@@ -47,6 +47,8 @@ def test_migrate_upload_queue_preserves_locked_rows_as_failed(tmp_path):
     migrate_upload_queue(db_path)
     migrate_upload_queue(db_path)
 
+    with sqlite3.connect(db_path) as db:
+        assert db.execute("pragma user_version").fetchone()[0] == 1
     rows = list_upload_queue(db_path)
     assert [(row["video_path"], row["status"], row["locked"]) for row in rows] == [
         ("queued.mp4", "queued", 0),
@@ -60,6 +62,7 @@ def test_migrate_upload_queue_preserves_locked_rows_as_failed(tmp_path):
 
 def test_claim_transitions_upload_and_publish_phases(tmp_path):
     db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
     assert insert_upload_queue("clip.mp4", db_path=db_path) is True
 
     upload_claim = claim_next_upload(db_path, now=100)
@@ -91,6 +94,7 @@ def test_claim_transitions_upload_and_publish_phases(tmp_path):
 
 def test_publish_retry_preserves_remote_filename_and_stops_at_limit(tmp_path):
     db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
     insert_upload_queue("clip.mp4", db_path=db_path)
     claim_next_upload(db_path, now=100)
     mark_upload_complete(
@@ -133,6 +137,7 @@ def test_publish_retry_preserves_remote_filename_and_stops_at_limit(tmp_path):
 
 def test_recover_upload_queue_restores_correct_phase(tmp_path):
     db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
     insert_upload_queue("uploading.mp4", db_path=db_path)
     insert_upload_queue("publishing.mp4", db_path=db_path)
 
@@ -156,6 +161,7 @@ def test_recover_upload_queue_restores_correct_phase(tmp_path):
 
 def test_queue_counts_include_each_state(tmp_path):
     db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
     insert_upload_queue("queued.mp4", db_path=db_path)
     insert_upload_queue("failed.mp4", db_path=db_path)
     mark_upload_failed("failed.mp4", "bad metadata", db_path=db_path, now=100)
@@ -165,3 +171,24 @@ def test_queue_counts_include_each_state(tmp_path):
     assert counts["total"] == 2
     assert counts["queued"] == 1
     assert counts["failed"] == 1
+
+
+def test_read_only_queue_queries_do_not_run_migration(tmp_path, monkeypatch):
+    from src.db import conn
+
+    db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
+    insert_upload_queue("queued.mp4", db_path=db_path)
+
+    monkeypatch.setattr(
+        conn,
+        "migrate_upload_queue",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("read query attempted migration")
+        ),
+    )
+
+    assert conn.get_upload_item("queued.mp4", db_path)["status"] == "queued"
+    assert conn.list_upload_queue(db_path)[0]["video_path"] == "queued.mp4"
+    assert conn.peek_next_upload(db_path, now=100)["video_path"] == "queued.mp4"
+    assert conn.get_upload_queue_counts(db_path)["queued"] == 1

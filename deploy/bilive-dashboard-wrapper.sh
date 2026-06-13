@@ -72,6 +72,13 @@ while true; do
         source "$PROJECT_DIR/.secrets/env"
     fi
 
+    if ! "$PYTHON_BIN" -c \
+        "from src.db.conn import migrate_upload_queue; migrate_upload_queue()"; then
+        log "[WARN] Upload database migration failed; retrying in ${WAIT_SECONDS}s"
+        sleep "$WAIT_SECONDS"
+        continue
+    fi
+
     log "[INFO] Starting bilive dashboard on 0.0.0.0:2234"
     "$PYTHON_BIN" -m uvicorn src.dashboard.app:api --host 0.0.0.0 --port 2234 &
     DASHBOARD_PID=$!

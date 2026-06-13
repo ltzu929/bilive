@@ -2,11 +2,13 @@
 
 import mimetypes
 import os
+import ipaddress
 from pathlib import Path
 from typing import Any, Dict, Iterator
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
@@ -19,6 +21,7 @@ from src.dashboard.task_state import (
     requeue_task,
 )
 from src.burn.slice_progress import load_progress_state
+from src.server.action_jobs import enqueue_action_job, read_action_job
 
 
 CHUNK_SIZE = 1024 * 1024
@@ -178,6 +181,38 @@ def create_app(
     app = FastAPI(title="bilive dashboard", version="0.1.0")
     store = DashboardFileStore(videos_root or default_videos_root())
 
+    @app.middleware("http")
+    async def validate_lan_request(request: Request, call_next):
+        raw_host = request.headers.get("host", "").lower()
+        try:
+            host = (urlsplit(f"//{raw_host}").hostname or "").lower()
+        except ValueError:
+            host = ""
+        configured = {
+            value.strip().lower()
+            for value in os.environ.get("BILIVE_DASHBOARD_ALLOWED_HOSTS", "").split(",")
+            if value.strip()
+        }
+        host_allowed = host in {"localhost", "test"} or host in configured
+        if not host_allowed:
+            try:
+                host_allowed = ipaddress.ip_address(host).is_private
+            except ValueError:
+                host_allowed = False
+        if not host_allowed:
+            return JSONResponse({"detail": "Invalid dashboard host"}, status_code=400)
+
+        origin = request.headers.get("origin")
+        if origin and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin_host = urlsplit(origin).netloc.lower()
+            request_host = request.headers.get("host", "").lower()
+            if origin_host != request_host:
+                return JSONResponse(
+                    {"detail": "Cross-origin dashboard write rejected"},
+                    status_code=403,
+                )
+        return await call_next(request)
+
     def _validated_slice_options(payload: Dict[str, Any] | None) -> dict[str, Any] | None:
         if not payload:
             return None
@@ -262,6 +297,16 @@ def create_app(
             return remote_worker_status_reader()
         return remote_worker_status()
 
+    def queue_segment_action(action: str, segment_id: str) -> Dict[str, Any]:
+        result = enqueue_action_job(
+            store.videos_root,
+            action=action,
+            segment_id=segment_id,
+        )
+        result["status_url"] = f"/api/jobs/{result['job']['job_id']}"
+        result["worker_trigger"] = trigger_worker(1)
+        return result
+
     @app.get("/api/rooms")
     async def list_rooms() -> list[Dict[str, Any]]:
         return [room.to_dict() for room in store.list_rooms()]
@@ -326,11 +371,20 @@ def create_app(
 
     @app.post("/api/segments/{segment_id}/retry-judge")
     async def segment_retry_judge(segment_id: str) -> Dict[str, Any]:
-        return _segment_action(lambda: retry_segment_judge(store.videos_root, segment_id))
+        return _segment_action(lambda: queue_segment_action("retry_judge", segment_id))
 
     @app.post("/api/segments/{segment_id}/render")
     async def segment_render(segment_id: str) -> Dict[str, Any]:
-        return _segment_action(lambda: render_segment(store.videos_root, segment_id))
+        return _segment_action(lambda: queue_segment_action("render_segment", segment_id))
+
+    @app.get("/api/jobs/{job_id}")
+    async def get_action_job(job_id: str) -> Dict[str, Any]:
+        try:
+            return read_action_job(store.videos_root, job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/tasks/{task_id}/requeue")
     async def task_requeue(task_id: str) -> Dict[str, Any]:

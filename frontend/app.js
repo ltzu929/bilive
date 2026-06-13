@@ -655,11 +655,32 @@ async function runSegmentAction(action, payload = null) {
   const options = { method: "POST" };
   if (payload) options.body = JSON.stringify(payload);
   const updated = await request(`/api/segments/${encodeURIComponent(segment.segment_id)}/${action}`, options);
+  if (updated.status_url) {
+    if (elements.segmentStatus) elements.segmentStatus.textContent = "queued";
+    const worker = describeWorkerTrigger(updated.worker_trigger);
+    if (worker.message) showError(worker.message);
+    await pollActionJob(updated.status_url);
+    await refreshSourceDetail(state.selectedSourceId);
+    return;
+  }
   const segments = state.sourceDetail?.segments || [];
   const index = segments.findIndex((item) => item.segment_id === updated.segment_id);
   if (index >= 0) segments[index] = updated;
   state.selectedSegmentId = updated.segment_id;
   renderSourceDetail();
+}
+
+async function pollActionJob(statusUrl) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const job = await request(statusUrl);
+    if (elements.segmentStatus) elements.segmentStatus.textContent = job.status || "pending";
+    if (job.status === "done") return job.result || {};
+    if (job.status === "failed") {
+      throw new Error(`动作执行失败：${job.error || "未知错误"}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("动作执行超时，请检查 Windows Worker 状态");
 }
 
 async function saveSegmentRange() {

@@ -198,3 +198,18 @@ def test_two_claimers_cannot_own_the_same_pending_marker(tmp_path):
 
         assert sum(result is not None for result in results) == 1
         assert (room / "source.mp4.processing").is_file()
+
+
+def test_watcher_processes_action_jobs_without_video_markers(monkeypatch, tmp_path):
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    calls = []
+
+    monkeypatch.setattr(
+        watcher,
+        "process_action_jobs",
+        lambda root: calls.append(root) or 1,
+    )
+
+    assert watcher.process_pending_videos(videos) == 1
+    assert calls == [videos.resolve()]
