@@ -92,7 +92,7 @@ def test_keep_source_flv_updates_only_postprocessing_setting(tmp_path):
     )
 
     assert settings_module.keep_source_flv(settings) is True
-    assert "delete_source = false" in settings.read_text(encoding="utf-8")
+    assert 'delete_source = "never"' in settings.read_text(encoding="utf-8")
     assert settings.with_suffix(".toml.before-bilive-hardening").exists()
     assert settings_module.keep_source_flv(settings) is False
 

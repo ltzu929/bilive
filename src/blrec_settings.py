@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def keep_source_flv(settings_path: Path) -> bool:
-    """Set postprocessing.delete_source to false without rewriting unrelated TOML."""
+    """Set postprocessing.delete_source to never without rewriting unrelated TOML."""
     settings_path = Path(settings_path)
     original = settings_path.read_text(encoding="utf-8")
     lines = original.splitlines(keepends=True)
@@ -31,7 +31,7 @@ def keep_source_flv(settings_path: Path) -> bool:
             continue
         found = True
         ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
-        replacement = f"delete_source = false{ending}"
+        replacement = f'delete_source = "never"{ending}'
         if line != replacement:
             lines[index] = replacement
             changed = True
@@ -44,8 +44,8 @@ def keep_source_flv(settings_path: Path) -> bool:
 
     updated = "".join(lines)
     parsed = tomllib.loads(updated)
-    if parsed.get("postprocessing", {}).get("delete_source") is not False:
-        raise ValueError("failed to set [postprocessing] delete_source=false")
+    if parsed.get("postprocessing", {}).get("delete_source") != "never":
+        raise ValueError("failed to set [postprocessing] delete_source=never")
 
     backup = settings_path.with_suffix(
         settings_path.suffix + ".before-bilive-hardening"

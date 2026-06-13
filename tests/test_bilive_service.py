@@ -7,6 +7,7 @@ RECOVERY_SCRIPT = Path("deploy/bilive-smb-recover.sh")
 RECOVERY_SERVICE = Path("deploy/bilive-smb-recover.service")
 RECOVERY_TIMER = Path("deploy/bilive-smb-recover.timer")
 INSTALLER = Path("deploy/install-bilive-services.sh")
+PI_REQUIREMENTS = Path("requirements/pi.txt")
 
 
 def test_service_stays_active_while_windows_share_is_offline():
@@ -75,6 +76,7 @@ def test_recovery_script_repairs_failed_and_stale_cifs_mounts():
 
 def test_installer_copies_local_recovery_units_and_enables_timer():
     text = INSTALLER.read_text(encoding="utf-8")
+    requirements = PI_REQUIREMENTS.read_text(encoding="utf-8")
 
     assert "/usr/local/bin/bilive-start.sh" in text
     assert "/usr/local/bin/bilive-dashboard-start.sh" in text
@@ -86,7 +88,11 @@ def test_installer_copies_local_recovery_units_and_enables_timer():
     assert "-m src.blrec_settings" in text
     assert 'requirements/pi.txt' in text
     assert '-m pip install' in text
+    assert "-m pip uninstall --yes pydantic-settings sse-starlette" in text
     assert '-m pip check' in text
+    assert "fastapi==0.88.0" in requirements
+    assert "uvicorn[standard]==0.20.0" in requirements
+    assert "chardet==5.2.0" in requirements
     assert "systemctl daemon-reload" in text
     assert "systemctl enable --now bilive-smb-recover.timer" in text
     assert "systemctl restart bilive.service" in text

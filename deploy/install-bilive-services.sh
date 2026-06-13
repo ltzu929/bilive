@@ -18,6 +18,7 @@ SETTINGS_FILE="${BILIVE_SETTINGS_FILE:-$PROJECT_DIR/settings.toml}"
 "$PYTHON_BIN" -m pip install \
     --disable-pip-version-check \
     "$PROJECT_DIR/wheel/blrec-2.0.0b4-py3-none-any.whl"
+"$PYTHON_BIN" -m pip uninstall --yes pydantic-settings sse-starlette
 "$PYTHON_BIN" -m pip check
 
 install -m 0755 "$SCRIPT_DIR/bilive-wrapper.sh" /usr/local/bin/bilive-start.sh
