@@ -32,6 +32,46 @@ if ($LMStudioPath) {
     $pipelineArguments += " -LMStudioPath `"$LMStudioPath`""
 }
 
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existingTask -and $existingTask.State -eq "Running") {
+    Stop-ScheduledTask -TaskName $TaskName
+    Start-Sleep -Seconds 1
+}
+
+$existingListener = Get-NetTCPConnection `
+    -LocalAddress "127.0.0.1" `
+    -LocalPort 2235 `
+    -State Listen `
+    -ErrorAction SilentlyContinue
+if ($existingListener) {
+    $ownerPid = [int]$existingListener[0].OwningProcess
+    $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid"
+    $expectedPython = Join-Path $ProjectDir ".venv-win\Scripts\python.exe"
+    $ownedByProject = (
+        $owner.CommandLine -and
+        $owner.CommandLine.Contains($expectedPython) -and
+        $owner.CommandLine.Contains("src.server.worker_api:api") -and
+        $owner.CommandLine.Contains("--port 2235")
+    )
+    if (-not $ownedByProject) {
+        throw "Port 2235 is occupied by a process not owned by this project"
+    }
+    Stop-Process -Id $ownerPid -Force
+    $portReleaseDeadline = (Get-Date).AddSeconds($VerifyTimeoutSeconds)
+    do {
+        Start-Sleep -Milliseconds 500
+        $existingListener = Get-NetTCPConnection `
+            -LocalAddress "127.0.0.1" `
+            -LocalPort 2235 `
+            -State Listen `
+            -ErrorAction SilentlyContinue
+    } while ($existingListener -and (Get-Date) -lt $portReleaseDeadline)
+    if ($existingListener) {
+        throw "Existing BiliveWorkerApi did not release port 2235"
+    }
+}
+$listenerBeforeStart = $ownerPid
+
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
     -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runScript`"$pipelineArguments"
@@ -72,7 +112,11 @@ do {
         -LocalPort 2235 `
         -State Listen `
         -ErrorAction SilentlyContinue
-    if ($task.State -eq "Running" -and $listener) {
+    if (
+        $task.State -eq "Running" -and
+        $listener -and
+        $listener.OwningProcess -ne $listenerBeforeStart
+    ) {
         try {
             $status = Invoke-RestMethod `
                 -Uri "http://127.0.0.1:2235/api/worker/status" `

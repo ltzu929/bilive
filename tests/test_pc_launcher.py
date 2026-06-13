@@ -53,6 +53,13 @@ def test_install_windows_worker_task_registers_logon_supervisor():
     assert "Invoke-RestMethod" in text
     assert "Get-NetTCPConnection" in text
     assert "Get-ScheduledTaskInfo" in text
+    assert "Stop-ScheduledTask" in text
+    assert "$portReleaseDeadline" in text
+    assert "Get-CimInstance Win32_Process" in text
+    assert "Stop-Process" in text
+    assert "src.server.worker_api:api" in text
+    assert "$listenerBeforeStart" in text
+    assert "$listener.OwningProcess -ne $listenerBeforeStart" in text
     assert "BiliveSliceOnce" in text
     assert "Unregister-ScheduledTask" in text
 
