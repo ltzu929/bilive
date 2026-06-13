@@ -53,9 +53,24 @@ BURST_TOP_N = int(burst.get("burst_top_n", 3))
 LLM_JUDGE_PROVIDER = str(judge.get("provider", "openai-compatible"))
 LOCAL_LLM_COMMAND = list(judge.get("local_command", []))
 LOCAL_LLM_TIMEOUT = float(judge.get("timeout", 120))
+MANAGED_LLM_MODEL_PATH = os.environ.get(
+    "BILIVE_LLM_MODEL_PATH",
+    str(judge.get("model_path", "")),
+)
+MANAGED_LLAMA_SERVER_PATH = os.environ.get(
+    "BILIVE_LLAMA_SERVER_PATH",
+    str(judge.get("server_path", "")),
+)
+MANAGED_LLAMA_HOST = str(judge.get("host", "127.0.0.1"))
+MANAGED_LLAMA_PORT = int(judge.get("port", 2236))
+MANAGED_LLAMA_CONTEXT_SIZE = int(judge.get("context_size", 4096))
+MANAGED_LLAMA_GPU_LAYERS = str(judge.get("gpu_layers", "all"))
+MANAGED_LLAMA_PARALLEL = int(judge.get("parallel", 1))
+MANAGED_LLAMA_STARTUP_TIMEOUT = float(judge.get("startup_timeout", 180))
+MANAGED_LLAMA_SHUTDOWN_TIMEOUT = float(judge.get("shutdown_timeout", 15))
 
 MULTI_MODAL_VISUAL_URL = str(
-    multi_modal.get("visual_model_url", "http://127.0.0.1:1234/v1")
+    multi_modal.get("visual_model_url", "http://127.0.0.1:2236/v1")
 )
 MULTI_MODAL_VISUAL_NAME = str(
     multi_modal.get("visual_model_name", "local-model")

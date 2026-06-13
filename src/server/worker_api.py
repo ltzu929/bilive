@@ -27,6 +27,7 @@ def create_app(
     pending_counter: Callable[[], int] | None = None,
     preflight_reader: Callable[[], Dict[str, Any]] | None = None,
     lock_status_reader: Callable[[], Dict[str, Any]] | None = None,
+    llm_status_reader: Callable[[], Dict[str, Any]] | None = None,
     auto_upload: bool | None = None,
 ) -> FastAPI:
     start_worker = worker_starter or start_worker_once
@@ -62,6 +63,12 @@ def create_app(
     read_lock_status = lock_status_reader or (
         lambda: read_worker_lock(default_worker_lock_path(project_root))
     )
+    if llm_status_reader is None:
+        from src.autoslice.mllm_sdk.managed_runtime import managed_llm_status
+
+        read_llm_status = managed_llm_status
+    else:
+        read_llm_status = llm_status_reader
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -115,6 +122,7 @@ def create_app(
             "watcher": watcher,
             "lock": read_lock_status(),
             "dependencies": read_preflight(),
+            "llm": read_llm_status(),
             "pending_tasks": int(count_pending()),
             "upload": read_upload_status(),
         }

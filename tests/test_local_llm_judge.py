@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 
 from src.autoslice.mllm_sdk import judge
 
@@ -83,3 +84,67 @@ def test_local_subprocess_bad_json_is_judge_failed(monkeypatch):
     assert result.retain is False
     assert result.judge_status == "judge_failed"
     assert "JSON parse failed" in result.judge_error
+
+
+def test_managed_provider_uses_runtime_endpoint(monkeypatch):
+    calls = {}
+    http_client = object()
+
+    @contextmanager
+    def fake_request():
+        calls["request"] = True
+        yield "http://127.0.0.1:2236/v1"
+
+    class Message:
+        content = json.dumps(
+            {
+                "retain": True,
+                "retain_reason": "good",
+                "title": "title",
+                "description": "description",
+                "content_type": "chat",
+                "tags": ["live"],
+            }
+        )
+
+    class Completions:
+        def create(self, **kwargs):
+            calls["completion"] = kwargs
+            return type(
+                "Completion",
+                (),
+                {"choices": [type("Choice", (), {"message": Message()})()]},
+            )()
+
+    class Client:
+        def __init__(self):
+            self.chat = type("Chat", (), {"completions": Completions()})()
+
+    monkeypatch.setattr(
+        judge,
+        "_load_judge_provider_config",
+        lambda: ("managed-llama-server", [], 120.0),
+    )
+    monkeypatch.setattr(judge, "managed_llm_request", fake_request)
+    monkeypatch.setattr(
+        judge,
+        "create_local_openai_client",
+        lambda **kwargs: calls.update(
+            client={**kwargs, "http_client": http_client}
+        )
+        or Client(),
+    )
+
+    result = judge.judge_and_title(
+        artist="artist",
+        danmaku_text="danmaku",
+        transcript="transcript",
+        model_name="qwen",
+    )
+
+    assert calls["request"] is True
+    assert calls["client"]["base_url"] == "http://127.0.0.1:2236/v1"
+    assert calls["client"]["http_client"] is http_client
+    assert calls["completion"]["model"] == "qwen"
+    assert calls["completion"]["response_format"] == {"type": "json_object"}
+    assert result.judge_status == "keep"

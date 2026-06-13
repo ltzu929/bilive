@@ -39,8 +39,9 @@ llama-server.exe
   --ctx-size 4096
   --gpu-layers all
   --parallel 1
+  --reasoning off
   --flash-attn auto
-  --no-webui
+  --no-ui
   --log-file logs/runtime/llama-server.log
 ```
 

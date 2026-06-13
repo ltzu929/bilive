@@ -39,6 +39,7 @@ cookie.json
 src/subtitle/models/*.pt
 node_modules/
 .cache/
+.runtime/
 
 # OS files and local worktrees
 .DS_Store

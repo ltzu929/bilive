@@ -12,6 +12,7 @@ import requests
 import toml
 
 DependencyChecker = Callable[[dict[str, Any]], tuple[bool, str]]
+LLMChecker = Callable[[dict[str, Any], Path], tuple[bool, str]]
 
 
 def _load_config(project_root: Path) -> dict[str, Any]:
@@ -32,11 +33,41 @@ def _result(ready: bool, message: str) -> dict[str, str]:
     }
 
 
-def _check_lm_studio(config: dict[str, Any]) -> tuple[bool, str]:
+def _configured_path(value: object, project_root: Path) -> Path:
+    path = Path(str(value or "")).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    return path.resolve()
+
+
+def _check_llm(
+    config: dict[str, Any],
+    project_root: Path,
+) -> tuple[bool, str]:
+    judge = config.get("slice", {}).get("llm_judge", {})
     provider = (
-        config.get("slice", {}).get("llm_judge", {}).get("provider")
-        or "openai-compatible"
+        judge.get("provider") or "openai-compatible"
     )
+    if provider == "managed-llama-server":
+        server = _configured_path(
+            os.environ.get(
+                "BILIVE_LLAMA_SERVER_PATH",
+                judge.get("server_path", ""),
+            ),
+            project_root,
+        )
+        model = _configured_path(
+            os.environ.get(
+                "BILIVE_LLM_MODEL_PATH",
+                judge.get("model_path", ""),
+            ),
+            project_root,
+        )
+        if not server.is_file():
+            return False, f"managed llama-server is missing: {server}"
+        if not model.is_file():
+            return False, f"managed LLM model is missing: {model}"
+        return True, f"managed runtime={server}; model={model}"
     if provider != "openai-compatible":
         return True, f"not required for provider {provider}"
 
@@ -83,7 +114,7 @@ def run_worker_preflight(
     project_root: str | Path,
     videos_root: str | Path,
     db_path: str | Path,
-    lm_studio_checker: DependencyChecker = _check_lm_studio,
+    llm_checker: LLMChecker = _check_llm,
     asr_checker: DependencyChecker = _check_asr,
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
@@ -115,8 +146,8 @@ def run_worker_preflight(
         database_message = str(exc)
     checks["database"] = _result(database_ready, database_message)
 
-    lm_ready, lm_message = lm_studio_checker(config)
-    checks["lm_studio"] = _result(lm_ready, lm_message)
+    llm_ready, llm_message = llm_checker(config, root)
+    checks["llm"] = _result(llm_ready, llm_message)
     asr_ready, asr_message = asr_checker(config)
     checks["asr"] = _result(asr_ready, asr_message)
 

@@ -3,10 +3,8 @@
 param(
     [string]$TaskName = "BiliveWorkerApi",
     [string]$ProjectDir = (Split-Path -Parent $MyInvocation.MyCommand.Path),
-    [switch]$NoLMStudio,
     [switch]$NoUpload,
     [switch]$EnableUpload,
-    [string]$LMStudioPath = $env:BILIVE_LM_STUDIO_PATH,
     [int]$VerifyTimeoutSeconds = 30
 )
 
@@ -22,14 +20,8 @@ if ($NoUpload -and $EnableUpload) {
 }
 
 $pipelineArguments = ""
-if ($NoLMStudio) {
-    $pipelineArguments += " -NoLMStudio"
-}
 if (-not $EnableUpload) {
     $pipelineArguments += " -NoUpload"
-}
-if ($LMStudioPath) {
-    $pipelineArguments += " -LMStudioPath `"$LMStudioPath`""
 }
 
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue

@@ -10,16 +10,15 @@ $ProjectDir = (Resolve-Path -LiteralPath $ProjectDir).Path
 $python = Join-Path $ProjectDir ".venv-win\Scripts\python.exe"
 $dbPath = Join-Path $ProjectDir "src\db\data.db"
 $uploadLock = Join-Path $ProjectDir "logs\runtime\upload.lock"
+$env:PYTHONPATH = $ProjectDir
+$env:BILIVE_DIR = $ProjectDir
+$env:BILIVE_CONFIG = Join-Path $ProjectDir "bilive-server.toml"
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
 $listener = Get-NetTCPConnection `
     -LocalAddress "127.0.0.1" `
     -LocalPort 2235 `
-    -State Listen `
-    -ErrorAction SilentlyContinue
-$lmListener = Get-NetTCPConnection `
-    -LocalPort 1234 `
     -State Listen `
     -ErrorAction SilentlyContinue
 
@@ -32,12 +31,36 @@ try {
     $api = @{ status = "unavailable"; error = $_.Exception.Message }
 }
 
-$pythonChecks = @{ python = $false; faster_whisper = $false; asr_model = ""; database = "unavailable" }
+$pythonChecks = @{
+    python = $false
+    faster_whisper = $false
+    asr_model = ""
+    database = "unavailable"
+    managed_llm = @{ runtime = ""; model = ""; ready = $false }
+}
 if (Test-Path -LiteralPath $python) {
     $checkScript = @"
 import importlib.util, json, sqlite3
 from pathlib import Path
-result = {"python": True, "faster_whisper": bool(importlib.util.find_spec("faster_whisper")), "asr_model": "", "database": "missing"}
+from src.config import BILIVE_DIR, MANAGED_LLAMA_SERVER_PATH, MANAGED_LLM_MODEL_PATH
+def resolve(value):
+    path = Path(value).expanduser()
+    return (Path(BILIVE_DIR) / path).resolve() if not path.is_absolute() else path.resolve()
+runtime = resolve(MANAGED_LLAMA_SERVER_PATH)
+model = resolve(MANAGED_LLM_MODEL_PATH)
+result = {
+    "python": True,
+    "faster_whisper": bool(importlib.util.find_spec("faster_whisper")),
+    "asr_model": "",
+    "database": "missing",
+    "managed_llm": {
+        "runtime": str(runtime),
+        "runtime_exists": runtime.is_file(),
+        "model": str(model),
+        "model_exists": model.is_file(),
+        "ready": runtime.is_file() and model.is_file(),
+    },
+}
 try:
     from huggingface_hub import snapshot_download
     result["asr_model"] = snapshot_download(repo_id="Systran/faster-whisper-large-v3", local_files_only=True)
@@ -65,7 +88,10 @@ $report = [ordered]@{
     }
     port_2235_listening = [bool]$listener
     worker_api = $api
-    lm_studio_port_1234 = [bool]$lmListener
+    managed_llm = @{
+        files = $pythonChecks.managed_llm
+        process = if ($api -and $api.llm) { $api.llm } else { $null }
+    }
     dependencies = $pythonChecks
     upload_lock = @{
         path = $uploadLock

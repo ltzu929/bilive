@@ -19,7 +19,7 @@ def test_worker_preflight_reports_ready_dependencies(tmp_path):
         project_root=tmp_path,
         videos_root=videos,
         db_path=tmp_path / "queue.db",
-        lm_studio_checker=lambda _config: (True, "ready"),
+        llm_checker=lambda _config, _root: (True, "ready"),
         asr_checker=lambda _config: (True, "cached"),
     )
 
@@ -29,7 +29,7 @@ def test_worker_preflight_reports_ready_dependencies(tmp_path):
     assert result["checks"]["database"]["status"] == "ready"
 
 
-def test_worker_preflight_blocks_when_lm_studio_is_unavailable(tmp_path):
+def test_worker_preflight_blocks_when_llm_is_unavailable(tmp_path):
     preflight = _module()
     from src.db.conn import migrate_upload_queue
 
@@ -41,15 +41,15 @@ def test_worker_preflight_blocks_when_lm_studio_is_unavailable(tmp_path):
         project_root=tmp_path,
         videos_root=videos,
         db_path=tmp_path / "queue.db",
-        lm_studio_checker=lambda _config: (False, "connection refused"),
+        llm_checker=lambda _config, _root: (False, "runtime missing"),
         asr_checker=lambda _config: (True, "cached"),
     )
 
     assert result["ready"] is False
-    assert result["unavailable"] == ["lm_studio"]
-    assert result["checks"]["lm_studio"] == {
+    assert result["unavailable"] == ["llm"]
+    assert result["checks"]["llm"] == {
         "status": "unavailable",
-        "message": "connection refused",
+        "message": "runtime missing",
     }
 
 
@@ -62,7 +62,7 @@ def test_worker_preflight_fails_closed_for_output_database_and_asr(tmp_path):
         project_root=tmp_path,
         videos_root=tmp_path / "missing-videos",
         db_path=database_directory,
-        lm_studio_checker=lambda _config: (True, "ready"),
+        llm_checker=lambda _config, _root: (True, "ready"),
         asr_checker=lambda _config: (False, "model missing"),
     )
 
@@ -88,7 +88,7 @@ def test_asr_check_cannot_be_disabled_while_pipeline_requires_it(monkeypatch):
     assert message == "faster-whisper is not installed"
 
 
-def test_lm_studio_check_does_not_use_environment_proxy(monkeypatch):
+def test_external_llm_check_does_not_use_environment_proxy(monkeypatch, tmp_path):
     preflight = _module()
     calls = {}
 
@@ -106,11 +106,44 @@ def test_lm_studio_check_does_not_use_environment_proxy(monkeypatch):
 
     monkeypatch.setattr(preflight.requests, "Session", Session)
 
-    ready, _message = preflight._check_lm_studio({})
+    ready, _message = preflight._check_llm({}, tmp_path)
 
     assert ready is True
     assert calls["trust_env"] is False
     assert calls["url"] == "http://127.0.0.1:1234/v1/models"
+
+
+def test_managed_llm_check_validates_runtime_and_model_without_http(
+    monkeypatch,
+    tmp_path,
+):
+    preflight = _module()
+    runtime = tmp_path / "llama-server.exe"
+    model = tmp_path / "model.gguf"
+    runtime.write_bytes(b"exe")
+    model.write_bytes(b"gguf")
+    monkeypatch.setattr(
+        preflight.requests,
+        "Session",
+        lambda: (_ for _ in ()).throw(AssertionError("HTTP must not be used")),
+    )
+
+    ready, message = preflight._check_llm(
+        {
+            "slice": {
+                "llm_judge": {
+                    "provider": "managed-llama-server",
+                    "server_path": str(runtime),
+                    "model_path": str(model),
+                }
+            }
+        },
+        tmp_path,
+    )
+
+    assert ready is True
+    assert "managed" in message
+    assert str(model) in message
 
 
 def test_worker_preflight_does_not_create_missing_database(tmp_path):
@@ -123,7 +156,7 @@ def test_worker_preflight_does_not_create_missing_database(tmp_path):
         project_root=tmp_path,
         videos_root=videos,
         db_path=database,
-        lm_studio_checker=lambda _config: (True, "ready"),
+        llm_checker=lambda _config, _root: (True, "ready"),
         asr_checker=lambda _config: (True, "cached"),
     )
 

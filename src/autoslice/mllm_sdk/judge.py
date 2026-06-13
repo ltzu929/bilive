@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from openai import OpenAI
+from src.autoslice.mllm_sdk.managed_runtime import (
+    create_local_openai_client,
+    managed_llm_request,
+)
 from src.log.logger import scan_log
 
 
@@ -254,13 +258,30 @@ def judge_and_title(
     prompt = _build_judge_prompt(artist, danmaku_text, transcript)
 
     try:
-        client = OpenAI(base_url=model_url, api_key="lm-studio")
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            timeout=timeout,
-        )
+        if provider == "managed-llama-server":
+            endpoint_context = managed_llm_request()
+            api_key = "bilive-managed"
+        else:
+            from contextlib import nullcontext
+
+            endpoint_context = nullcontext(model_url)
+            api_key = "lm-studio"
+
+        with endpoint_context as active_model_url:
+            if provider == "managed-llama-server":
+                client = create_local_openai_client(
+                    base_url=active_model_url,
+                    api_key=api_key,
+                )
+            else:
+                client = OpenAI(base_url=active_model_url, api_key=api_key)
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                timeout=timeout,
+                response_format={"type": "json_object"},
+            )
         msg = completion.choices[0].message
         scan_log.info(f"Judge LLM raw content: {msg.content!r}")
 

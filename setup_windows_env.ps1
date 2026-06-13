@@ -1,7 +1,8 @@
 param(
     [switch]$Recreate,
     [switch]$Dev,
-    [switch]$UpgradePip
+    [switch]$UpgradePip,
+    [switch]$SkipLlamaRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +44,13 @@ if ($Dev) {
 & $Python -m pip check
 if ($LASTEXITCODE -ne 0) {
     throw "Windows environment contains dependency conflicts"
+}
+
+if (-not $SkipLlamaRuntime) {
+    & (Join-Path $ProjectDir "install_llama_runtime.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install the managed llama.cpp runtime"
+    }
 }
 
 Write-Host "Windows environment ready: $Python"

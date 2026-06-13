@@ -1,9 +1,7 @@
 # Bilive Windows supervisor. This is the only production PC entrypoint.
 
 param(
-    [switch]$NoLMStudio,
-    [switch]$NoUpload,
-    [string]$LMStudioPath = $env:BILIVE_LM_STUDIO_PATH
+    [switch]$NoUpload
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,16 +31,6 @@ if ($NoUpload) {
 
 $logDir = Join-Path $ProjectDir "logs\runtime"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-if (-not $NoLMStudio) {
-    if ($LMStudioPath -and
-        (Test-Path -LiteralPath $LMStudioPath) -and
-        -not (Get-Process "LM Studio" -ErrorAction SilentlyContinue)) {
-        Start-Process -FilePath $LMStudioPath -WindowStyle Minimized
-    } elseif (-not $LMStudioPath) {
-        Write-Warning "BILIVE_LM_STUDIO_PATH is not set; LM Studio was not started."
-    }
-}
 
 Write-Host "Bilive Worker API: http://127.0.0.1:2235"
 Write-Host "Upload consumer is managed by the Worker API."

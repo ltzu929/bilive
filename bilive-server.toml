@@ -27,13 +27,22 @@ burst_merge_gap = 5
 burst_top_n = 3
 
 [slice.llm_judge]
-provider = "openai-compatible"
+provider = "managed-llama-server"
 local_command = []
 timeout = 120
+model_path = "E:\\AImodel\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf"
+server_path = ".runtime\\llama.cpp\\b9616\\llama-server.exe"
+host = "127.0.0.1"
+port = 2236
+context_size = 4096
+gpu_layers = "all"
+parallel = 1
+startup_timeout = 180
+shutdown_timeout = 15
 
 [slice.multi_modal]
-visual_model_url = "http://127.0.0.1:1234/v1"
-visual_model_name = "qwen/qwen3.5-9b"
+visual_model_url = "http://127.0.0.1:2236/v1"
+visual_model_name = "qwen3.5-9b"
 whisper_model = "large-v3"
 whisper_engine = "faster-whisper"
 whisper_device = "cpu"

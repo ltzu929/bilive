@@ -8,6 +8,7 @@ SETUP_WINDOWS_ENV_SCRIPT = Path("setup_windows_env.ps1")
 START_PC_WORKER_API_SCRIPT = Path("start_pc_worker_api.ps1")
 RUN_UPLOAD_SCRIPT = Path("run_upload.ps1")
 HEALTH_SCRIPT = Path("check_windows_health.ps1")
+INSTALL_LLAMA_RUNTIME_SCRIPT = Path("install_llama_runtime.ps1")
 
 
 def test_pipeline_launcher_starts_pc_worker_api():
@@ -28,7 +29,8 @@ def test_pipeline_launcher_starts_pc_worker_api():
     assert 'BILIVE_AUTO_UPLOAD' in text
     assert 'NO_PROXY' in text
     assert 'if ($NoUpload)' in text
-    assert 'BILIVE_LM_STUDIO_PATH' in text
+    assert "LM Studio" not in text
+    assert "BILIVE_LM_STUDIO_PATH" not in text
     assert '$ProjectDir;$ProjectDir\\src' not in text
     assert '& $python "-m" "uvicorn"' in text
 
@@ -45,10 +47,8 @@ def test_install_windows_worker_task_registers_logon_supervisor():
     assert "LogonType Interactive" in text
     assert "RunLevel Limited" in text
     assert "-WindowStyle Hidden" in text
-    assert "[switch]$NoLMStudio" in text
     assert "[switch]$NoUpload" in text
     assert "[switch]$EnableUpload" in text
-    assert '" -NoLMStudio"' in text
     assert '" -NoUpload"' in text
     assert "Invoke-RestMethod" in text
     assert "Get-NetTCPConnection" in text
@@ -89,6 +89,8 @@ def test_windows_environment_is_dedicated_and_pinned():
     assert "-m pip check" in text
     assert "[switch]$Dev" in text
     assert "requirements\\dev.txt" in text
+    assert "install_llama_runtime.ps1" in text
+    assert "[switch]$SkipLlamaRuntime" in text
     assert "faster-whisper==" in requirements
     assert "openai==" in requirements
     assert "fastapi==" in requirements
@@ -105,5 +107,19 @@ def test_windows_health_check_is_read_only_and_reports_all_dependencies():
     assert "snapshot_download" in text
     assert "integrity_check" in text
     assert "upload.lock" in text
+    assert "managed_llm" in text
+    assert "lm_studio_port_1234" not in text
+    assert '$env:PYTHONPATH = $ProjectDir' in text
+    assert '$env:BILIVE_CONFIG' in text
     assert "Register-ScheduledTask" not in text
     assert "Start-ScheduledTask" not in text
+
+
+def test_llama_runtime_installer_is_pinned_and_runtime_is_ignored():
+    text = INSTALL_LLAMA_RUNTIME_SCRIPT.read_text(encoding="utf-8")
+    ignore = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert 'LlamaCppVersion = "b9616"' in text
+    assert "llama-server.exe" in text
+    assert "win-cuda-12" in text
+    assert ".runtime/" in ignore

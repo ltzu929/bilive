@@ -74,8 +74,8 @@ async def test_worker_api_keeps_pending_when_dependency_is_unavailable():
     calls = []
     preflight = {
         "ready": False,
-        "unavailable": ["lm_studio"],
-        "checks": {"lm_studio": {"status": "unavailable"}},
+        "unavailable": ["llm"],
+        "checks": {"llm": {"status": "unavailable"}},
     }
     app = create_app(
         worker_starter=lambda: calls.append("start"),
@@ -103,6 +103,10 @@ async def test_worker_api_reports_status():
             upload_status_reader=lambda: {"status": "idle"},
             pending_counter=lambda: 3,
             preflight_reader=lambda: {"ready": True, "checks": {}},
+            llm_status_reader=lambda: {
+                "status": "idle",
+                "provider": "managed-llama-server",
+            },
             lock_status_reader=lambda: {
                 "status": "unlocked",
                 "pid": None,
@@ -123,6 +127,10 @@ async def test_worker_api_reports_status():
             "owner_running": False,
         },
         "dependencies": {"ready": True, "checks": {}},
+        "llm": {
+            "status": "idle",
+            "provider": "managed-llama-server",
+        },
         "pending_tasks": 3,
         "upload": {"status": "idle"},
     }
