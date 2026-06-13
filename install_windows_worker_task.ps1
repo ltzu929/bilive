@@ -2,7 +2,9 @@
 
 param(
     [string]$TaskName = "BiliveWorkerApi",
-    [string]$ProjectDir = (Split-Path -Parent $MyInvocation.MyCommand.Path)
+    [string]$ProjectDir = (Split-Path -Parent $MyInvocation.MyCommand.Path),
+    [switch]$NoLMStudio,
+    [switch]$NoUpload
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,9 +15,17 @@ if (-not (Test-Path -LiteralPath $runScript)) {
     throw "Cannot find Worker API launcher: $runScript"
 }
 
+$pipelineArguments = ""
+if ($NoLMStudio) {
+    $pipelineArguments += " -NoLMStudio"
+}
+if ($NoUpload) {
+    $pipelineArguments += " -NoUpload"
+}
+
 $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runScript`""
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runScript`"$pipelineArguments"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `

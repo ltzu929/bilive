@@ -42,6 +42,10 @@ def test_install_windows_worker_task_registers_logon_supervisor():
     assert "LogonType Interactive" in text
     assert "RunLevel Limited" in text
     assert "-WindowStyle Hidden" in text
+    assert "[switch]$NoLMStudio" in text
+    assert "[switch]$NoUpload" in text
+    assert '" -NoLMStudio"' in text
+    assert '" -NoUpload"' in text
     assert "BiliveSliceOnce" in text
     assert "Unregister-ScheduledTask" in text
 
