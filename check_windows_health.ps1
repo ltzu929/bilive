@@ -50,7 +50,7 @@ if path.is_file():
 print(json.dumps(result, ensure_ascii=False))
 "@
     try {
-        $pythonChecks = (& $python -c $checkScript | ConvertFrom-Json)
+        $pythonChecks = ($checkScript | & $python - | ConvertFrom-Json)
     } catch {
         $pythonChecks = @{ python = $true; error = $_.Exception.Message }
     }
