@@ -123,3 +123,18 @@ def test_llama_runtime_installer_is_pinned_and_runtime_is_ignored():
     assert "llama-server.exe" in text
     assert "win-cuda-12" in text
     assert ".runtime/" in ignore
+
+
+def test_managed_llm_runtime_is_documented_without_lm_studio_setup():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    operations = Path("docs/operations.md").read_text(encoding="utf-8")
+    architecture = Path("docs/architecture.md").read_text(encoding="utf-8")
+    runtime = Path("docs/model-runtime.md").read_text(encoding="utf-8")
+    public_docs = "\n".join([readme, operations, architecture, runtime])
+
+    assert "BILIVE_LM_STUDIO_PATH" not in public_docs
+    assert "E:\\AImodel\\lmstudio-community" in public_docs
+    assert "managed_runtime --smoke-test" in public_docs
+    assert "2236" in public_docs
+    assert "整批" in public_docs
+    assert "卸载" in public_docs
