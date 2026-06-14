@@ -96,6 +96,12 @@ const elements = {
   segmentDropButton: document.querySelector("#segment-drop-button"),
   segmentRetryButton: document.querySelector("#segment-retry-button"),
   segmentRenderButton: document.querySelector("#segment-render-button"),
+  taskStatePill: document.querySelector("#task-state-pill"),
+  taskStateLabel: document.querySelector("#task-state-label"),
+  overviewSourceTotal: document.querySelector("#overview-source-total"),
+  overviewTaskTotal: document.querySelector("#overview-task-total"),
+  overviewReviewTotal: document.querySelector("#overview-review-total"),
+  overviewKeepTotal: document.querySelector("#overview-keep-total"),
 };
 
 function mediaUrl(item) {
@@ -163,6 +169,20 @@ const TASK_STATUS_TAG = {
   skipped: { cls: "tag-orange", label: "skipped" },
   stale: { cls: "tag-red", label: "stale" },
 };
+
+const SOURCE_STATUS_PRESENTATION = {
+  ready: { label: "待处理", tone: "pending" },
+  pending: { label: "待处理", tone: "pending" },
+  processing: { label: "处理中", tone: "processing" },
+  done: { label: "已完成", tone: "keep" },
+  failed: { label: "失败", tone: "drop" },
+  stale: { label: "待恢复", tone: "pending" },
+  unknown: { label: "未知", tone: "neutral" },
+};
+
+function sourceStatusPresentation(status) {
+  return SOURCE_STATUS_PRESENTATION[status] || SOURCE_STATUS_PRESENTATION.unknown;
+}
 
 function decisionTag(decision) {
   const config = DECISION_TAG[decision] || DECISION_TAG.review;
@@ -284,6 +304,21 @@ function renderSliceProgress(progress) {
   elements.progressBar.style.width = `${percent}%`;
   elements.startSliceButton.disabled = status === "running";
   elements.startSliceButton.textContent = status === "running" ? "切片中" : "启动切片";
+  renderTaskState(status);
+}
+
+function renderTaskState(status) {
+  if (!elements.taskStatePill || !elements.taskStateLabel) return;
+  const presentation = {
+    running: { tone: "running", label: "任务运行中" },
+    queued: { tone: "running", label: "任务排队中" },
+    complete: { tone: "complete", label: "本批已完成" },
+    error: { tone: "error", label: "任务异常" },
+    stale: { tone: "stale", label: "进度已过期" },
+    idle: { tone: "idle", label: "等待任务" },
+  }[status] || { tone: "idle", label: "等待任务" };
+  elements.taskStatePill.className = `live-pill task-state-${presentation.tone}`;
+  elements.taskStateLabel.textContent = presentation.label;
 }
 
 function renderSliceDiagnostics(payload) {
@@ -359,6 +394,7 @@ function renderTaskList(tasks) {
   if (!elements.taskList || !elements.taskCount) return;
   elements.taskCount.textContent = `${tasks.length} items`;
   elements.taskList.innerHTML = "";
+  updateOverviewStats();
 
   if (!tasks.length) {
     const empty = document.createElement("div");
@@ -450,13 +486,47 @@ function sourceSummaryLabel(counts = {}) {
   ].join(" / ");
 }
 
+function updateOverviewStats() {
+  const sources = Array.isArray(state.sourceRecordings) ? state.sourceRecordings : [];
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const reviewCount = sources.reduce(
+    (total, item) => total
+      + Number(item.summary_counts?.review || 0)
+      + Number(item.summary_counts?.judge_failed || 0),
+    0,
+  );
+  const keepCount = sources.reduce(
+    (total, item) => total
+      + Number(item.summary_counts?.keep || 0)
+      + Number(item.summary_counts?.manual_keep || 0),
+    0,
+  );
+
+  if (elements.overviewSourceTotal) elements.overviewSourceTotal.textContent = String(sources.length);
+  if (elements.overviewTaskTotal) elements.overviewTaskTotal.textContent = String(tasks.length);
+  if (elements.overviewReviewTotal) elements.overviewReviewTotal.textContent = String(reviewCount);
+  if (elements.overviewKeepTotal) elements.overviewKeepTotal.textContent = String(keepCount);
+}
+
+function sourceReviewPriority(item) {
+  const counts = item.summary_counts || {};
+  if (Number(counts.judge_failed || 0) > 0 || Number(counts.review || 0) > 0) return 3;
+  if (Number(item.segment_count || 0) > 0) return 2;
+  if (item.status === "processing" || item.status === "pending") return 1;
+  return 0;
+}
+
 async function refreshSourceRecordings() {
   const roomId = elements.roomFilter.value;
   const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : "";
   try {
     state.sourceRecordings = await request(`/api/source-recordings${query}`);
     if (!state.sourceRecordings.some((item) => item.task_id === state.selectedSourceId)) {
-      state.selectedSourceId = state.sourceRecordings[0]?.task_id || "";
+      const preferredSource = [...state.sourceRecordings]
+        .filter((item) => Number(item.segment_count || 0) > 0)
+        .sort((left, right) => sourceReviewPriority(right) - sourceReviewPriority(left))[0]
+        || state.sourceRecordings[0];
+      state.selectedSourceId = preferredSource?.task_id || "";
       state.selectedSegmentId = "";
     }
     renderSourceRecordings();
@@ -473,9 +543,16 @@ async function refreshSourceRecordings() {
 
 function renderSourceRecordings() {
   if (!elements.sourceRecordingList || !elements.sourceRecordingCount) return;
-  const items = state.sourceRecordings;
-  elements.sourceRecordingCount.textContent = `${items.length} items`;
+  const items = state.sourceRecordings
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => (
+      sourceReviewPriority(right.item) - sourceReviewPriority(left.item)
+      || left.index - right.index
+    ))
+    .map(({ item }) => item);
+  elements.sourceRecordingCount.textContent = `${items.length} 条录播`;
   elements.sourceRecordingList.innerHTML = "";
+  updateOverviewStats();
 
   if (!items.length) {
     const empty = document.createElement("div");
@@ -490,15 +567,28 @@ function renderSourceRecordings() {
     button.type = "button";
     button.className = `source-row${item.task_id === state.selectedSourceId ? " active" : ""}`;
 
+    const header = document.createElement("span");
+    header.className = "source-row-header";
+
     const name = document.createElement("span");
     name.className = "source-name";
     name.textContent = item.source_name || item.source_rel_path || "-";
 
+    const status = sourceStatusPresentation(item.status);
+    const statusBadge = document.createElement("span");
+    statusBadge.className = `source-status-badge source-status-${status.tone}`;
+    statusBadge.textContent = status.label;
+    header.append(name, statusBadge);
+
     const meta = document.createElement("span");
     meta.className = "source-meta";
-    meta.textContent = `${item.room_name || item.room_id || "-"} / ${formatMegabytes(item.source_size_mb)} / ${sourceSummaryLabel(item.summary_counts)}`;
+    meta.textContent = `${item.room_name || item.room_id || "-"} · ${formatMegabytes(item.source_size_mb)}`;
 
-    button.append(name, meta);
+    const summary = document.createElement("span");
+    summary.className = "source-summary-line";
+    summary.textContent = sourceSummaryLabel(item.summary_counts);
+
+    button.append(header, meta, summary);
     button.addEventListener("click", () => selectSourceRecording(item.task_id));
     elements.sourceRecordingList.appendChild(button);
   }
@@ -620,7 +710,10 @@ function renderSegmentPanel() {
   }
 
   if (!segment) {
-    if (elements.segmentStatus) elements.segmentStatus.textContent = "-";
+    if (elements.segmentStatus) {
+      elements.segmentStatus.className = "panel-meta status-pill segment-status-review";
+      elements.segmentStatus.textContent = "-";
+    }
     if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = "-";
     if (elements.segmentTitle) elements.segmentTitle.value = "";
     if (elements.segmentDescription) elements.segmentDescription.value = "";
@@ -633,7 +726,12 @@ function renderSegmentPanel() {
     return;
   }
 
-  if (elements.segmentStatus) elements.segmentStatus.textContent = segment.judge_status || "review";
+  if (elements.segmentStatus) {
+    const status = segment.judge_status || "review";
+    const normalizedStatus = status === "manual_keep" ? "keep" : status.replaceAll("_", "-");
+    elements.segmentStatus.className = `panel-meta status-pill segment-status-${normalizedStatus}`;
+    elements.segmentStatus.textContent = status;
+  }
   if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = segmentRangeLabel(segment);
   if (elements.segmentTitle) elements.segmentTitle.value = segment.title || "";
   if (elements.segmentDescription) elements.segmentDescription.value = segment.description || "";

@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>bilive dashboard</title>
-    <link rel="stylesheet" href="/styles.css?v=20260603-3" />
+    <title>Bilive Studio · 切片工作台</title>
+    <link rel="stylesheet" href="/styles.css?v=20260614-1" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
-    <div class="app-shell" id="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
+    <div class="app-shell collapsed" id="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand" title="Bilive Studio">
           <div class="brand-mark">B</div>
           <span class="brand-text">bilive</span>
         </div>
-        <nav>
-          <a class="nav-item" href="http://192.168.31.157:2233/tasks">
+        <nav class="nav-list">
+          <a class="nav-item" href="http://192.168.31.157:2233/tasks" title="录播控制台">
             <span class="nav-icon" data-icon="record"></span>
             <span class="nav-text">录播控制台</span>
           </a>
@@ -23,87 +23,228 @@
             <span class="nav-icon" data-icon="scissor"></span>
             <span class="nav-text">切片</span>
           </a>
-          <span class="nav-item disabled" aria-disabled="true">
+          <span class="nav-item disabled" aria-disabled="true" title="上传">
             <span class="nav-icon" data-icon="upload"></span>
             <span class="nav-text">上传</span>
           </span>
-          <span class="nav-item disabled" aria-disabled="true">
+          <span class="nav-item disabled" aria-disabled="true" title="设置">
             <span class="nav-icon" data-icon="setting"></span>
             <span class="nav-text">设置</span>
           </span>
         </nav>
-        <div class="sider-trigger" id="sider-toggle" role="button" aria-label="collapse sidebar">
-          <span class="nav-icon" data-icon="fold"></span>
+        <div class="sidebar-footer">
+          <div class="sider-trigger" id="sider-toggle" role="button" tabindex="0" aria-label="展开侧栏">
+            <span class="nav-icon" data-icon="unfold"></span>
+          </div>
+          <div class="avatar" title="本地工作台">ZK</div>
         </div>
       </aside>
 
       <main class="main">
+        <header class="studio-topbar toolbar">
+          <div class="toolbar-left">
+            <div class="title-line">
+              <h1>切片工作台</h1>
+              <span id="task-state-pill" class="live-pill task-state-idle">
+                <span class="live-dot"></span>
+                <span id="task-state-label">等待任务</span>
+              </span>
+            </div>
+            <p>Bilive Studio / 自动切片 / 任务详情</p>
+          </div>
+          <div class="toolbar-controls">
+            <span id="worker-badge" class="worker-badge worker-idle" title="PC worker 状态">
+              PC Worker 未连接
+            </span>
+            <button id="refresh-button" class="btn-secondary" type="button">刷新</button>
+            <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
+          </div>
+        </header>
+
         <section class="page">
-          <header class="toolbar">
-            <div class="toolbar-left">
-              <nav class="breadcrumb" aria-label="breadcrumb">
-                <span class="breadcrumb-item">bilive</span>
-                <span class="breadcrumb-sep">/</span>
-                <span class="breadcrumb-item current">切片</span>
-              </nav>
-              <h1>切片</h1>
-              <p>预览录播、弹幕密度和 LLM 判断结果。</p>
-            </div>
-            <div class="toolbar-controls">
-              <select id="room-filter">
-                <option value="">全部 UP</option>
-              </select>
-              <select id="status-filter">
-                <option value="all">全部</option>
-                <option value="review">待确认</option>
-                <option value="keep">保留</option>
-                <option value="drop">丢弃</option>
-              </select>
-              <span id="worker-badge" class="worker-badge worker-idle" title="PC worker 状态">PC worker: 未知</span>
-              <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
-              <button id="refresh-button" type="button">刷新</button>
-            </div>
-          </header>
+          <div id="error" class="error hidden"></div>
 
-          <section id="slice-progress-panel" class="progress-panel" aria-live="polite">
-            <div class="progress-main">
-              <div>
-                <div id="slice-progress-title" class="progress-title">空闲</div>
-                <div id="slice-progress-message" class="progress-message">暂无切片任务</div>
-              </div>
-              <div class="progress-meta">
-                <span id="slice-progress-source">-</span>
-                <span id="slice-progress-count">0/0</span>
-                <span id="slice-progress-percent">0%</span>
+          <section id="slice-progress-panel" class="overview-card progress-panel" aria-live="polite">
+            <div class="overview-file">
+              <div class="eyebrow">当前处理文件</div>
+              <div id="slice-progress-source" class="current-file">-</div>
+              <div id="slice-progress-message" class="file-meta">暂无切片任务</div>
+              <div class="progress-line">
+                <div class="progress-track">
+                  <div id="slice-progress-bar" class="progress-fill" style="width: 0%"></div>
+                </div>
+                <span id="slice-progress-percent" class="progress-number">0%</span>
               </div>
             </div>
-            <div class="progress-track">
-              <div id="slice-progress-bar" class="progress-fill" style="width: 0%"></div>
+
+            <section id="slice-diagnostics-panel" class="diagnostics-panel" aria-live="polite">
+              <div class="diagnostics-header">
+                <div>
+                  <span class="diagnostics-title">处理流程</span>
+                  <span id="slice-progress-title" class="phase-badge">空闲</span>
+                </div>
+                <div class="diagnostics-meta">
+                  <span id="slice-diagnostics-source">-</span>
+                  <span id="slice-progress-count">0/0</span>
+                </div>
+              </div>
+              <div id="slice-diagnostics-list" class="diagnostics-list">
+                <div class="diagnostic-empty">正在加载诊断信息</div>
+              </div>
+            </section>
+
+            <div class="overview-stats" aria-label="任务统计">
+              <div class="stat-card">
+                <span>录播总数</span>
+                <strong id="overview-source-total">0</strong>
+              </div>
+              <div class="stat-card">
+                <span>任务队列</span>
+                <strong id="overview-task-total">0</strong>
+              </div>
+              <div class="stat-card">
+                <span>待审核</span>
+                <strong id="overview-review-total">0</strong>
+              </div>
+              <div class="stat-card">
+                <span>已保留</span>
+                <strong id="overview-keep-total">0</strong>
+              </div>
             </div>
           </section>
 
-          <section id="slice-diagnostics-panel" class="diagnostics-panel" aria-live="polite">
-            <div class="diagnostics-header">
-              <span class="diagnostics-title">切片诊断</span>
-              <span id="slice-diagnostics-source" class="diagnostics-source">-</span>
-            </div>
-            <div id="slice-diagnostics-list" class="diagnostics-list">
-              <div class="diagnostic-empty">正在加载诊断信息</div>
-            </div>
-          </section>
+          <div class="review-workspace workbench source-workbench">
+            <section class="review-queue panel source-list-panel" aria-label="录播审核队列">
+              <div class="panel-header">
+                <div class="panel-title">
+                  <strong>审核队列</strong>
+                  <span id="source-recording-count">0 条录播</span>
+                </div>
+              </div>
+              <div class="queue-tools">
+                <label class="filter-field">
+                  <span>直播间</span>
+                  <select id="room-filter">
+                    <option value="">全部 UP</option>
+                  </select>
+                </label>
+                <label class="filter-field">
+                  <span>状态</span>
+                  <select id="status-filter">
+                    <option value="all">全部</option>
+                    <option value="review">待确认</option>
+                    <option value="keep">保留</option>
+                    <option value="drop">丢弃</option>
+                  </select>
+                </label>
+              </div>
+              <div class="panel-body queue-list" id="source-recording-list"></div>
+            </section>
+
+            <section class="preview-stage panel source-preview-panel">
+              <div class="panel-header">
+                <div class="panel-title">
+                  <strong>片段预览</strong>
+                  <span>点击密度图中的区间可快速定位</span>
+                </div>
+                <span class="panel-meta" id="source-file-size">-</span>
+              </div>
+              <div class="panel-body preview-body">
+                <div class="video-shell">
+                  <video id="source-preview-video" class="preview-video" controls preload="metadata"></video>
+                  <div class="video-context">
+                    <span class="video-badge">峰值片段</span>
+                    <span id="source-recording" class="video-filename">-</span>
+                  </div>
+                </div>
+
+                <section class="density-card" aria-label="弹幕密度与候选区间">
+                  <div class="density-header">
+                    <div>
+                      <strong>弹幕密度与候选区间</strong>
+                      <span>蓝色区间为保留片段，红色虚线为判断失败片段</span>
+                    </div>
+                    <span id="selected-segment-range">-</span>
+                  </div>
+                  <div class="density-chart-shell">
+                    <svg id="density-chart" class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图">
+                      <path class="density-area" d=""></path>
+                      <g id="density-segment-layer"></g>
+                    </svg>
+                  </div>
+                  <div class="metadata-grid">
+                    <div class="meta-chip"><span>处理状态</span><strong id="source-status">-</strong></div>
+                    <div class="meta-chip"><span>候选统计</span><strong id="source-summary">-</strong></div>
+                    <div class="meta-chip"><span>峰值倍率</span><strong id="burst-ratio">-</strong></div>
+                    <div class="meta-chip"><span>弹幕数</span><strong id="danmaku-count">-</strong></div>
+                    <div class="meta-chip"><span>质量分</span><strong id="quality-score">-</strong></div>
+                  </div>
+                </section>
+              </div>
+            </section>
+
+            <section id="segment-panel" class="review-panel panel segment-panel" aria-label="人工判断">
+              <div class="panel-header">
+                <div class="panel-title">
+                  <strong>人工判断</strong>
+                  <span>审核当前候选片段</span>
+                </div>
+                <span id="segment-status" class="panel-meta status-pill">-</span>
+              </div>
+              <div class="panel-body feedback-body">
+                <div class="review-summary">
+                  <span class="review-symbol">AI</span>
+                  <div>
+                    <strong>模型判断结果</strong>
+                    <span>结合峰值弹幕、转录内容与片段质量进行人工复核</span>
+                  </div>
+                </div>
+
+                <label class="field">
+                  <span>标题</span>
+                  <input id="segment-title" type="text" />
+                </label>
+                <label class="field">
+                  <span>描述</span>
+                  <textarea id="segment-description" rows="3"></textarea>
+                </label>
+                <label class="field">
+                  <span>判断原因</span>
+                  <textarea id="quality-reason" rows="5"></textarea>
+                </label>
+                <div class="range-field">
+                  <span>裁剪区间</span>
+                  <div class="range-row">
+                    <label class="field"><span>入点</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
+                    <label class="field"><span>出点</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
+                  </div>
+                </div>
+                <div class="review-note">
+                  修改区间后可直接保存并重新渲染，无需重新分析整段录播。
+                </div>
+                <div class="segment-actions decision-actions">
+                  <button id="segment-keep-button" class="btn-keep" type="button">保留片段</button>
+                  <button id="segment-drop-button" class="btn-drop" type="button">丢弃片段</button>
+                  <button id="save-button" type="button">保存区间</button>
+                  <button id="segment-retry-button" type="button">重新分析</button>
+                  <button id="segment-render-button" class="render-button" type="button">重新渲染片段</button>
+                </div>
+              </div>
+            </section>
+          </div>
 
           <section id="task-panel" class="task-panel" aria-live="polite">
             <div class="task-header">
-              <span class="task-title">任务队列</span>
+              <div>
+                <span class="task-title">运行任务详情</span>
+                <span id="task-count" class="task-count">0 items</span>
+              </div>
               <button id="task-toggle" class="task-toggle" type="button" aria-expanded="true">折叠</button>
-              <span id="task-count" class="task-count">0 items</span>
             </div>
             <div id="task-list" class="task-list">
               <div class="task-empty">正在加载任务状态</div>
             </div>
           </section>
-
-          <div id="error" class="error hidden"></div>
 
           <div class="legacy-slice-hidden hidden" aria-hidden="true">
             <span id="slice-count">0 items</span>
@@ -114,70 +255,9 @@
             <span id="context-window">-</span>
             <span id="burst-rank">-</span>
           </div>
-
-          <div class="workbench source-workbench">
-            <section class="panel source-list-panel" aria-label="source recordings">
-              <div class="panel-header">
-                <span class="panel-title">录播视频</span>
-                <span class="panel-meta" id="source-recording-count">0 items</span>
-              </div>
-              <div class="panel-body" id="source-recording-list"></div>
-            </section>
-
-            <section class="panel source-preview-panel">
-              <div class="panel-header">
-                <span class="panel-title">预览</span>
-                <span class="panel-meta" id="source-file-size">-</span>
-              </div>
-              <div class="panel-body">
-                <video id="source-preview-video" class="preview-video" controls preload="metadata"></video>
-                <div class="density-chart-shell">
-                  <svg id="density-chart" class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图">
-                    <path class="density-area" d=""></path>
-                    <g id="density-segment-layer"></g>
-                  </svg>
-                </div>
-                <div class="metadata-grid">
-                  <label>来源</label><span id="source-recording">-</span>
-                  <label>状态</label><span id="source-status">-</span>
-                  <label>判断</label><span id="source-summary">-</span>
-                  <label>片段</label><span id="selected-segment-range">-</span>
-                  <label>弹幕数</label><span id="danmaku-count">-</span>
-                  <label>峰值倍率</label><span id="burst-ratio">-</span>
-                  <label>质量分</label><span id="quality-score">-</span>
-                </div>
-              </div>
-            </section>
-
-            <section id="segment-panel" class="panel segment-panel" aria-label="manual segment handling">
-              <div class="panel-header">
-                <span class="panel-title">人工判断</span>
-                <span id="segment-status" class="panel-meta">-</span>
-              </div>
-              <div class="panel-body feedback-body">
-                <label class="field"><span>标题</span><input id="segment-title" type="text" /></label>
-                <label class="field"><span>描述</span><textarea id="segment-description" rows="3"></textarea></label>
-                <label class="field">
-                  <span>原因</span>
-                  <textarea id="quality-reason" rows="5"></textarea>
-                </label>
-                <div class="range-row">
-                  <label class="field"><span>入点</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
-                  <label class="field"><span>出点</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
-                </div>
-                <div class="segment-actions">
-                  <button id="segment-keep-button" class="btn-primary" type="button">keep</button>
-                  <button id="segment-drop-button" class="btn-danger" type="button">drop</button>
-                  <button id="save-button" type="button">保存区间</button>
-                  <button id="segment-retry-button" type="button">retry LLM</button>
-                  <button id="segment-render-button" type="button">render</button>
-                </div>
-              </div>
-            </section>
-          </div>
         </section>
       </main>
     </div>
-    <script src="/app.js?v=20260603-3"></script>
+    <script src="/app.js?v=20260614-1"></script>
   </body>
 </html>

@@ -63,6 +63,48 @@ def test_frontend_dashboard_dom_contract():
         assert function_name in texts["js"]
 
 
+def test_frontend_modern_review_workspace_contract():
+    texts = _frontend_texts()
+    text = texts["html"]
+
+    for class_name in [
+        "studio-topbar",
+        "overview-card",
+        "review-workspace",
+        "review-queue",
+        "preview-stage",
+        "density-card",
+        "review-panel",
+        "review-summary",
+    ]:
+        assert f'class="{class_name}' in text
+
+    assert 'id="density-chart"' in text
+    assert 'id="density-segment-layer"' in text
+    assert "弹幕密度与候选区间" in text
+    for element_id in [
+        "task-state-pill",
+        "task-state-label",
+        "overview-source-total",
+        "overview-task-total",
+        "overview-review-total",
+        "overview-keep-total",
+    ]:
+        assert f'id="{element_id}"' in text
+
+    for presentation_contract in [
+        "SOURCE_STATUS_PRESENTATION",
+        "sourceStatusPresentation",
+        "updateOverviewStats",
+        "source-status-badge",
+        "segment-status-",
+        "renderTaskState",
+        "segment_count || 0",
+        "sourceReviewPriority",
+    ]:
+        assert presentation_contract in texts["js"]
+
+
 def test_frontend_api_endpoint_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")
 
