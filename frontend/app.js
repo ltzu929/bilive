@@ -1158,13 +1158,28 @@ async function refreshWorkerStatus() {
   }
 }
 
+async function wakeWorkerOnPageLoad() {
+  if (!elements.workerBadge) return;
+  elements.workerBadge.className = "worker-badge worker-running";
+  elements.workerBadge.textContent = "Windows 重任务节点：启动中";
+  try {
+    const status = await request("/api/worker-trigger/wake", {
+      method: "POST",
+    });
+    renderRemoteWorkerStatus(status);
+  } catch {
+    elements.workerBadge.className = "worker-badge worker-idle";
+    elements.workerBadge.textContent = "Windows 重任务节点：离线";
+  }
+}
+
 refresh();
 refreshRooms();
 refreshSourceRecordings();
 refreshSliceProgress();
 refreshSliceDiagnostics();
 refreshTasks();
-refreshWorkerStatus();
+wakeWorkerOnPageLoad();
 
 setInterval(() => {
   if (document.visibilityState === "visible") {

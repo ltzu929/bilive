@@ -568,6 +568,26 @@ async def test_worker_trigger_status_api_reports_remote_mode(tmp_path, dashboard
 
 
 @pytest.mark.anyio
+async def test_worker_wake_api_calls_remote_waker(tmp_path, dashboard_client):
+    calls = []
+
+    async with dashboard_client(
+        tmp_path / "Videos",
+        remote_worker_waker=lambda: calls.append("wake")
+        or {
+            "status": "idle",
+            "mode": "remote",
+            "enabled": True,
+        },
+    ) as client:
+        response = await client.post("/api/worker-trigger/wake")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "idle"
+    assert calls == ["wake"]
+
+
+@pytest.mark.anyio
 async def test_slice_progress_api_reads_runtime_file(tmp_path, dashboard_client, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)

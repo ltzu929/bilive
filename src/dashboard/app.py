@@ -12,7 +12,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
-from src.dashboard.remote_worker import remote_worker_status, trigger_remote_worker
+from src.dashboard.remote_worker import (
+    remote_worker_status,
+    trigger_remote_worker,
+    wake_remote_worker,
+)
 from src.dashboard.slice_control import load_pending_queue_state, start_slice_scan
 from src.dashboard.task_state import (
     build_task_inventory,
@@ -177,6 +181,7 @@ def create_app(
     slice_starter=None,
     remote_worker_trigger=None,
     remote_worker_status_reader=None,
+    remote_worker_waker=None,
 ) -> FastAPI:
     app = FastAPI(title="bilive dashboard", version="0.1.0")
     store = DashboardFileStore(videos_root or default_videos_root())
@@ -296,6 +301,11 @@ def create_app(
         if remote_worker_status_reader is not None:
             return remote_worker_status_reader()
         return remote_worker_status()
+
+    def wake_worker() -> Dict[str, Any]:
+        if remote_worker_waker is not None:
+            return remote_worker_waker()
+        return wake_remote_worker()
 
     def queue_segment_action(action: str, segment_id: str) -> Dict[str, Any]:
         result = enqueue_action_job(
@@ -456,6 +466,10 @@ def create_app(
     @app.get("/api/worker-trigger/status")
     async def get_worker_trigger_status() -> Dict[str, Any]:
         return read_worker_trigger_status()
+
+    @app.post("/api/worker-trigger/wake")
+    async def wake_worker_api() -> Dict[str, Any]:
+        return wake_worker()
 
     @app.patch("/api/slices/{slice_id}/feedback")
     async def update_feedback(

@@ -143,6 +143,10 @@ def test_frontend_worker_trigger_contract():
     assert "PC worker" not in texts["html"]
     assert "PC Worker" not in texts["html"]
     assert "PC worker" not in text
+    assert 'request("/api/worker-trigger/wake", {' in text
+    assert "wakeWorkerOnPageLoad();" in text
+    assert text.count('request("/api/worker-trigger/wake", {') == 1
+    assert "Windows 重任务节点：启动中" in text
 
 
 def test_frontend_style_contract_for_slice_panels_and_rows():
