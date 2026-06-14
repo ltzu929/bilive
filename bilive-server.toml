@@ -2,6 +2,10 @@
 enabled = true
 timeout = 10
 
+[worker]
+idle_timeout_seconds = 900
+idle_check_interval_seconds = 30
+
 [video]
 title = "{artist}直播-{date}"
 description = "直播录制切片，来源见转载信息。"

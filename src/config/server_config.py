@@ -24,6 +24,7 @@ if config is None:
 
 video = config.get("video", {})
 upload = config.get("upload", {})
+worker = config.get("worker", {})
 slice_config = config.get("slice", {})
 burst = slice_config.get("burst", {})
 judge = slice_config.get("llm_judge", {})
@@ -42,6 +43,19 @@ UPLOAD_MAX_ATTEMPTS = int(upload.get("max_attempts", 3))
 UPLOAD_RETRY_BASE_SECONDS = float(upload.get("retry_base_seconds", 30))
 UPLOAD_AUTH_RETRY_SECONDS = float(upload.get("auth_retry_seconds", 120))
 UPLOAD_DELETE_AFTER_SUCCESS = bool(upload.get("delete_after_success", True))
+
+WORKER_IDLE_TIMEOUT_SECONDS = float(
+    os.environ.get(
+        "BILIVE_WORKER_IDLE_TIMEOUT",
+        worker.get("idle_timeout_seconds", 900),
+    )
+)
+WORKER_IDLE_CHECK_INTERVAL_SECONDS = float(
+    os.environ.get(
+        "BILIVE_WORKER_IDLE_CHECK_INTERVAL",
+        worker.get("idle_check_interval_seconds", 30),
+    )
+)
 
 MIN_VIDEO_SIZE = float(slice_config.get("min_video_size", 20))
 BURST_RATIO = float(burst.get("burst_ratio", 3.0))
