@@ -10,16 +10,18 @@ Pi 负责连续录制与局域网仪表盘，Windows 负责所有重型处理。
 | Pi | `bilive.service` | `0.0.0.0:2233` | blrec 录制 |
 | Pi | `bilive-dashboard.service` | `0.0.0.0:2234` | 切片页面、任务落盘、远程触发 |
 | Pi | `bilive-smb-recover.timer` | 每 15 秒 | SMB 和 Pi 服务恢复 |
-| Windows | `BiliveWorkerApi` | `127.0.0.1:2235` | worker 管理、预检、上传消费者 |
+| Windows | `BiliveWorkerApi` | 按需 `127.0.0.1:2235` | worker 管理、预检、上传消费者 |
 | Windows | 托管 `llama-server` | `127.0.0.1:2236` | 仅在整批切片需要 LLM 时临时运行 |
 
 Pi 不执行 ffmpeg、faster-whisper、LLM、字幕烧录或上传。切片页面写入
 `Videos/*.mp4.pending` 或 `Videos/.bilive-jobs/*.pending.json`，再通过 SSH
 触发 Windows Worker API。
 
-Windows Worker API 常驻但不加载模型。每次 `src.server.watcher --once` 是一个
-模型生命周期批次：第一次 LLM 判断时加载模型，同批任务复用，整批完成或异常
-退出时卸载。纯渲染批次不会加载模型，也不再需要启动 LM Studio。
+打开切片页面时，Pi 通过 SSH 按需启动 Windows Worker API；任务和上传全部空闲
+15 分钟后自动退出。计划任务直接使用 `pythonw.exe`，不会显示命令行窗口。
+每次 `src.server.watcher --once` 是一个模型生命周期批次：第一次 LLM 判断时
+加载模型，同批任务复用，整批完成或异常退出时卸载。纯渲染批次不会加载模型，
+也不再需要启动 LM Studio。
 
 ## Windows 安装
 
@@ -54,8 +56,9 @@ E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf
 成功时输出 `{"status":"ok"}`，随后 `2236` 端口关闭且
 `llama-server.exe` 进程退出。
 
-任务安装器会幂等注册并启动 `BiliveWorkerApi`，同时验证计划任务、`2235`
-端口和 API。默认安全模式等同于 `-NoUpload`。确认 cookie 有效后再启用上传：
+任务安装器会幂等注册无登录触发器的 `BiliveWorkerApi`，临时启动它并验证
+`2235` 和 API。验证后遵循 15 分钟空闲退出策略。默认安全模式等同于
+`-NoUpload`。确认 cookie 有效后再启用上传：
 
 ```powershell
 .\.venv-win\Scripts\python.exe -m src.upload.upload --check-auth
@@ -67,6 +70,7 @@ E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf
 - `BILIVE_LLM_MODEL_PATH`：覆盖 GGUF 模型路径。
 - `BILIVE_LLAMA_SERVER_PATH`：覆盖 `llama-server.exe` 路径。
 - `BILIVE_AUTO_UPLOAD=0`：禁用上传消费者。
+- `BILIVE_WORKER_IDLE_TIMEOUT=0`：诊断时禁用 Worker 自动退出。
 - `BILIVE_CONFIG`、`BILIVE_VIDEOS_DIR`、`BILIVE_LOG_DIR`。
 - `BILIVE_DB_PATH`、`BILIVE_COOKIE_FILE`。
 

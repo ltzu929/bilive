@@ -134,3 +134,8 @@ def test_managed_llm_runtime_is_documented_without_lm_studio_setup():
     assert "2236" in public_docs
     assert "整批" in public_docs
     assert "卸载" in public_docs
+    assert "按需启动" in public_docs
+    assert "15 分钟" in public_docs
+    assert "pythonw.exe" in public_docs
+    assert "常驻控制面" not in public_docs
+    assert "Windows Worker API 常驻" not in public_docs

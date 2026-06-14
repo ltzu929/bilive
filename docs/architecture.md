@@ -5,7 +5,7 @@
 Bilive 明确分为 Pi 轻服务和 Windows 重任务两侧：
 
 - Pi：录制、切片页面、任务文件落盘、通过 SSH 触发 Windows。
-- Windows Worker API：常驻控制面，不持有 ASR 或 LLM 模型。
+- Windows Worker API：由切片页面或任务按需启动，空闲 15 分钟后退出。
 - Windows watcher：一次性数据面，领取整批任务并在结束后退出。
 - 托管 llama.cpp：watcher 首次需要判断时启动，整批复用，最终卸载。
 - 上传消费者：由 Worker API 单实例管理，与切片 watcher 独立。
@@ -16,7 +16,7 @@ Bilive 明确分为 Pi 轻服务和 Windows 重任务两侧：
 |---|---|---|
 | `2233` | Pi blrec | 常驻 |
 | `2234` | Pi dashboard | 常驻 |
-| `2235` | Windows Worker API | 常驻，仅 localhost |
+| `2235` | Windows Worker API | 按需存在，仅 localhost |
 | `2236` | Windows `llama-server` | 按整批切片临时存在，仅 localhost |
 
 ## 数据流
@@ -24,7 +24,7 @@ Bilive 明确分为 Pi 轻服务和 Windows 重任务两侧：
 ```text
 Pi blrec -> SMB Videos/*.flv -> 转封装并保留 FLV
 切片页面 -> *.mp4.pending 或 .bilive-jobs/*.pending.json
-         -> SSH -> Windows localhost:2235
+         -> SSH -> schtasks /Run -> Windows localhost:2235
 Worker API -> 预检 -> 启动 watcher --once
 watcher -> 原子领取 -> 切片 -> ASR
         -> 首次 LLM 判断时启动 llama-server:2236
@@ -32,6 +32,7 @@ watcher -> 原子领取 -> 切片 -> ASR
         -> .upload.json -> SQLite upload_queue
         -> finally 停止 llama-server -> watcher 退出
 上传消费者 -> CDN 上传 -> Web 投稿
+任务全部空闲 15 分钟 -> Worker API 优雅退出 -> 2235 关闭
 ```
 
 Pi 的 retry/render API 只验证输入、原子写任务并触发 worker，不导入重型处理
@@ -85,6 +86,7 @@ E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf
   并恢复录制和仪表盘。
 - 重复触发：进程锁和任务去重保证单实例执行。
 - Worker 崩溃：失去所有者的 processing 任务下次恢复。
+- Worker 空闲：页面状态轮询不续命；待处理、切片、模型或上传存在时禁止退出。
 - 模型或运行时缺失：预检拒绝启动 watcher，pending 保留。
 - `2236` 被占用：不结束未知进程，批次 fail-closed。
 - 模型加载超时或异常退出：候选和失败原因保留，owned 进程被清理。
@@ -104,4 +106,6 @@ E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf
 - `BILIVE_DB_PATH`
 - `BILIVE_COOKIE_FILE`
 - `BILIVE_AUTO_UPLOAD`
+- `BILIVE_WORKER_IDLE_TIMEOUT`
+- `BILIVE_WORKER_IDLE_CHECK_INTERVAL`
 - `BILIVE_DASHBOARD_ALLOWED_HOSTS`

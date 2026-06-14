@@ -65,11 +65,32 @@ Get-NetTCPConnection -LocalPort 2236 -State Listen -ErrorAction SilentlyContinue
 ## Worker API
 
 任务安装器会替换旧计划任务，并在确认旧 `2235` 监听者属于本项目后停止它。
-安装后验证：
+计划任务没有登录触发器，直接通过 `pythonw.exe` 隐藏运行。打开 Pi 切片页面或
+提交切片任务时，Pi 会执行：
+
+```powershell
+schtasks.exe /Run /TN BiliveWorkerApi
+```
+
+安装器会临时启动 Worker 完成验证：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:2235/api/worker/status |
     ConvertTo-Json -Depth 8
+```
+
+没有待处理、切片、模型或上传工作时，Worker 连续空闲 15 分钟后优雅退出，
+`2235` 关闭属于正常状态。页面的状态轮询不会重新启动 Worker，也不会延长
+空闲时间。人工诊断可使用可见控制台入口：
+
+```powershell
+.\start_pipeline.ps1
+```
+
+需要暂时禁止自动退出时，在启动进程的环境中设置：
+
+```powershell
+$env:BILIVE_WORKER_IDLE_TIMEOUT = "0"
 ```
 
 关键字段：
@@ -90,7 +111,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 ```
 
 它报告计划任务、`2235`、Worker API、托管模型文件、ASR 缓存、SQLite 和上传
-锁，不创建数据库、不启动切片任务、不修改上传队列。
+锁，不创建数据库、不启动切片任务、不修改上传队列。Worker 空闲退出后，
+`worker_api.status = unavailable` 是预期结果；健康检查不会唤醒它。
 
 确认 `.secrets/bilibili.cookie` 可用后启用上传消费者：
 
@@ -101,6 +123,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 
 不得通过创建 pending 标记或真实投稿来验证服务启动。已有 ready 录像不会因为
 服务恢复而自动排队。
+
+按需启动异常时可直接执行：
+
+```powershell
+schtasks.exe /Run /TN BiliveWorkerApi
+Get-ScheduledTask -TaskName BiliveWorkerApi
+Get-Content .\logs\runtime\worker-api.log -Tail 200
+```
 
 ## 模型排障
 
