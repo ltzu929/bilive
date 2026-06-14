@@ -5,7 +5,15 @@ from src.dashboard.remote_worker import (
     load_remote_worker_config,
     remote_worker_status,
     trigger_remote_worker,
+    wake_remote_worker,
 )
+
+
+class Result:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def test_load_remote_worker_config_reads_toml_command(tmp_path):
@@ -182,3 +190,140 @@ def test_load_remote_worker_config_builds_commands_from_environment(tmp_path, mo
         "http://127.0.0.1:2235/api/worker/run-once",
     ]
     assert config.status_command[-1] == "http://127.0.0.1:2235/api/worker/status"
+    assert config.wake_command == [
+        "ssh",
+        "worker-host",
+        "schtasks.exe",
+        "/Run",
+        "/TN",
+        "BiliveWorkerApi",
+    ]
+
+
+def test_load_remote_worker_config_reads_wake_settings(tmp_path, monkeypatch):
+    config_path = tmp_path / "bilive-server.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[dashboard.remote_worker]",
+                "enabled = true",
+                "timeout = 8",
+                "startup_timeout = 30",
+                'task_name = "CustomWorkerTask"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_WINDOWS_SSH_TARGET", "worker-host")
+
+    config = load_remote_worker_config(config_path)
+
+    assert config.startup_timeout == 30
+    assert config.wake_command[-4:] == [
+        "schtasks.exe",
+        "/Run",
+        "/TN",
+        "CustomWorkerTask",
+    ]
+
+
+def test_wake_remote_worker_starts_task_and_waits_until_ready():
+    calls = []
+    replies = iter(
+        [
+            Result(1, stderr="connection failed"),
+            Result(0, stdout="SUCCESS"),
+            Result(1, stderr="not ready"),
+            Result(0, stdout='{"status":"idle","pending_tasks":0}'),
+        ]
+    )
+    now = [0.0]
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return next(replies)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    config = RemoteWorkerConfig(
+        enabled=True,
+        command=["ssh", "win", "curl.exe", "run"],
+        status_command=["ssh", "win", "curl.exe", "status"],
+        wake_command=[
+            "ssh",
+            "win",
+            "schtasks.exe",
+            "/Run",
+            "/TN",
+            "BiliveWorkerApi",
+        ],
+        timeout=8,
+        startup_timeout=30,
+        poll_interval=1,
+    )
+
+    result = wake_remote_worker(
+        config,
+        runner=run,
+        monotonic=lambda: now[0],
+        sleeper=sleep,
+    )
+
+    assert result["status"] == "idle"
+    assert calls[1][-4:] == [
+        "schtasks.exe",
+        "/Run",
+        "/TN",
+        "BiliveWorkerApi",
+    ]
+    assert calls.count(config.wake_command) == 1
+
+
+def test_wake_remote_worker_does_not_start_task_when_api_is_ready():
+    calls = []
+    config = RemoteWorkerConfig(
+        enabled=True,
+        status_command=["ssh", "win", "curl.exe", "status"],
+        wake_command=["ssh", "win", "schtasks.exe", "/Run"],
+        timeout=8,
+    )
+
+    result = wake_remote_worker(
+        config,
+        runner=lambda command, **_kwargs: calls.append(command)
+        or Result(0, stdout='{"status":"idle","pending_tasks":0}'),
+    )
+
+    assert result["status"] == "idle"
+    assert calls == [config.status_command]
+
+
+def test_wake_remote_worker_reports_startup_timeout():
+    now = [0.0]
+    config = RemoteWorkerConfig(
+        enabled=True,
+        status_command=["ssh", "win", "curl.exe", "status"],
+        wake_command=["ssh", "win", "schtasks.exe", "/Run"],
+        timeout=8,
+        startup_timeout=2,
+        poll_interval=1,
+    )
+
+    def run(command, **_kwargs):
+        if command == config.wake_command:
+            return Result(0, stdout="SUCCESS")
+        return Result(1, stderr="not ready")
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = wake_remote_worker(
+        config,
+        runner=run,
+        monotonic=lambda: now[0],
+        sleeper=sleep,
+    )
+
+    assert result["status"] == "unavailable"
+    assert "2" in result["message"]

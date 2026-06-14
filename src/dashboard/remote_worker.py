@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -19,7 +20,10 @@ class RemoteWorkerConfig:
     enabled: bool = False
     command: list[str] = field(default_factory=list)
     status_command: list[str] = field(default_factory=list)
+    wake_command: list[str] = field(default_factory=list)
     timeout: float = DEFAULT_TIMEOUT
+    startup_timeout: float = 30.0
+    poll_interval: float = 1.0
 
 
 def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWorkerConfig:
@@ -40,9 +44,28 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
             section.get("status_command", []),
         )
     )
+    wake_command = _command_from_value(
+        os.environ.get(
+            "BILIVE_REMOTE_WORKER_WAKE_COMMAND",
+            section.get("wake_command", []),
+        )
+    )
     timeout = _as_timeout(
         os.environ.get("BILIVE_REMOTE_WORKER_TIMEOUT", section.get("timeout", DEFAULT_TIMEOUT))
     )
+    startup_timeout = _as_timeout(
+        os.environ.get(
+            "BILIVE_REMOTE_WORKER_STARTUP_TIMEOUT",
+            section.get("startup_timeout", 30),
+        )
+    )
+    poll_interval = _as_timeout(section.get("poll_interval", 1))
+    task_name = str(
+        os.environ.get(
+            "BILIVE_WINDOWS_WORKER_TASK",
+            section.get("task_name", "BiliveWorkerApi"),
+        )
+    ).strip()
     target = str(
         os.environ.get(
             "BILIVE_WINDOWS_SSH_TARGET",
@@ -67,13 +90,96 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
             "-sS",
             "http://127.0.0.1:2235/api/worker/status",
         ]
+    if target and task_name and not wake_command:
+        wake_command = [
+            "ssh",
+            target,
+            "schtasks.exe",
+            "/Run",
+            "/TN",
+            task_name,
+        ]
 
     return RemoteWorkerConfig(
         enabled=enabled,
         command=command,
         status_command=status_command,
+        wake_command=wake_command,
         timeout=timeout,
+        startup_timeout=startup_timeout,
+        poll_interval=poll_interval,
     )
+
+
+def wake_remote_worker(
+    config: RemoteWorkerConfig | None = None,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    cfg = config or load_remote_worker_config()
+    if not cfg.enabled:
+        return {
+            "mode": "disabled",
+            "enabled": False,
+            "status": "unavailable",
+            "message": "Remote Windows Worker API is disabled",
+        }
+    if not cfg.status_command:
+        return {
+            "mode": "remote",
+            "enabled": True,
+            "status": "unavailable",
+            "message": "Remote worker status command is empty",
+        }
+
+    current = _read_remote_status(cfg, runner)
+    if current.get("status") != "unavailable":
+        return current
+    if not cfg.wake_command:
+        return {
+            **current,
+            "message": "Remote worker wake command is empty",
+        }
+
+    try:
+        started = runner(
+            cfg.wake_command,
+            capture_output=True,
+            text=True,
+            timeout=cfg.timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "mode": "remote",
+            "enabled": True,
+            "status": "unavailable",
+            "message": str(exc),
+        }
+    if started.returncode != 0:
+        return {
+            "mode": "remote",
+            "enabled": True,
+            "status": "unavailable",
+            "message": (started.stderr or started.stdout or "").strip(),
+        }
+
+    deadline = monotonic() + cfg.startup_timeout
+    while monotonic() < deadline:
+        sleeper(cfg.poll_interval)
+        current = _read_remote_status(cfg, runner)
+        if current.get("status") != "unavailable":
+            return current
+    return {
+        "mode": "remote",
+        "enabled": True,
+        "status": "unavailable",
+        "message": (
+            f"Windows Worker API did not start within "
+            f"{cfg.startup_timeout:g}s"
+        ),
+    }
 
 
 def trigger_remote_worker(
@@ -89,6 +195,13 @@ def trigger_remote_worker(
         return {"status": "disabled", "message": "remote worker trigger is disabled"}
     if not cfg.command:
         return {"status": "disabled", "message": "remote worker command is empty"}
+    if cfg.wake_command and cfg.status_command:
+        wake = wake_remote_worker(config=cfg, runner=runner)
+        if wake.get("status") == "unavailable":
+            return {
+                "status": "failed",
+                "message": wake.get("message") or "Windows Worker API is unavailable",
+            }
 
     try:
         completed = runner(
@@ -145,45 +258,52 @@ def remote_worker_status(
 ) -> dict[str, Any]:
     cfg = config or load_remote_worker_config()
     if cfg.enabled and cfg.status_command:
-        try:
-            completed = runner(
-                cfg.status_command,
-                capture_output=True,
-                text=True,
-                timeout=cfg.timeout,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {
-                "mode": "remote",
-                "enabled": True,
-                "status": "unavailable",
-                "message": str(exc),
-            }
-        if completed.returncode != 0:
-            return {
-                "mode": "remote",
-                "enabled": True,
-                "status": "unavailable",
-                "message": (completed.stderr or "").strip(),
-            }
-        try:
-            payload = json.loads((completed.stdout or "").strip())
-        except json.JSONDecodeError:
-            payload = {
-                "status": "unavailable",
-                "message": "Windows worker API returned invalid JSON",
-            }
-        return {
-            **payload,
-            "mode": "remote",
-            "enabled": True,
-            "message": payload.get("message") or "Windows Worker API",
-        }
+        return _read_remote_status(cfg, runner)
     return {
         "mode": "disabled",
         "enabled": False,
         "status": "unavailable",
         "message": "Remote Windows Worker API is disabled",
+    }
+
+
+def _read_remote_status(
+    config: RemoteWorkerConfig,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> dict[str, Any]:
+    try:
+        completed = runner(
+            config.status_command,
+            capture_output=True,
+            text=True,
+            timeout=config.timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "mode": "remote",
+            "enabled": True,
+            "status": "unavailable",
+            "message": str(exc),
+        }
+    if completed.returncode != 0:
+        return {
+            "mode": "remote",
+            "enabled": True,
+            "status": "unavailable",
+            "message": (completed.stderr or completed.stdout or "").strip(),
+        }
+    try:
+        payload = json.loads((completed.stdout or "").strip())
+    except json.JSONDecodeError:
+        payload = {
+            "status": "unavailable",
+            "message": "Windows worker API returned invalid JSON",
+        }
+    return {
+        **payload,
+        "mode": "remote",
+        "enabled": True,
+        "message": payload.get("message") or "Windows Worker API",
     }
 
 

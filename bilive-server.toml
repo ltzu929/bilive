@@ -1,6 +1,8 @@
 [dashboard.remote_worker]
 enabled = true
 timeout = 10
+startup_timeout = 30
+task_name = "BiliveWorkerApi"
 
 [worker]
 idle_timeout_seconds = 900
