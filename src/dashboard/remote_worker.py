@@ -148,6 +148,8 @@ def wake_remote_worker(
             cfg.wake_command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=cfg.timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -208,6 +210,8 @@ def trigger_remote_worker(
             cfg.command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=cfg.timeout,
         )
     except subprocess.TimeoutExpired as exc:
@@ -276,6 +280,8 @@ def _read_remote_status(
             config.status_command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=config.timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

@@ -82,7 +82,13 @@ def test_trigger_remote_worker_runs_configured_command():
     assert calls == [
         (
             ["ssh", "win", "curl.exe"],
-            {"capture_output": True, "text": True, "timeout": 8},
+            {
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "timeout": 8,
+            },
         )
     ]
 
@@ -327,3 +333,25 @@ def test_wake_remote_worker_reports_startup_timeout():
 
     assert result["status"] == "unavailable"
     assert "2" in result["message"]
+
+
+def test_wake_remote_worker_decodes_windows_command_output_safely():
+    calls = []
+    config = RemoteWorkerConfig(
+        enabled=True,
+        status_command=["ssh", "win", "curl.exe", "status"],
+        wake_command=["ssh", "win", "schtasks.exe", "/Run"],
+        timeout=8,
+    )
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command == config.status_command:
+            return Result(0, stdout='{"status":"idle","pending_tasks":0}')
+        return Result(0, stdout="成功")
+
+    result = wake_remote_worker(config, runner=run)
+
+    assert result["status"] == "idle"
+    assert calls[0][1]["encoding"] == "utf-8"
+    assert calls[0][1]["errors"] == "replace"
