@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Callable, Dict
 
 from fastapi import FastAPI, HTTPException
 
+from src.db.conn import get_upload_queue_counts
 from src.server.preflight import run_worker_preflight
 from src.server.action_jobs import count_pending_action_jobs
 from src.server.upload_control import (
@@ -15,6 +17,7 @@ from src.server.upload_control import (
     upload_worker_status,
 )
 from src.server.worker_control import start_worker_once, worker_status
+from src.server.worker_idle import IdleWatchdog
 from src.server.worker_lock import default_worker_lock_path, read_worker_lock
 
 
@@ -28,6 +31,11 @@ def create_app(
     preflight_reader: Callable[[], Dict[str, Any]] | None = None,
     lock_status_reader: Callable[[], Dict[str, Any]] | None = None,
     llm_status_reader: Callable[[], Dict[str, Any]] | None = None,
+    upload_queue_counter: Callable[[], Dict[str, int]] | None = None,
+    shutdown_requester: Callable[[], None] | None = None,
+    idle_watchdog_factory=None,
+    idle_timeout_seconds: float | None = None,
+    idle_check_interval_seconds: float | None = None,
     auto_upload: bool | None = None,
 ) -> FastAPI:
     start_worker = worker_starter or start_worker_once
@@ -45,6 +53,9 @@ def create_app(
     db_path = Path(
         os.environ.get("BILIVE_DB_PATH", project_root / "src" / "db" / "data.db")
     ).resolve()
+    count_upload_queue = upload_queue_counter or (
+        lambda: get_upload_queue_counts(db_path)
+    )
     count_pending = pending_counter or (
         lambda: (
             len(list(videos_root.rglob("*.mp4.pending")))
@@ -69,10 +80,36 @@ def create_app(
         read_llm_status = managed_llm_status
     else:
         read_llm_status = llm_status_reader
+    watchdog_factory = idle_watchdog_factory or IdleWatchdog
+
+    def read_activity_state() -> Dict[str, Any]:
+        watcher = read_worker_status()
+        upload = dict(read_upload_status())
+        upload["queue_counts"] = count_upload_queue()
+        return {
+            "status": watcher.get("status", "idle"),
+            "watcher": watcher,
+            "lock": read_lock_status(),
+            "llm": read_llm_status(),
+            "pending_tasks": int(count_pending()),
+            "upload": upload,
+        }
+
+    def read_runtime_state() -> Dict[str, Any]:
+        return {
+            **read_activity_state(),
+            "dependencies": read_preflight(),
+        }
+
+    def touch_activity(app: FastAPI) -> None:
+        watchdog = getattr(app.state, "worker_idle_watchdog", None)
+        if watchdog is not None:
+            watchdog.touch()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         owns_upload_process = False
+        watchdog_task = None
         if should_auto_upload:
             try:
                 result = start_upload()
@@ -80,9 +117,37 @@ def create_app(
                 owns_upload_process = result.get("status") == "started"
             except (OSError, RuntimeError) as exc:
                 app.state.upload_start_error = str(exc)
+        if shutdown_requester is not None:
+            if idle_timeout_seconds is None or idle_check_interval_seconds is None:
+                from src.config.server_config import (
+                    WORKER_IDLE_CHECK_INTERVAL_SECONDS,
+                    WORKER_IDLE_TIMEOUT_SECONDS,
+                )
+
+            watchdog = watchdog_factory(
+                state_reader=read_activity_state,
+                shutdown_requester=shutdown_requester,
+                timeout_seconds=(
+                    WORKER_IDLE_TIMEOUT_SECONDS
+                    if idle_timeout_seconds is None
+                    else idle_timeout_seconds
+                ),
+                check_interval_seconds=(
+                    WORKER_IDLE_CHECK_INTERVAL_SECONDS
+                    if idle_check_interval_seconds is None
+                    else idle_check_interval_seconds
+                ),
+            )
+            app.state.worker_idle_watchdog = watchdog
+            watchdog_task = asyncio.create_task(watchdog.run())
+            app.state.worker_idle_task = watchdog_task
         try:
             yield
         finally:
+            if watchdog_task is not None and not watchdog_task.done():
+                watchdog_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watchdog_task
             if owns_upload_process:
                 try:
                     stop_upload()
@@ -96,6 +161,7 @@ def create_app(
     )
     @app.post("/api/worker/run-once")
     async def run_worker_once() -> Dict[str, Any]:
+        touch_activity(app)
         pending_tasks = int(count_pending())
         if pending_tasks <= 0:
             return {"status": "no_pending", "pending_tasks": 0}
@@ -116,19 +182,11 @@ def create_app(
 
     @app.get("/api/worker/status")
     async def get_worker_status() -> Dict[str, Any]:
-        watcher = read_worker_status()
-        return {
-            "status": watcher.get("status", "idle"),
-            "watcher": watcher,
-            "lock": read_lock_status(),
-            "dependencies": read_preflight(),
-            "llm": read_llm_status(),
-            "pending_tasks": int(count_pending()),
-            "upload": read_upload_status(),
-        }
+        return read_runtime_state()
 
     @app.post("/api/upload/start")
     async def start_upload_consumer() -> Dict[str, Any]:
+        touch_activity(app)
         try:
             return start_upload()
         except (OSError, RuntimeError) as exc:

@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 
@@ -101,6 +103,15 @@ async def test_worker_api_reports_status():
         app=create_app(
             worker_status_reader=lambda: {"status": "idle", "last_returncode": 0},
             upload_status_reader=lambda: {"status": "idle"},
+            upload_queue_counter=lambda: {
+                "queued": 0,
+                "uploading": 0,
+                "uploaded": 0,
+                "publishing": 0,
+                "published": 0,
+                "failed": 0,
+                "total": 0,
+            },
             pending_counter=lambda: 3,
             preflight_reader=lambda: {"ready": True, "checks": {}},
             llm_status_reader=lambda: {
@@ -132,7 +143,18 @@ async def test_worker_api_reports_status():
             "provider": "managed-llama-server",
         },
         "pending_tasks": 3,
-        "upload": {"status": "idle"},
+        "upload": {
+            "status": "idle",
+            "queue_counts": {
+                "queued": 0,
+                "uploading": 0,
+                "uploaded": 0,
+                "publishing": 0,
+                "published": 0,
+                "failed": 0,
+                "total": 0,
+            },
+        },
     }
 
 
@@ -247,3 +269,100 @@ async def test_worker_api_counts_action_jobs_as_pending(tmp_path, monkeypatch):
         "status": "accepted",
         "pid": 1234,
     }
+
+
+@pytest.mark.anyio
+async def test_worker_api_runs_and_cancels_idle_watchdog():
+    events = []
+
+    class FakeWatchdog:
+        def touch(self):
+            events.append("touch")
+
+        async def run(self):
+            events.append("run")
+            await asyncio.Event().wait()
+
+    app = create_app(
+        idle_watchdog_factory=lambda **_kwargs: FakeWatchdog(),
+        shutdown_requester=lambda: events.append("shutdown"),
+        auto_upload=False,
+    )
+
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0)
+        assert "run" in events
+
+    assert app.state.worker_idle_task.cancelled()
+
+
+@pytest.mark.anyio
+async def test_run_once_and_upload_start_touch_activity():
+    touches = []
+
+    class FakeWatchdog:
+        def touch(self):
+            touches.append("touch")
+
+        async def run(self):
+            await asyncio.Event().wait()
+
+    app = create_app(
+        worker_starter=lambda: {"status": "started", "pid": 1},
+        pending_counter=lambda: 1,
+        preflight_reader=lambda: {"ready": True, "checks": {}},
+        upload_starter=lambda: {"status": "started", "pid": 2},
+        idle_watchdog_factory=lambda **_kwargs: FakeWatchdog(),
+        shutdown_requester=lambda: None,
+        auto_upload=False,
+    )
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            await client.post("/api/worker/run-once")
+            await client.post("/api/upload/start")
+
+    assert touches == ["touch", "touch"]
+
+
+@pytest.mark.anyio
+async def test_status_reads_do_not_touch_idle_activity():
+    touches = []
+
+    class FakeWatchdog:
+        def touch(self):
+            touches.append("touch")
+
+        async def run(self):
+            await asyncio.Event().wait()
+
+    app = create_app(
+        worker_status_reader=lambda: {"status": "idle"},
+        upload_status_reader=lambda: {"status": "idle"},
+        upload_queue_counter=lambda: {"queued": 0, "total": 0},
+        pending_counter=lambda: 0,
+        preflight_reader=lambda: {"ready": True, "checks": {}},
+        lock_status_reader=lambda: {"owner_running": False},
+        llm_status_reader=lambda: {"status": "idle"},
+        idle_watchdog_factory=lambda **_kwargs: FakeWatchdog(),
+        shutdown_requester=lambda: None,
+        auto_upload=False,
+    )
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/api/worker/status")
+
+    assert response.json()["upload"]["queue_counts"] == {
+        "queued": 0,
+        "total": 0,
+    }
+    assert touches == []
