@@ -123,7 +123,8 @@ def test_frontend_api_endpoint_contract():
 
 
 def test_frontend_worker_trigger_contract():
-    text = FRONTEND_JS.read_text(encoding="utf-8")
+    texts = _frontend_texts()
+    text = texts["js"]
 
     assert "PC_WORKER_RUN_ONCE_URL" not in text
     assert "PC_WORKER_STATUS_URL" not in text
@@ -137,6 +138,11 @@ def test_frontend_worker_trigger_contract():
     assert "pollActionJob" in text
     assert "status_url" in text
     assert "动作执行失败" in text
+    assert "Windows 重任务节点" in texts["html"]
+    assert "Windows 重任务节点" in text
+    assert "PC worker" not in texts["html"]
+    assert "PC Worker" not in texts["html"]
+    assert "PC worker" not in text
 
 
 def test_frontend_style_contract_for_slice_panels_and_rows():

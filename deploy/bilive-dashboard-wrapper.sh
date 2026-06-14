@@ -69,7 +69,9 @@ while true; do
 
     if [ -f "$PROJECT_DIR/.secrets/env" ]; then
         # shellcheck disable=SC1091
+        set -a
         source "$PROJECT_DIR/.secrets/env"
+        set +a
     fi
 
     if ! "$PYTHON_BIN" -c \

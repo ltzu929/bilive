@@ -197,7 +197,7 @@ def test_pending_marker_overrides_old_failed_history(tmp_path):
     tasks = task_state.build_task_inventory(videos_root=videos)
 
     assert tasks[0]["status"] == "pending"
-    assert tasks[0]["message"] == "已排队，等待 PC worker"
+    assert tasks[0]["message"] == "已排队，等待 Windows 重任务节点"
 
 
 def test_requeue_task_updates_history_to_pending(tmp_path):

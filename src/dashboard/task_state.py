@@ -27,9 +27,9 @@ _SOURCE_RE = re.compile(r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}\.mp4$")
 _STATUS_MESSAGES: Dict[str, str] = {
     "recording": "录制中",
     "ready": "待处理",
-    "pending": "已排队，等待 PC worker",
-    "processing": "PC worker 处理中",
-    "running": "PC worker 处理中",
+    "pending": "已排队，等待 Windows 重任务节点",
+    "processing": "Windows 重任务节点处理中",
+    "running": "Windows 重任务节点处理中",
     "done": "已处理",
     "failed": "处理失败",
     "skipped": "已跳过（缺弹幕文件或过小）",

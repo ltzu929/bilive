@@ -1135,11 +1135,11 @@ function renderRemoteWorkerStatus(data) {
   badge.className = `worker-badge ${running ? "worker-running" : "worker-idle"}`;
   if (running) {
     const pid = data.watcher?.pid || data.lock?.pid || "";
-    badge.textContent = `PC worker: 处理中${pid ? ` PID ${pid}` : ""}`;
+    badge.textContent = `Windows 重任务节点：处理中${pid ? ` PID ${pid}` : ""}`;
   } else if (data.status === "unavailable") {
-    badge.textContent = "PC worker: 未连接";
+    badge.textContent = "Windows 重任务节点：离线";
   } else {
-    badge.textContent = `PC worker: 空闲，待处理 ${Number(data.pending_tasks || 0)}`;
+    badge.textContent = `Windows 重任务节点：空闲，待处理 ${Number(data.pending_tasks || 0)}`;
   }
   badge.title = data.message || "Windows Worker API";
   return true;
@@ -1154,7 +1154,7 @@ async function refreshWorkerStatus() {
   }
   if (elements.workerBadge) {
     elements.workerBadge.className = "worker-badge worker-idle";
-    elements.workerBadge.textContent = "PC worker: 未连接";
+    elements.workerBadge.textContent = "Windows 重任务节点：离线";
   }
 }
 

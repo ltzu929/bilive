@@ -30,6 +30,9 @@ def test_dashboard_wrapper_waits_for_smb_and_uses_local_python():
 
     assert 'PROJECT_DIR="${BILIVE_PROJECT_DIR:-/mnt/win/bilive}"' in text
     assert "storage_ready" in text
+    assert "set -a" in text
+    assert 'source "$PROJECT_DIR/.secrets/env"' in text
+    assert "set +a" in text
     assert 'PYTHON_BIN="${BILIVE_PYTHON_BIN:-/home/ubuntu/miniforge/envs/bilive/bin/python}"' in text
     assert "-m uvicorn src.dashboard.app:api" in text
     assert "--host 0.0.0.0" in text
