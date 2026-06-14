@@ -15,41 +15,37 @@ def test_pipeline_launcher_starts_pc_worker_api():
     text = PIPELINE_SCRIPT.read_text(encoding="utf-8")
 
     assert "[switch]$NoWorkerApi" not in text
-    assert "BILIVE_CONFIG" in text
-    assert "BILIVE_VIDEOS_DIR" in text
-    assert "src.server.worker_api:api" in text
-    assert '"--host", "127.0.0.1", "--port", "2235"' in text
+    assert "src.server.worker_server" in text
+    assert "src.server.worker_api:api" not in text
     assert ".venv-win" in text
     assert "src.burn.scan_slice" not in text
     assert "RunLegacyScanSlice" not in text
     assert "[switch]$NoSlice" not in text
     assert '"-m", "src.upload.upload"' not in text
-    assert 'BILIVE_DB_PATH' in text
-    assert 'BILIVE_COOKIE_FILE' in text
-    assert 'BILIVE_AUTO_UPLOAD' in text
-    assert 'NO_PROXY' in text
     assert 'if ($NoUpload)' in text
     assert "LM Studio" not in text
     assert "BILIVE_LM_STUDIO_PATH" not in text
     assert '$ProjectDir;$ProjectDir\\src' not in text
-    assert '& $python "-m" "uvicorn"' in text
+    assert '"--console"' in text
 
 
-def test_install_windows_worker_task_registers_logon_supervisor():
+def test_install_windows_worker_task_registers_on_demand_hidden_supervisor():
     text = INSTALL_WORKER_TASK_SCRIPT.read_text(encoding="utf-8")
 
     assert "BiliveWorkerApi" in text
-    assert "start_pipeline.ps1" in text
+    assert "start_pipeline.ps1" not in text
     assert "Register-ScheduledTask" in text
     assert "New-ScheduledTaskAction" in text
     assert "New-ScheduledTaskSettingsSet" in text
-    assert "New-ScheduledTaskTrigger -AtLogOn" in text
+    assert "New-ScheduledTaskTrigger -AtLogOn" not in text
     assert "LogonType Interactive" in text
     assert "RunLevel Limited" in text
-    assert "-WindowStyle Hidden" in text
+    assert "pythonw.exe" in text
+    assert "-WorkingDirectory" in text
+    assert "src.server.worker_server" in text
     assert "[switch]$NoUpload" in text
     assert "[switch]$EnableUpload" in text
-    assert '" -NoUpload"' in text
+    assert '" --no-upload"' in text
     assert "Invoke-RestMethod" in text
     assert "Get-NetTCPConnection" in text
     assert "Get-ScheduledTaskInfo" in text

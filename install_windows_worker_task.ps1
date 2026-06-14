@@ -1,4 +1,4 @@
-# Register the always-on Worker API at user logon and remove the legacy one-shot task.
+# Register the hidden on-demand Worker API and remove the legacy one-shot task.
 
 param(
     [string]$TaskName = "BiliveWorkerApi",
@@ -10,18 +10,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = (Resolve-Path -LiteralPath $ProjectDir).Path
-$runScript = Join-Path $ProjectDir "start_pipeline.ps1"
+$pythonw = Join-Path $ProjectDir ".venv-win\Scripts\pythonw.exe"
 
-if (-not (Test-Path -LiteralPath $runScript)) {
-    throw "Cannot find Worker API launcher: $runScript"
+if (-not (Test-Path -LiteralPath $pythonw)) {
+    throw "Cannot find hidden Python launcher: $pythonw"
 }
 if ($NoUpload -and $EnableUpload) {
     throw "Use either -NoUpload or -EnableUpload, not both."
 }
 
-$pipelineArguments = ""
+$workerArguments = "-m src.server.worker_server"
 if (-not $EnableUpload) {
-    $pipelineArguments += " -NoUpload"
+    $workerArguments += " --no-upload"
 }
 
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -39,11 +39,17 @@ if ($existingListener) {
     $ownerPid = [int]$existingListener[0].OwningProcess
     $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid"
     $expectedPython = Join-Path $ProjectDir ".venv-win\Scripts\python.exe"
+    $expectedPythonw = Join-Path $ProjectDir ".venv-win\Scripts\pythonw.exe"
     $ownedByProject = (
         $owner.CommandLine -and
-        $owner.CommandLine.Contains($expectedPython) -and
-        $owner.CommandLine.Contains("src.server.worker_api:api") -and
-        $owner.CommandLine.Contains("--port 2235")
+        (
+            $owner.CommandLine.Contains($expectedPython) -or
+            $owner.CommandLine.Contains($expectedPythonw)
+        ) -and
+        (
+            $owner.CommandLine.Contains("src.server.worker_server") -or
+            $owner.CommandLine.Contains("src.server.worker_api:api")
+        )
     )
     if (-not $ownedByProject) {
         throw "Port 2235 is occupied by a process not owned by this project"
@@ -65,9 +71,9 @@ if ($existingListener) {
 $listenerBeforeStart = $ownerPid
 
 $action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runScript`"$pipelineArguments"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    -Execute $pythonw `
+    -Argument $workerArguments `
+    -WorkingDirectory $ProjectDir
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
@@ -81,10 +87,9 @@ $principal = New-ScheduledTaskPrincipal `
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
-    -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Always-on bilive Windows Worker API and upload consumer." `
+    -Description "On-demand hidden bilive Windows Worker API and upload consumer." `
     -Force | Out-Null
 
 if (Get-ScheduledTask -TaskName "BiliveSliceOnce" -ErrorAction SilentlyContinue) {
