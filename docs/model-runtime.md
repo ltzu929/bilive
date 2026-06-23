@@ -1,152 +1,105 @@
-# 托管模型运行时
+# MiMo 模型运行时
 
 ## 目标
 
-项目直接管理 llama.cpp，不依赖桌面模型程序。默认加载：
+生产切片使用 `mimo-v2.5` 做候选视频全模态判断。弹幕密度仍是唯一候选范围生成器；MiMo 只判断候选价值并返回一个连续粗剪区间。
 
 ```text
-E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf
+弹幕密度 -> 候选范围 -> MiMo 全模态判断
+  -> drop：删除候选
+  -> keep：单段粗剪 -> faster-whisper 字幕 -> 烧录 -> 上传队列
+  -> 失败：保留人工复核
 ```
 
-模型仅在整批切片第一次需要 LLM 判断时加载，同批复用，批次结束后卸载。
-
-## 安装
-
-```powershell
-.\install_llama_runtime.ps1
-```
-
-安装器从 llama.cpp 官方 GitHub release 下载固定版本 `b9616` 的 Windows
-CUDA 12.4 二进制和匹配的 CUDA runtime DLL，校验
-`llama-server.exe --version` 后安装到：
-
-```text
-.runtime\llama.cpp\b9616\
-```
-
-`.runtime/` 不进入 Git。强制重装：
-
-```powershell
-.\install_llama_runtime.ps1 -Force
-```
+当前不使用 `mimo-v2.5-asr`，因为自动字幕烧录需要可靠段级时间戳。
 
 ## 配置
 
 `bilive-server.toml`：
 
 ```toml
-[slice.llm_judge]
-provider = "managed-llama-server"
-model_path = "E:\\AImodel\\lmstudio-community\\Qwen3.5-9B-GGUF\\Qwen3.5-9B-Q4_K_M.gguf"
-server_path = ".runtime\\llama.cpp\\b9616\\llama-server.exe"
-host = "127.0.0.1"
-port = 2236
-context_size = 4096
-gpu_layers = "all"
-parallel = 1
-startup_timeout = 180
-shutdown_timeout = 15
+[slice.mimo]
+model = "mimo-v2.5"
+base_url = "https://api.xiaomimimo.com/v1"
+fps = 1.0
+media_resolution = "default"
+timeout = 180
+max_base64_bytes = 48000000
 ```
 
-机器覆盖：
+API Key 只从用户环境变量读取：
 
 ```powershell
-$env:BILIVE_LLM_MODEL_PATH = "E:\models\model.gguf"
-$env:BILIVE_LLAMA_SERVER_PATH = "D:\runtime\llama-server.exe"
+[Environment]::SetEnvironmentVariable("MIMO_API_KEY", "<your-key>", "User")
 ```
 
-运行参数：
+不要把 API Key 写入配置、日志、测试快照或提交信息。
 
-```text
-llama-server.exe
-  --model <model_path>
-  --host 127.0.0.1
-  --port 2236
-  --ctx-size 4096
-  --gpu-layers all
-  --parallel 1
-  --reasoning off
-  --flash-attn auto
-  --no-ui
-  --log-file logs/runtime/llama-server.log
-```
+## 请求形态
 
-## 生命周期
+`src/autoslice/mllm_sdk/mimo_video.py` 负责：
 
-```text
-watcher --once 启动
-  -> 进入 managed_llm_batch
-  -> 领取动作任务和录像任务
-  -> 第一次 judge 请求
-     -> 校验模型和运行时
-     -> 确认 2236 未被占用
-     -> 启动 llama-server
-     -> 等待 GET /health
-  -> 同批 judge 请求复用 /v1
-  -> finally 停止 owned llama-server
-  -> watcher 退出
-```
+- 为候选生成临时 720p H.264/AAC 分析副本。
+- 使用 Base64 `data:video/mp4;base64,...` 传入 MiMo。
+- 编码后 Base64 字符串硬限制为 `48_000_000` 字节。
+- 超限时降低码率重试一次；仍超限则 `judge_failed`。
+- 请求设置 `fps=1.0`、`media_resolution=default`。
+- 请求设置 `thinking.type=disabled`。
+- 要求 JSON 输出：`decision`、`reason`、`title`、`description`、`tags`、`quality_score`、`trim_start`、`trim_end`。
+- 所有字段都必须存在并通过本地类型校验；`quality_score` 范围为 `[0,1]`。
+- `keep` 必须提供非空标题、描述和有限数值 trim；`drop` 的两个 trim 字段必须为 `null`。
 
-关键约束：
+临时分析副本在成功或失败后清理，不保留在项目目录。
 
-- Worker API 按需启动且自身不加载模型；空闲 15 分钟后退出。
-- 纯渲染批次不触发模型。
-- 并发 start 会等待同一个启动过程完成，不会提前返回未就绪地址。
-- 管理器只结束自己创建的进程。
-- 未知的 `2236` 监听者不会被复用或结束。
-- 正常结束、异常、启动超时都会执行清理。
+## Keep 路径
+
+MiMo `keep` 后，`candidate_analyzer` 校验：
+
+- 只接受一个连续区间。
+- `trim_start >= 0`。
+- `trim_end <= candidate_duration`。
+- `trim_end > trim_start`。
+- 区间长度至少 5 秒。
+
+校验通过后才运行 Whisper。音频提取使用 MiMo 相对区间，因此 Whisper 段级时间戳相对于最终粗剪片段。字幕烧录阶段用一次 ffmpeg 同时完成粗剪和字幕渲染，避免重复编码。
+
+`AnalysisResult` 记录：
+
+- `model_name`
+- `token_usage`
+- `candidate_start` / `candidate_end`
+- `source_start` / `source_end`
+- `suggested_trim`
+
+片段历史额外记录原始候选范围、MiMo 相对 trim 和最终源录像绝对范围，便于审计。
 
 ## 状态
 
-`GET http://127.0.0.1:2235/api/worker/status` 的 `llm` 字段：
+`GET http://127.0.0.1:2235/api/worker/status` 保留 `llm` 字段兼容旧前端：
 
 | 状态 | 含义 |
 |---|---|
-| `idle` | 端口关闭，模型已卸载 |
-| `running` + `owned=true` | 当前 Python 进程直接持有模型 |
-| `running` + `owned=false` | watcher 子进程中的健康模型服务 |
-| `occupied` | `2236` 开放但 `/health` 不健康或来源未知 |
+| `idle` | 当前没有 MiMo 请求 |
+| `requesting` | watcher 正在请求 MiMo |
+| `error` | 最近一次 MiMo 请求失败 |
 
-Worker API 和 watcher 是不同进程，因此生产状态通常显示
-`running, owned=false`。
-
-## 验证
-
-真实模型烟雾测试：
-
-```powershell
-.\.venv-win\Scripts\python.exe -m src.autoslice.mllm_sdk.managed_runtime --smoke-test
-```
-
-预期：
-
-```json
-{"status":"ok"}
-```
-
-退出后确认模型已卸载：
-
-```powershell
-Get-Process llama-server -ErrorAction SilentlyContinue
-Get-NetTCPConnection -LocalPort 2236 -State Listen -ErrorAction SilentlyContinue
-```
-
-两条命令都应无输出。
+`error` 不是活跃工作，不阻止 Worker 空闲退出。pending 任务和 watcher 进程仍由各自字段表达。
 
 ## Fail-closed
 
-- 运行时或模型缺失：预检失败，pending 保留。
-- 端口冲突：拒绝启动，不结束未知进程。
-- 进程提前退出：记录退出码，判断失败，候选保留。
-- 180 秒内未健康：终止 owned 进程，候选保留。
-- 非 JSON 或空响应：`judge_failed`，不自动上传。
-- 明确 `drop`：按现有候选清理规则处理。
+- `MIMO_API_KEY` 缺失：预检失败，pending 保留。
+- 临时分析副本生成失败：候选保留。
+- Base64 超限：候选保留。
+- MiMo 超时、限流或网络错误：候选保留。
+- MiMo 非 JSON 或非法区间：候选保留。
+- MiMo `drop`：删除候选，不运行 Whisper。
+- Whisper、字幕烧录、元数据或队列失败：候选保留，不自动上传。
 
-日志：
+旧本地模型运行时代码保留为手动回滚能力，但生产 watcher、预检和默认安装脚本不再启动或要求本地 Qwen/llama 运行时。
 
-```text
-logs/runtime/llama-server.log
-logs/runtime/slice-worker-*.log
-```
+## 官方依据
 
-更完整的恢复步骤见 [运维手册](operations.md)。
+- [MiMo-V2.5 模型规格与价格](https://mimo.mi.com/models/mimo-v2.5)
+- [视频理解、Base64 限制与 fps 参数](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/multimodal-understanding/video-understanding)
+- [深度思考开关](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking)
+- [MiMo-V2.5-ASR](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/multimodal-understanding/Speech-Recognition)

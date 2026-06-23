@@ -8,7 +8,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Callable
 
-import requests
 import toml
 
 DependencyChecker = Callable[[dict[str, Any]], tuple[bool, str]]
@@ -33,57 +32,15 @@ def _result(ready: bool, message: str) -> dict[str, str]:
     }
 
 
-def _configured_path(value: object, project_root: Path) -> Path:
-    path = Path(str(value or "")).expanduser()
-    if not path.is_absolute():
-        path = project_root / path
-    return path.resolve()
-
-
 def _check_llm(
     config: dict[str, Any],
     project_root: Path,
 ) -> tuple[bool, str]:
-    judge = config.get("slice", {}).get("llm_judge", {})
-    provider = (
-        judge.get("provider") or "openai-compatible"
-    )
-    if provider == "managed-llama-server":
-        server = _configured_path(
-            os.environ.get(
-                "BILIVE_LLAMA_SERVER_PATH",
-                judge.get("server_path", ""),
-            ),
-            project_root,
-        )
-        model = _configured_path(
-            os.environ.get(
-                "BILIVE_LLM_MODEL_PATH",
-                judge.get("model_path", ""),
-            ),
-            project_root,
-        )
-        if not server.is_file():
-            return False, f"managed llama-server is missing: {server}"
-        if not model.is_file():
-            return False, f"managed LLM model is missing: {model}"
-        return True, f"managed runtime={server}; model={model}"
-    if provider != "openai-compatible":
-        return True, f"not required for provider {provider}"
-
-    base_url = str(
-        config.get("slice", {})
-        .get("multi_modal", {})
-        .get("visual_model_url", "http://127.0.0.1:1234/v1")
-    ).rstrip("/")
-    try:
-        session = requests.Session()
-        session.trust_env = False
-        response = session.get(f"{base_url}/models", timeout=3)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        return False, str(exc)
-    return True, f"{base_url}/models"
+    mimo = config.get("slice", {}).get("mimo", {})
+    model = str(mimo.get("model", "mimo-v2.5"))
+    if not os.environ.get("MIMO_API_KEY"):
+        return False, "MIMO_API_KEY is not set"
+    return True, f"MiMo API key configured for {model}"
 
 
 def _check_asr(config: dict[str, Any]) -> tuple[bool, str]:

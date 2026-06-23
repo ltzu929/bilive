@@ -27,8 +27,46 @@ def test_frontend_navigation_contract():
     text = FRONTEND_HTML.read_text(encoding="utf-8")
 
     assert text.count('href="http://127.0.0.1:2234/tasks"') == 0
-    assert '<a class="nav-item active" href="/tasks">' in text
-    assert text.count('class="nav-item disabled" aria-disabled="true"') >= 2
+    assert 'href="/tasks" data-view="tasks" aria-label="切片工作台"' in text
+    assert 'href="/uploads"' in text
+    assert 'href="/settings"' in text
+    assert 'class="nav-item disabled"' not in text
+
+
+def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
+    texts = _frontend_texts()
+
+    for element_id in [
+        "tasks-view",
+        "uploads-view",
+        "settings-view",
+        "upload-queue-list",
+        "upload-status-filter",
+        "upload-refresh-button",
+        "upload-wake-button",
+        "settings-form",
+        "settings-save-button",
+    ]:
+        assert f'id="{element_id}"' in texts["html"]
+
+    assert "function escapeHtml" in texts["js"]
+    assert "由 Windows 环境管理" in texts["js"]
+    assert 'aria-label="切片工作台"' in texts["html"]
+    assert "?????" not in texts["html"]
+    assert 'src="/app.js?v=20260623-2"' in texts["html"]
+
+    for contract in [
+        "activateCurrentView",
+        "refreshUploadDashboard",
+        "renderUploadQueue",
+        "loadDashboardSettings",
+        "saveDashboardPreferences",
+    ]:
+        assert contract in texts["js"]
+
+    assert ".source-list-panel" in texts["css"]
+    assert "overflow-y: auto;" in texts["css"]
+    assert "scrollbar-gutter: stable;" in texts["css"]
 
 
 def test_frontend_dashboard_dom_contract():
@@ -105,6 +143,14 @@ def test_frontend_modern_review_workspace_contract():
         assert presentation_contract in texts["js"]
 
 
+def test_source_recording_refresh_ignores_stale_responses():
+    text = FRONTEND_JS.read_text(encoding="utf-8")
+
+    assert "let sourceRecordingRequestId = 0;" in text
+    assert "const requestId = ++sourceRecordingRequestId;" in text
+    assert "if (requestId !== sourceRecordingRequestId) return;" in text
+
+
 def test_frontend_api_endpoint_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")
 
@@ -145,7 +191,7 @@ def test_frontend_worker_trigger_contract():
     assert "PC worker" not in text
     assert 'request("/api/worker-trigger/wake", {' in text
     assert "wakeWorkerOnPageLoad();" in text
-    assert text.count('request("/api/worker-trigger/wake", {') == 1
+    assert text.count('request("/api/worker-trigger/wake", {') == 2
     assert "Windows 重任务节点：启动中" in text
 
 

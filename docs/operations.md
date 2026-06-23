@@ -5,104 +5,72 @@
 ```powershell
 cd D:\alldata\pi\bilive
 .\setup_windows_env.ps1 -Dev
+[Environment]::SetEnvironmentVariable("MIMO_API_KEY", "<your-key>", "User")
 .\install_windows_pi_ssh_key.ps1
 .\install_windows_worker_task.ps1 -NoUpload
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.ps1
 ```
 
-`setup_windows_env.ps1` 默认安装固定版本 llama.cpp 运行时。仅在运行时已由外部
-流程准备好时使用 `-SkipLlamaRuntime`：
+`setup_windows_env.ps1` 默认只安装 Python 依赖并执行 `pip check`。旧本地模型安装器保留为回滚工具，需要时显式执行：
 
 ```powershell
-.\setup_windows_env.ps1 -Dev -SkipLlamaRuntime
-```
-
-也可独立安装或强制重装：
-
-```powershell
-.\install_llama_runtime.ps1
+.\setup_windows_env.ps1 -Dev -InstallLlamaRuntime
 .\install_llama_runtime.ps1 -Force
 ```
 
-生产 GGUF 默认位于：
+`MIMO_API_KEY` 必须配置到计划任务实际运行的 Windows 用户环境。临时 PowerShell 变量不会自动传播到下次登录或计划任务。
 
-```text
-E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf
-```
+## MiMo 验收
 
-路径不同的机器应设置：
+生产切片使用 `mimo-v2.5` 视频理解接口。健康检查只验证 `MIMO_API_KEY` 是否存在，不输出密钥值，也不执行真实 API 调用。
 
-```powershell
-$env:BILIVE_LLM_MODEL_PATH = "E:\models\Qwen3.5-9B-Q4_K_M.gguf"
-$env:BILIVE_LLAMA_SERVER_PATH = "D:\runtime\llama-server.exe"
-```
-
-环境变量必须同时配置到计划任务实际运行的用户环境，临时 PowerShell 变量不会
-自动传播到下次登录。
-
-## 模型验收
-
-真实加载、请求和卸载：
+可选真实 API 烟雾测试应使用很短的本地样例视频，并禁止真实上传：
 
 ```powershell
-.\.venv-win\Scripts\python.exe -m src.autoslice.mllm_sdk.managed_runtime --smoke-test
+$env:BILIVE_MIMO_SMOKE_VIDEO = "D:\path\to\short-sample.mp4"
+.\.venv-win\Scripts\python.exe -m pytest tests\integration\test_mimo_api_smoke.py -m integration -q
 ```
 
-成功标准：
+该测试只导入 MiMo 判断器，不导入上传模块、不写 SQLite 队列。未同时设置
+`MIMO_API_KEY` 和 `BILIVE_MIMO_SMOKE_VIDEO` 时会跳过。
 
-1. 输出 `{"status":"ok"}`。
-2. 命令退出后没有 `llama-server.exe` 进程。
-3. 命令退出后没有 `2236` 监听。
-
-```powershell
-Get-Process llama-server -ErrorAction SilentlyContinue
-Get-NetTCPConnection -LocalPort 2236 -State Listen -ErrorAction SilentlyContinue
-```
-
-整批切片时，第一次 LLM 判断会加载模型；同批后续判断复用该进程；整批完成、
-异常或取消后卸载。只含 `render_segment` 的批次不会加载模型。
+真实 MiMo 调用失败时，候选会标记为 `judge_failed` 并保留人工复核，不回退本地 Qwen。
 
 ## Worker API
 
-任务安装器会替换旧计划任务，并在确认旧 `2235` 监听者属于本项目后停止它。
-计划任务没有登录触发器，直接通过 `pythonw.exe` 隐藏运行。打开 Pi 切片页面或
-提交切片任务时，Pi 会执行：
+计划任务通过 `pythonw.exe` 隐藏运行。打开 Pi 切片页面或提交切片任务时，Pi 执行：
 
 ```powershell
 schtasks.exe /Run /TN BiliveWorkerApi
 ```
 
-安装器会临时启动 Worker 完成验证：
+状态检查：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:2235/api/worker/status |
     ConvertTo-Json -Depth 8
 ```
 
-没有待处理、切片、模型或上传工作时，Worker 连续空闲 15 分钟后优雅退出，
-`2235` 关闭属于正常状态。页面的状态轮询不会重新启动 Worker，也不会延长
-空闲时间。人工诊断可使用可见控制台入口：
+关键字段：
+
+- `dependencies.checks.llm`：MiMo API key 预检结果。
+- `llm.status = idle`：当前没有 MiMo 请求。
+- `llm.status = requesting`：watcher 正在请求 MiMo。
+- `llm.status = error`：最近一次 MiMo 请求失败；这不是活跃工作，不阻止空闲退出。
+- `watcher`、`lock`、`pending_tasks`：切片 worker 状态。
+- `upload`：上传消费者和队列状态。
+
+没有待处理、切片、MiMo 请求或上传工作时，Worker 连续空闲 15 分钟后退出，`2235` 关闭属于正常状态。页面状态轮询不会重新启动 Worker，也不会延长空闲时间。诊断时可用可见控制台入口：
 
 ```powershell
 .\start_pipeline.ps1
 ```
 
-需要暂时禁止自动退出时，在启动进程的环境中设置：
+需要暂时禁用自动退出时，在启动进程环境中设置：
 
 ```powershell
 $env:BILIVE_WORKER_IDLE_TIMEOUT = "0"
 ```
-
-关键字段：
-
-- `dependencies.checks.llm`：运行时和模型文件预检。
-- `llm.status = idle`：当前没有模型进程。
-- `llm.status = running`：watcher 正在使用模型。
-- `llm.status = occupied`：`2236` 被非健康或未知服务占用。
-- `llm.owned`：状态读取进程是否直接拥有该模型进程；Worker API 通常为
-  `false`，因为实际所有者是 watcher。
-- `watcher`、`lock`、`pending_tasks`：切片 worker 状态。
-- `upload`：上传消费者和队列状态。
 
 健康检查是只读的：
 
@@ -110,9 +78,7 @@ $env:BILIVE_WORKER_IDLE_TIMEOUT = "0"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.ps1
 ```
 
-它报告计划任务、`2235`、Worker API、托管模型文件、ASR 缓存、SQLite 和上传
-锁，不创建数据库、不启动切片任务、不修改上传队列。Worker 空闲退出后，
-`worker_api.status = unavailable` 是预期结果；健康检查不会唤醒它。
+它报告计划任务、`2235`、Worker API、MiMo key 状态、ASR 缓存、SQLite 和上传锁，不创建数据库、不启动切片任务、不修改上传队列。Worker 空闲退出后，`worker_api.status = unavailable` 是预期结果；健康检查不会唤醒它。
 
 确认 `.secrets/bilibili.cookie` 可用后启用上传消费者：
 
@@ -121,56 +87,41 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 .\install_windows_worker_task.ps1 -EnableUpload
 ```
 
-不得通过创建 pending 标记或真实投稿来验证服务启动。已有 ready 录像不会因为
-服务恢复而自动排队。
-
-按需启动异常时可直接执行：
-
-```powershell
-schtasks.exe /Run /TN BiliveWorkerApi
-Get-ScheduledTask -TaskName BiliveWorkerApi
-Get-Content .\logs\runtime\worker-api.log -Tail 200
-```
+不得通过创建 pending 标记或真实投稿来验证服务启动。
 
 ## 模型排障
 
-### 文件预检失败
-
-检查配置和文件：
+### MiMo 预检失败
 
 ```powershell
-Test-Path .\.runtime\llama.cpp\b9616\llama-server.exe
-Test-Path "E:\AImodel\lmstudio-community\Qwen3.5-9B-GGUF\Qwen3.5-9B-Q4_K_M.gguf"
+[Environment]::GetEnvironmentVariable("MIMO_API_KEY", "User")
 ```
 
-运行时缺失时重新执行 `install_llama_runtime.ps1 -Force`。模型缺失时修正
-`bilive-server.toml` 或 `BILIVE_LLM_MODEL_PATH`，不要复制模型到 Pi 或 SMB。
+返回空值时重新设置用户环境变量，然后重新登录或重启计划任务所在会话。不要把 API Key 写入 `bilive-server.toml`、日志或测试快照。
 
-### `2236` 被占用
+### MiMo 请求失败
 
-```powershell
-Get-NetTCPConnection -LocalPort 2236 -State Listen |
-    Select-Object LocalAddress,LocalPort,OwningProcess
-Get-Process -Id <OwningProcess>
-```
-
-运行时管理器不会结束未知监听者。先识别来源，再由对应程序正常退出。
-
-### 加载超时或 LLM 判断失败
-
-查看：
+查看最新 worker 日志：
 
 ```powershell
-Get-Content .\logs\runtime\llama-server.log -Tail 200
 Get-ChildItem .\logs\runtime\slice-worker-*.log |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1 |
     Get-Content -Tail 200
 ```
 
-重点检查 CUDA DLL、显存不足、模型路径、`exited with code` 和
-`did not become ready`。判断失败会保留候选供人工复核，不要手工删除
-`.failed` 或候选文件来掩盖问题。
+重点检查限流、超时、Base64 超限、非法 JSON 和非法 trim。失败候选会保留人工复核；不要手动删除候选或 `.failed` 来掩盖问题。
+
+### ASR 或字幕失败
+
+确认 `faster-whisper`、模型缓存和 ffmpeg：
+
+```powershell
+.\.venv-win\Scripts\python.exe -c "import faster_whisper; print('ok')"
+ffmpeg -version
+```
+
+当前生产 ASR 是 `large-v3` CPU `int8`。没有 CUDA 12 的 `cublas64_12.dll` 时不要配置 GPU。
 
 ## Pi 部署
 
@@ -205,16 +156,12 @@ GET /api/jobs/{job_id}
 
 ## 回滚
 
-托管模型运行时功能提交为 `4b94274`。需要回退时先停止计划任务，确保没有正在
-处理的切片批次，再执行 Git 回退并重新安装任务：
+旧本地模型运行时仍保留为手动回滚能力。需要回滚时先停止计划任务，确认没有正在处理的切片批次，再修改配置和脚本。不要直接删除运行中的 `.processing` 标记。
 
 ```powershell
 Stop-ScheduledTask -TaskName BiliveWorkerApi
-git revert 4b94274
 .\install_windows_worker_task.ps1 -NoUpload
 ```
-
-不要直接删除运行中的 `llama-server.exe` 或 `.processing` 标记。
 
 ## 静态验证
 

@@ -75,9 +75,9 @@ def create_app(
         lambda: read_worker_lock(default_worker_lock_path(project_root))
     )
     if llm_status_reader is None:
-        from src.autoslice.mllm_sdk.managed_runtime import managed_llm_status
+        from src.autoslice.mllm_sdk.mimo_video import mimo_status
 
-        read_llm_status = managed_llm_status
+        read_llm_status = mimo_status
     else:
         read_llm_status = llm_status_reader
     watchdog_factory = idle_watchdog_factory or IdleWatchdog

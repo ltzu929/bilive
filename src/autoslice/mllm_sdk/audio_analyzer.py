@@ -69,17 +69,24 @@ def format_transcript_segments(
     return "".join(parts).strip() or normalize_transcript(fallback_text)
 
 
-def extract_audio(video_path: str) -> str:
+def extract_audio(
+    video_path: str,
+    *,
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None,
+) -> str:
     temp_dir = Path(tempfile.mkdtemp(prefix="bilive_audio_"))
     audio_path = temp_dir / "audio.wav"
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    if start_seconds is not None and float(start_seconds) > 0:
+        command.extend(["-ss", f"{float(start_seconds):.3f}"])
+    command.extend([
         "-i",
         str(video_path),
+    ])
+    if duration_seconds is not None and float(duration_seconds) > 0:
+        command.extend(["-t", f"{float(duration_seconds):.3f}"])
+    command.extend([
         "-vn",
         "-acodec",
         "pcm_s16le",
@@ -88,7 +95,7 @@ def extract_audio(video_path: str) -> str:
         "-ac",
         "1",
         str(audio_path),
-    ]
+    ])
     try:
         subprocess.run(command, capture_output=True, check=True, timeout=3600)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -243,8 +250,14 @@ def analyze_audio(
     *,
     whisper_device: str = "cpu",
     whisper_compute_type: str | None = "int8",
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None,
 ) -> dict[str, Any]:
-    audio_path = extract_audio(video_path)
+    audio_path = extract_audio(
+        video_path,
+        start_seconds=start_seconds,
+        duration_seconds=duration_seconds,
+    )
     if not audio_path:
         return {
             "transcript": "",

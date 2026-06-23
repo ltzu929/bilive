@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment
+from src.autoslice.analysis_result import (
+    AnalysisResult,
+    TranscriptSegment,
+    TrimSuggestion,
+)
 from src.burn.subtitle_burn import (
     BurnSubtitleResult,
     burn_subtitles_from_analysis,
@@ -66,6 +70,59 @@ def test_burn_subtitles_replaces_original_on_success(tmp_path):
     assert commands[0][:4] == ["ffmpeg", "-y", "-i", str(video_path)]
     assert "subtitles=" in commands[0][5]
     assert commands[0][-1] == str(tmp_path / "12s_source_subtitled.tmp.mp4")
+
+
+def test_burn_subtitles_combines_mimo_trim_and_subtitle_render(tmp_path):
+    video_path = tmp_path / "12s_source.mp4"
+    video_path.write_bytes(b"original")
+    analysis = AnalysisResult(
+        title="Clip",
+        description="Description",
+        transcript_segments=[
+            TranscriptSegment(start=0.0, end=1.5, text="subtitle"),
+        ],
+        suggested_trim=TrimSuggestion(
+            trim_start=2.5,
+            trim_end=8.0,
+            reason="selected by MiMo",
+        ),
+    )
+    commands = []
+
+    def fake_run(command, check, capture_output, text, encoding):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"trimmed-subtitled")
+
+    result = burn_subtitles_from_analysis(video_path, analysis, run=fake_run)
+
+    assert result.burned is True
+    assert video_path.read_bytes() == b"trimmed-subtitled"
+    assert commands == [
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "2.500",
+            "-i",
+            str(video_path),
+            "-t",
+            "5.500",
+            "-vf",
+            commands[0][9],
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            str(tmp_path / "12s_source_subtitled.tmp.mp4"),
+        ]
+    ]
+    assert "subtitles=" in commands[0][9]
 
 
 def test_burn_subtitles_keeps_original_on_ffmpeg_failure(tmp_path):

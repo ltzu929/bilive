@@ -31,6 +31,8 @@ if (siderToggle) {
   if (localStorage.getItem("sider-collapsed") === "1") applyCollapsed(true);
 }
 
+let sourceRecordingRequestId = 0;
+
 const state = {
   slices: [],
   tasks: [],
@@ -517,10 +519,13 @@ function sourceReviewPriority(item) {
 }
 
 async function refreshSourceRecordings() {
+  const requestId = ++sourceRecordingRequestId;
   const roomId = elements.roomFilter.value;
   const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : "";
   try {
-    state.sourceRecordings = await request(`/api/source-recordings${query}`);
+    const sourceRecordings = await request(`/api/source-recordings${query}`);
+    if (requestId !== sourceRecordingRequestId) return;
+    state.sourceRecordings = sourceRecordings;
     if (!state.sourceRecordings.some((item) => item.task_id === state.selectedSourceId)) {
       const preferredSource = [...state.sourceRecordings]
         .filter((item) => Number(item.segment_count || 0) > 0)
@@ -537,6 +542,7 @@ async function refreshSourceRecordings() {
       renderSourceDetail();
     }
   } catch (error) {
+    if (requestId !== sourceRecordingRequestId) return;
     showError(error.message);
   }
 }
@@ -1085,6 +1091,184 @@ function replayPreview() {
   }
 }
 
+
+let uploadDashboardState = { items: [], queue_counts: {}, worker: {} };
+
+function currentViewName() {
+  if (window.location.pathname.startsWith("/uploads")) return "uploads";
+  if (window.location.pathname.startsWith("/settings")) return "settings";
+  return "tasks";
+}
+
+function activateCurrentView() {
+  const view = currentViewName();
+  document.querySelectorAll(".app-view").forEach((element) => {
+    element.classList.toggle("hidden", element.id !== `${view}-view`);
+  });
+  document.querySelectorAll(".nav-item[data-view]").forEach((element) => {
+    element.classList.toggle("active", element.dataset.view === view);
+  });
+  document.body.dataset.view = view;
+  return view;
+}
+
+function uploadStatusPresentation(status) {
+  const values = {
+    queued: ["等待上传", "queued"],
+    uploading: ["上传中", "active"],
+    uploaded: ["等待投稿", "active"],
+    publishing: ["投稿中", "active"],
+    published: ["已发布", "published"],
+    failed: ["失败", "failed"],
+  };
+  const [label, tone] = values[status] || [status || "未知", "neutral"];
+  return { label, tone };
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatTimestamp(value) {
+  const timestamp = Number(value || 0);
+  if (!timestamp) return "-";
+  return new Date(timestamp * 1000).toLocaleString("zh-CN", { hour12: false });
+}
+
+async function refreshUploadDashboard() {
+  const error = document.querySelector("#upload-error");
+  try {
+    uploadDashboardState = await request("/api/upload-dashboard");
+    if (error) error.classList.add("hidden");
+    renderUploadQueue();
+  } catch (reason) {
+    if (error) {
+      error.textContent = reason.message;
+      error.classList.remove("hidden");
+    }
+  }
+}
+
+function renderUploadQueue() {
+  const counts = uploadDashboardState.queue_counts || {};
+  const active = Number(counts.uploading || 0) + Number(counts.uploaded || 0) + Number(counts.publishing || 0);
+  const values = {
+    "upload-count-queued": counts.queued || 0,
+    "upload-count-active": active,
+    "upload-count-published": counts.published || 0,
+    "upload-count-failed": counts.failed || 0,
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = document.getElementById(id);
+    if (element) element.textContent = String(value);
+  });
+
+  const worker = uploadDashboardState.worker || {};
+  const pill = document.querySelector("#upload-worker-pill");
+  if (pill) {
+    const running = worker.process_status === "running";
+    pill.className = `live-pill ${running ? "task-state-running" : "task-state-idle"}`;
+    pill.querySelector("span:last-child").textContent = running ? "上传节点运行中" : "上传节点空闲";
+  }
+
+  const filter = document.querySelector("#upload-status-filter")?.value || "all";
+  const items = (uploadDashboardState.items || []).filter((item) => {
+    if (filter === "all") return true;
+    if (filter === "active") return ["uploading", "uploaded", "publishing"].includes(item.status);
+    return item.status === filter;
+  });
+  const count = document.querySelector("#upload-queue-count");
+  const list = document.querySelector("#upload-queue-list");
+  if (count) count.textContent = `${items.length} 个项目`;
+  if (!list) return;
+  list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = '<div class="task-empty">当前筛选条件下没有投稿任务</div>';
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement("article");
+    const status = uploadStatusPresentation(item.status);
+    row.className = "upload-row";
+    row.innerHTML = `
+      <div class="upload-row-main">
+        <strong title="${escapeHtml(item.name || "-")}">${escapeHtml(item.name || "-")}</strong>
+        <span>${escapeHtml(item.room || "-")} · 更新于 ${formatTimestamp(item.updated_at)}</span>
+      </div>
+      <span class="upload-status upload-status-${status.tone}">${status.label}</span>
+      <div class="upload-row-meta"><span>尝试 ${Number(item.attempts || 0)} 次</span><span>${item.bvid ? escapeHtml(item.bvid) : "暂无 BV 号"}</span></div>
+      <div class="upload-row-error">${item.last_error ? escapeHtml(item.last_error) : "-"}</div>`;
+    list.appendChild(row);
+  }
+}
+
+async function wakeUploadWorker() {
+  const button = document.querySelector("#upload-wake-button");
+  if (button) button.disabled = true;
+  try {
+    await request("/api/worker-trigger/wake", { method: "POST" });
+    await refreshUploadDashboard();
+  } catch (error) {
+    const box = document.querySelector("#upload-error");
+    if (box) {
+      box.textContent = error.message;
+      box.classList.remove("hidden");
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function loadDashboardSettings() {
+  const data = await request("/api/dashboard-settings");
+  const setValue = (id, value) => {
+    const element = document.getElementById(id);
+    if (element) element.value = value;
+  };
+  setValue("setting-burst-ratio", `${data.slice.burst_ratio}x`);
+  setValue("setting-burst-context", `±${data.slice.burst_context} 秒`);
+  setValue("setting-burst-top-n", data.slice.burst_top_n);
+  setValue("setting-min-video-size", `${data.slice.min_video_size_mb} MB`);
+  setValue("setting-mimo-model", data.mimo.model);
+  setValue("setting-mimo-fps", `${data.mimo.fps} FPS · ${data.mimo.media_resolution}`);
+  setValue(
+    "setting-mimo-key",
+    data.mimo.configured ? "已配置" : "由 Windows 环境管理",
+  );
+  setValue("setting-whisper", `${data.whisper.model} · ${data.whisper.device} ${data.whisper.compute_type}`);
+
+  const preferences = JSON.parse(localStorage.getItem("dashboard-preferences") || "{}");
+  const interval = document.querySelector("#pref-refresh-interval");
+  const compact = document.querySelector("#pref-compact-queue");
+  const collapse = document.querySelector("#pref-collapse-sidebar");
+  if (interval) interval.value = String(preferences.refreshInterval || 30);
+  if (compact) compact.checked = Boolean(preferences.compactQueue);
+  if (collapse) collapse.checked = localStorage.getItem("sider-collapsed") === "1";
+  document.body.classList.toggle("compact-queue", Boolean(preferences.compactQueue));
+}
+
+function saveDashboardPreferences(event) {
+  event?.preventDefault();
+  const preferences = {
+    refreshInterval: Number(document.querySelector("#pref-refresh-interval")?.value || 30),
+    compactQueue: Boolean(document.querySelector("#pref-compact-queue")?.checked),
+  };
+  localStorage.setItem("dashboard-preferences", JSON.stringify(preferences));
+  const collapse = Boolean(document.querySelector("#pref-collapse-sidebar")?.checked);
+  applyCollapsed(collapse);
+  document.body.classList.toggle("compact-queue", preferences.compactQueue);
+  const message = document.querySelector("#settings-message");
+  if (message) {
+    message.textContent = "界面偏好已保存在当前浏览器。生产参数仍由 bilive-server.toml 管理。";
+    message.classList.remove("hidden");
+  }
+}
+
 document.addEventListener("keydown", (event) => {
   const tag = document.activeElement?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -1116,6 +1300,11 @@ elements.roomFilter.addEventListener("change", () => {
 });
 elements.saveButton.addEventListener("click", saveFeedback);
 elements.taskToggle?.addEventListener("click", toggleTaskPanel);
+document.querySelector("#upload-refresh-button")?.addEventListener("click", refreshUploadDashboard);
+document.querySelector("#upload-wake-button")?.addEventListener("click", wakeUploadWorker);
+document.querySelector("#upload-status-filter")?.addEventListener("change", renderUploadQueue);
+document.querySelector("#settings-form")?.addEventListener("submit", saveDashboardPreferences);
+document.querySelector("#settings-save-button")?.addEventListener("click", saveDashboardPreferences);
 elements.segmentKeepButton?.addEventListener("click", () => manualKeepCurrentSegment().catch((error) => showError(error.message)));
 elements.segmentDropButton?.addEventListener("click", () => dropCurrentSegment().catch((error) => showError(error.message)));
 elements.segmentRetryButton?.addEventListener("click", () => retryCurrentSegmentJudge().catch((error) => showError(error.message)));
@@ -1173,38 +1362,58 @@ async function wakeWorkerOnPageLoad() {
   }
 }
 
-refresh();
-refreshRooms();
-refreshSourceRecordings();
-refreshSliceProgress();
-refreshSliceDiagnostics();
-refreshTasks();
-wakeWorkerOnPageLoad();
+const activeView = activateCurrentView();
+if (activeView === "tasks") {
+  refresh();
+  refreshRooms();
+  refreshSourceRecordings();
+  refreshSliceProgress();
+  refreshSliceDiagnostics();
+  refreshTasks();
+  wakeWorkerOnPageLoad();
+} else if (activeView === "uploads") {
+  refreshUploadDashboard();
+  refreshWorkerStatus();
+} else {
+  loadDashboardSettings().catch((error) => {
+    const message = document.querySelector("#settings-message");
+    if (message) {
+      message.textContent = error.message;
+      message.classList.remove("hidden");
+    }
+  });
+}
 
 setInterval(() => {
-  if (document.visibilityState === "visible") {
+  if (document.visibilityState !== "visible") return;
+  const view = currentViewName();
+  if (view === "tasks") {
     refresh();
     refreshSourceRecordings();
     refreshTasks();
     refreshWorkerStatus();
+  } else if (view === "uploads") {
+    refreshUploadDashboard();
   }
-}, 30000);
+}, Number(JSON.parse(localStorage.getItem("dashboard-preferences") || "{}").refreshInterval || 30) * 1000);
 
 setInterval(() => {
-  if (document.visibilityState === "visible") {
+  if (document.visibilityState === "visible" && currentViewName() === "tasks") {
     refreshSliceProgress();
     refreshSliceDiagnostics();
   }
 }, 2000);
 
 setInterval(() => {
-  if (document.visibilityState === "visible") {
+  if (document.visibilityState === "visible" && currentViewName() === "tasks") {
     refreshWorkerStatus();
   }
 }, 5000);
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
+  if (document.visibilityState !== "visible") return;
+  const view = currentViewName();
+  if (view === "tasks") {
     refreshRooms();
     refresh();
     refreshSourceRecordings();
@@ -1212,5 +1421,7 @@ document.addEventListener("visibilitychange", () => {
     refreshSliceProgress();
     refreshSliceDiagnostics();
     refreshWorkerStatus();
+  } else if (view === "uploads") {
+    refreshUploadDashboard();
   }
 });

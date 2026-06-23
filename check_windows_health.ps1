@@ -36,29 +36,19 @@ $pythonChecks = @{
     faster_whisper = $false
     asr_model = ""
     database = "unavailable"
-    managed_llm = @{ runtime = ""; model = ""; ready = $false }
+    mimo = @{ api_key_configured = [bool]$env:MIMO_API_KEY }
 }
 if (Test-Path -LiteralPath $python) {
     $checkScript = @"
-import importlib.util, json, sqlite3
+import importlib.util, json, os, sqlite3
 from pathlib import Path
-from src.config import BILIVE_DIR, MANAGED_LLAMA_SERVER_PATH, MANAGED_LLM_MODEL_PATH
-def resolve(value):
-    path = Path(value).expanduser()
-    return (Path(BILIVE_DIR) / path).resolve() if not path.is_absolute() else path.resolve()
-runtime = resolve(MANAGED_LLAMA_SERVER_PATH)
-model = resolve(MANAGED_LLM_MODEL_PATH)
 result = {
     "python": True,
     "faster_whisper": bool(importlib.util.find_spec("faster_whisper")),
     "asr_model": "",
     "database": "missing",
-    "managed_llm": {
-        "runtime": str(runtime),
-        "runtime_exists": runtime.is_file(),
-        "model": str(model),
-        "model_exists": model.is_file(),
-        "ready": runtime.is_file() and model.is_file(),
+    "mimo": {
+        "api_key_configured": bool(os.environ.get("MIMO_API_KEY")),
     },
 }
 try:
@@ -88,8 +78,8 @@ $report = [ordered]@{
     }
     port_2235_listening = [bool]$listener
     worker_api = $api
-    managed_llm = @{
-        files = $pythonChecks.managed_llm
+    mimo = @{
+        api_key_configured = $pythonChecks.mimo.api_key_configured
         process = if ($api -and $api.llm) { $api.llm } else { $null }
     }
     dependencies = $pythonChecks

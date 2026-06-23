@@ -63,3 +63,27 @@ No actionable P0, P1, or P2 findings remain.
   to justify another persistent control.
 
 final result: passed
+
+## 2026-06-23 Secondary Views And Queue Scrolling
+
+reference: User-provided `/tasks` screenshot showing disabled upload/settings navigation and an overlong review queue.
+
+verification target: Live Pi dashboard through a local SSH tunnel to `127.0.0.1:2234`.
+
+### Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+- Navigation: Upload and Settings are real routes with matching active views and accessible labels.
+- Review queue: 14 rows remain available inside a bounded panel; measured `clientHeight=297`, `scrollHeight=1265`, and `overflow-y=auto`.
+- Upload center: Live queue metrics and two published rows rendered; Windows paths are normalized to filename and room ID.
+- Settings: Production slice, MiMo, and Whisper values render read-only. The MiMo key correctly states that it is managed by the Windows environment.
+- Layout: Tasks, Uploads, and Settings reported no horizontal document overflow at the desktop verification viewport.
+- Service: `bilive-dashboard.service` was restarted and the new APIs responded successfully.
+
+### Intentional Boundaries
+
+- Upload actions only wake the existing Windows worker; heavy upload processing remains off the Pi.
+- Runtime settings are read-only. Only browser-local display preferences can be changed from the page.
+
+final result: passed

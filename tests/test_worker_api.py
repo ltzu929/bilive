@@ -116,7 +116,7 @@ async def test_worker_api_reports_status():
             preflight_reader=lambda: {"ready": True, "checks": {}},
             llm_status_reader=lambda: {
                 "status": "idle",
-                "provider": "managed-llama-server",
+                "provider": "mimo-v2.5",
             },
             lock_status_reader=lambda: {
                 "status": "unlocked",
@@ -140,7 +140,7 @@ async def test_worker_api_reports_status():
         "dependencies": {"ready": True, "checks": {}},
         "llm": {
             "status": "idle",
-            "provider": "managed-llama-server",
+            "provider": "mimo-v2.5",
         },
         "pending_tasks": 3,
         "upload": {

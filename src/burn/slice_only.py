@@ -321,6 +321,9 @@ def slice_only(video_path, **_slice_options):
                 slice_path,
                 artist=artist,
                 danmaku_text=danmaku_text,
+                candidate_start=generated_slice.context_start,
+                candidate_end=generated_slice.context_end,
+                candidate_duration=generated_slice.duration,
                 analyzer=analyze_candidate,
             )
 
@@ -605,8 +608,12 @@ def upsert_diagnostic(items, item):
 
 def build_segment_record(source_path, generated_slice, analysis, upload_status="not_queued"):
     slice_path = str(generated_slice.path)
-    start = float(getattr(generated_slice, "context_start", 0.0) or 0.0)
-    end = float(getattr(generated_slice, "context_end", 0.0) or 0.0)
+    candidate_start = float(getattr(generated_slice, "context_start", 0.0) or 0.0)
+    candidate_end = float(getattr(generated_slice, "context_end", 0.0) or 0.0)
+    start = candidate_start
+    end = candidate_end
+    mimo_trim_start = None
+    mimo_trim_end = None
     judge_status = "keep"
     judge_error = ""
     quality_score = None
@@ -624,16 +631,35 @@ def build_segment_record(source_path, generated_slice, analysis, upload_status="
         title = analysis.title
         description = analysis.description
         tags = analysis.tags
+        trim = analysis.suggested_trim
+        if trim is not None:
+            mimo_trim_start = float(trim.trim_start)
+            mimo_trim_end = float(trim.trim_end)
+        if trim is not None and judge_status == "keep":
+            start = (
+                float(analysis.source_start)
+                if analysis.source_start is not None
+                else candidate_start + mimo_trim_start
+            )
+            end = (
+                float(analysis.source_end)
+                if analysis.source_end is not None
+                else candidate_start + mimo_trim_end
+            )
 
     return {
         "segment_id": segment_id_for(source_path, start, end),
         "source_rel_path": source_rel_path(source_path),
         "candidate_path": slice_path,
         "candidate_rel_path": str(Path(source_path).parent.name + "/" + Path(slice_path).name),
+        "candidate_start_seconds": candidate_start,
+        "candidate_end_seconds": candidate_end,
+        "mimo_trim_start": mimo_trim_start,
+        "mimo_trim_end": mimo_trim_end,
         "start_seconds": start,
         "end_seconds": end,
-        "density_core_start": float(getattr(generated_slice, "density_core_start", start) or start),
-        "density_core_end": float(getattr(generated_slice, "density_core_end", end) or end),
+        "density_core_start": float(getattr(generated_slice, "density_core_start", candidate_start) or candidate_start),
+        "density_core_end": float(getattr(generated_slice, "density_core_end", candidate_end) or candidate_end),
         "danmaku_count": int(getattr(generated_slice, "danmaku_count", 0) or 0),
         "judge_status": judge_status,
         "judge_error": judge_error,

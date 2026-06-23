@@ -1,69 +1,229 @@
-from src.autoslice.mllm_sdk.judge import JudgeResult
+import pytest
+
+from src.autoslice.analysis_result import AnalysisResult, TrimSuggestion
 
 
-def test_analyze_candidate_sends_transcript_and_danmaku_to_judge(monkeypatch):
+def _mimo_keep(trim_start=0.0, trim_end=10.0, *, title="Good clip"):
+    return AnalysisResult(
+        title=title,
+        description="A useful livestream highlight.",
+        tags=["live", "highlight"],
+        retain_recommendation=True,
+        quality_reason="video, audio, and danmaku all support keeping it",
+        judge_status="keep",
+        suggested_trim=TrimSuggestion(
+            trim_start=trim_start,
+            trim_end=trim_end,
+            reason="best continuous moment",
+        ),
+    )
+
+
+def test_analyze_candidate_sends_video_danmaku_and_duration_to_mimo(monkeypatch):
     from src.autoslice import candidate_analyzer
 
-    calls = {}
+    mimo_calls = []
 
+    def fake_mimo(**kwargs):
+        mimo_calls.append(kwargs)
+        return _mimo_keep()
+
+    monkeypatch.setattr(candidate_analyzer, "judge_candidate_with_mimo", fake_mimo)
     monkeypatch.setattr(
         candidate_analyzer,
         "analyze_audio",
         lambda *args, **kwargs: {
-            "transcript": "主播说了一段有信息量的话",
+            "transcript": "speaker explains the key moment",
             "segments": [
-                {"start": 0.0, "end": 2.5, "text": "主播说了一段"},
-                {"start": 2.5, "end": 5.0, "text": "有信息量的话"},
+                {"start": 0.0, "end": 2.5, "text": "speaker explains"},
+                {"start": 2.5, "end": 5.0, "text": "the key moment"},
             ],
         },
     )
 
-    def fake_judge(**kwargs):
-        calls.update(kwargs)
-        return JudgeResult(
-            retain=True,
-            retain_reason="内容完整且观众反应强烈",
-            title="值得保留的片段",
-            description="主播与观众围绕同一话题产生了有效互动。",
-            tags=["直播", "高能"],
-        )
-
-    monkeypatch.setattr(candidate_analyzer, "judge_and_title", fake_judge)
-
     result = candidate_analyzer.analyze_candidate(
         "clip.mp4",
-        "主播",
-        "哈哈哈 太真实了",
+        "artist",
+        "danmaku spike",
+        candidate_duration=20.0,
+        candidate_start=100.0,
+        candidate_end=120.0,
     )
 
-    assert calls["artist"] == "主播"
-    assert calls["transcript"] == "主播说了一段有信息量的话"
-    assert calls["danmaku_text"] == "哈哈哈 太真实了"
+    assert mimo_calls == [
+        {
+            "video_path": "clip.mp4",
+            "artist": "artist",
+            "danmaku_text": "danmaku spike",
+            "candidate_duration": 20.0,
+        }
+    ]
     assert result.judge_status == "keep"
     assert result.retain_recommendation is True
     assert [segment.text for segment in result.transcript_segments] == [
-        "主播说了一段",
-        "有信息量的话",
+        "speaker explains",
+        "the key moment",
     ]
 
 
-def test_analyze_candidate_does_not_call_judge_without_transcript(monkeypatch):
+def test_analyze_candidate_drops_before_whisper(monkeypatch):
     from src.autoslice import candidate_analyzer
 
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: AnalysisResult(
+            title="",
+            description="",
+            tags=[],
+            retain_recommendation=False,
+            quality_reason="not worth keeping",
+            judge_status="drop",
+        ),
+    )
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "analyze_audio",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Whisper must not run for MiMo drop")
+        ),
+    )
+
+    result = candidate_analyzer.analyze_candidate(
+        "clip.mp4",
+        "artist",
+        "danmaku",
+        candidate_duration=30.0,
+        candidate_start=100.0,
+        candidate_end=130.0,
+    )
+
+    assert result.judge_status == "drop"
+    assert result.retain_recommendation is False
+    assert result.quality_reason == "not worth keeping"
+
+
+def test_analyze_candidate_keeps_then_runs_whisper_on_mimo_trim(monkeypatch):
+    from src.autoslice import candidate_analyzer
+
+    audio_calls = []
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: _mimo_keep(trim_start=3.0, trim_end=9.5),
+    )
+
+    def fake_analyze_audio(video_path, model, **kwargs):
+        audio_calls.append((video_path, model, kwargs))
+        return {
+            "transcript": "speaker explains the key moment",
+            "segments": [
+                {"start": 0.0, "end": 2.0, "text": "speaker explains"},
+                {"start": 2.0, "end": 6.5, "text": "the key moment"},
+            ],
+        }
+
+    monkeypatch.setattr(candidate_analyzer, "analyze_audio", fake_analyze_audio)
+
+    result = candidate_analyzer.analyze_candidate(
+        "clip.mp4",
+        "artist",
+        "danmaku",
+        candidate_duration=20.0,
+        candidate_start=100.0,
+        candidate_end=120.0,
+    )
+
+    assert result.judge_status == "keep"
+    assert result.transcript == "speaker explains the key moment"
+    assert [segment.text for segment in result.transcript_segments] == [
+        "speaker explains",
+        "the key moment",
+    ]
+    assert audio_calls == [
+        (
+            "clip.mp4",
+            candidate_analyzer.MULTI_MODAL_WHISPER_MODEL,
+            {
+                "whisper_device": candidate_analyzer.WHISPER_DEVICE,
+                "whisper_compute_type": candidate_analyzer.WHISPER_COMPUTE_TYPE,
+                "start_seconds": 3.0,
+                "duration_seconds": 6.5,
+            },
+        )
+    ]
+    assert result.source_start == 103.0
+    assert result.source_end == 109.5
+    assert result.candidate_start == 100.0
+    assert result.candidate_end == 120.0
+
+
+@pytest.mark.parametrize(
+    ("trim_start", "trim_end", "error_text"),
+    [
+        (-1.0, 10.0, "starts before"),
+        (10.0, 10.0, "empty or reversed"),
+        (12.0, 14.0, "shorter than 5"),
+        (5.0, 25.0, "exceeds"),
+        (float("nan"), 10.0, "finite"),
+    ],
+)
+def test_analyze_candidate_rejects_invalid_mimo_trim_before_whisper(
+    monkeypatch,
+    trim_start,
+    trim_end,
+    error_text,
+):
+    from src.autoslice import candidate_analyzer
+
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: _mimo_keep(
+            trim_start=trim_start,
+            trim_end=trim_end,
+        ),
+    )
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "analyze_audio",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Whisper must not run for invalid MiMo trim")
+        ),
+    )
+
+    result = candidate_analyzer.analyze_candidate(
+        "clip.mp4",
+        "artist",
+        "danmaku",
+        candidate_duration=20.0,
+        candidate_start=100.0,
+        candidate_end=120.0,
+    )
+
+    assert result.judge_status == "judge_failed"
+    assert result.retain_recommendation is False
+    assert error_text in result.judge_error
+    assert result.suggested_trim is None
+    assert result.source_start == 100.0
+    assert result.source_end == 120.0
+
+
+def test_analyze_candidate_fails_closed_without_transcript(monkeypatch):
+    from src.autoslice import candidate_analyzer
+
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: _mimo_keep(),
+    )
     monkeypatch.setattr(
         candidate_analyzer,
         "analyze_audio",
         lambda *args, **kwargs: {"transcript": "", "segments": []},
     )
-    monkeypatch.setattr(
-        candidate_analyzer,
-        "judge_and_title",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("LLM must not run without ASR evidence")
-        ),
-    )
 
-    result = candidate_analyzer.analyze_candidate("clip.mp4", "主播", "弹幕")
+    result = candidate_analyzer.analyze_candidate("clip.mp4", "artist", "danmaku")
 
     assert result.judge_status == "judge_failed"
     assert result.retain_recommendation is False
@@ -75,24 +235,22 @@ def test_analyze_candidate_requires_valid_timestamped_segments(monkeypatch):
 
     monkeypatch.setattr(
         candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: _mimo_keep(),
+    )
+    monkeypatch.setattr(
+        candidate_analyzer,
         "analyze_audio",
         lambda *args, **kwargs: {
-            "transcript": "有文本但没有可靠时间戳",
+            "transcript": "valid words without valid timestamps",
             "segments": [
-                {"start": 2.0, "end": 1.0, "text": "无效"},
+                {"start": 2.0, "end": 1.0, "text": "invalid"},
                 {"start": 0.0, "end": 1.0, "text": ""},
             ],
         },
     )
-    monkeypatch.setattr(
-        candidate_analyzer,
-        "judge_and_title",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("LLM must not run without timestamped subtitles")
-        ),
-    )
 
-    result = candidate_analyzer.analyze_candidate("clip.mp4", "主播", "弹幕")
+    result = candidate_analyzer.analyze_candidate("clip.mp4", "artist", "danmaku")
 
     assert result.judge_status == "judge_failed"
     assert "timestamped" in result.judge_error.lower()
@@ -103,23 +261,19 @@ def test_analyze_candidate_rejects_keep_without_title(monkeypatch):
 
     monkeypatch.setattr(
         candidate_analyzer,
-        "analyze_audio",
-        lambda *args, **kwargs: {
-            "transcript": "有效转录",
-            "segments": [{"start": 0.0, "end": 1.0, "text": "有效转录"}],
-        },
+        "judge_candidate_with_mimo",
+        lambda **kwargs: _mimo_keep(title=""),
     )
     monkeypatch.setattr(
         candidate_analyzer,
-        "judge_and_title",
-        lambda **kwargs: JudgeResult(
-            retain=True,
-            retain_reason="值得保留",
-            title="",
-        ),
+        "analyze_audio",
+        lambda *args, **kwargs: {
+            "transcript": "valid transcript",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "valid transcript"}],
+        },
     )
 
-    result = candidate_analyzer.analyze_candidate("clip.mp4", "主播", "弹幕")
+    result = candidate_analyzer.analyze_candidate("clip.mp4", "artist", "danmaku")
 
     assert result.judge_status == "judge_failed"
     assert result.retain_recommendation is False

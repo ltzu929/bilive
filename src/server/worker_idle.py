@@ -18,7 +18,7 @@ def worker_is_busy(state: dict[str, Any]) -> bool:
         return True
     if int(state.get("pending_tasks") or 0) > 0:
         return True
-    if state.get("llm", {}).get("status") != "idle":
+    if state.get("llm", {}).get("status") == "requesting":
         return True
 
     upload = state.get("upload", {})

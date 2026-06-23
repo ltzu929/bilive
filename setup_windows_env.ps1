@@ -2,7 +2,7 @@ param(
     [switch]$Recreate,
     [switch]$Dev,
     [switch]$UpgradePip,
-    [switch]$SkipLlamaRuntime
+    [switch]$InstallLlamaRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,7 +46,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Windows environment contains dependency conflicts"
 }
 
-if (-not $SkipLlamaRuntime) {
+if ($InstallLlamaRuntime) {
     & (Join-Path $ProjectDir "install_llama_runtime.ps1")
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install the managed llama.cpp runtime"

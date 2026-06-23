@@ -85,8 +85,10 @@ def test_windows_environment_is_dedicated_and_pinned():
     assert "-m pip check" in text
     assert "[switch]$Dev" in text
     assert "requirements\\dev.txt" in text
+    assert "[switch]$InstallLlamaRuntime" in text
     assert "install_llama_runtime.ps1" in text
-    assert "[switch]$SkipLlamaRuntime" in text
+    assert "if ($InstallLlamaRuntime)" in text
+    assert "[switch]$SkipLlamaRuntime" not in text
     assert "faster-whisper==" in requirements
     assert "openai==" in requirements
     assert "fastapi==" in requirements
@@ -103,7 +105,9 @@ def test_windows_health_check_is_read_only_and_reports_all_dependencies():
     assert "snapshot_download" in text
     assert "integrity_check" in text
     assert "upload.lock" in text
-    assert "managed_llm" in text
+    assert "mimo" in text
+    assert "MIMO_API_KEY" in text
+    assert "managed_llm" not in text
     assert "lm_studio_port_1234" not in text
     assert '$env:PYTHONPATH = $ProjectDir' in text
     assert '$env:BILIVE_CONFIG' in text
@@ -121,7 +125,7 @@ def test_llama_runtime_installer_is_pinned_and_runtime_is_ignored():
     assert ".runtime/" in ignore
 
 
-def test_managed_llm_runtime_is_documented_without_lm_studio_setup():
+def test_mimo_runtime_is_documented_without_lm_studio_setup():
     readme = Path("README.md").read_text(encoding="utf-8")
     operations = Path("docs/operations.md").read_text(encoding="utf-8")
     architecture = Path("docs/architecture.md").read_text(encoding="utf-8")
@@ -129,13 +133,25 @@ def test_managed_llm_runtime_is_documented_without_lm_studio_setup():
     public_docs = "\n".join([readme, operations, architecture, runtime])
 
     assert "BILIVE_LM_STUDIO_PATH" not in public_docs
-    assert "E:\\AImodel\\lmstudio-community" in public_docs
-    assert "managed_runtime --smoke-test" in public_docs
-    assert "2236" in public_docs
-    assert "整批" in public_docs
-    assert "卸载" in public_docs
-    assert "按需启动" in public_docs
-    assert "15 分钟" in public_docs
+    assert "MIMO_API_KEY" in public_docs
+    assert "mimo-v2.5" in public_docs
+    assert "managed_runtime --smoke-test" not in public_docs
+    assert "llama-server.exe" not in readme
+    assert "2236" not in readme
     assert "pythonw.exe" in public_docs
-    assert "常驻控制面" not in public_docs
-    assert "Windows Worker API 常驻" not in public_docs
+
+
+def test_real_mimo_smoke_test_is_opt_in_and_never_uploads():
+    smoke_test = Path("tests/integration/test_mimo_api_smoke.py")
+    operations = Path("docs/operations.md").read_text(encoding="utf-8")
+
+    assert smoke_test.exists()
+    text = smoke_test.read_text(encoding="utf-8")
+    assert "@pytest.mark.integration" in text
+    assert "MIMO_API_KEY" in text
+    assert "BILIVE_MIMO_SMOKE_VIDEO" in text
+    assert "judge_candidate_with_mimo" in text
+    assert "src.upload" not in text
+    assert "upload_queue" not in text
+    assert "tests\\integration\\test_mimo_api_smoke.py" in operations
+    assert "-m integration" in operations

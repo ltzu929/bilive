@@ -165,17 +165,14 @@ def burn_subtitles_from_analysis(
     )
     try:
         srt_path.write_text(srt_text, encoding="utf-8")
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_path),
-            "-vf",
-            _subtitle_filter(srt_path, font_size=font_size, margin_v=margin_v),
-            "-c:a",
-            "copy",
-            str(temp_output),
-        ]
+        command = _burn_command(
+            video_path,
+            temp_output,
+            srt_path,
+            analysis,
+            font_size=font_size,
+            margin_v=margin_v,
+        )
         run(command, check=True, capture_output=True, text=True, encoding="utf-8")
         os.replace(temp_output, video_path)
         scan_log.info(f"Burned ASR subtitles into slice: {video_path}")
@@ -195,3 +192,54 @@ def burn_subtitles_from_analysis(
             srt_path=str(srt_path),
             message=str(exc),
         )
+
+
+def _burn_command(
+    video_path: Path,
+    temp_output: Path,
+    srt_path: Path,
+    analysis: AnalysisResult,
+    *,
+    font_size: int,
+    margin_v: int,
+) -> list[str]:
+    subtitle_filter = _subtitle_filter(srt_path, font_size=font_size, margin_v=margin_v)
+    trim = analysis.suggested_trim
+    if trim is None:
+        return [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            subtitle_filter,
+            "-c:a",
+            "copy",
+            str(temp_output),
+        ]
+
+    start = max(0.0, float(trim.trim_start))
+    duration = max(0.0, float(trim.trim_end) - start)
+    return [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        str(video_path),
+        "-t",
+        f"{duration:.3f}",
+        "-vf",
+        subtitle_filter,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        str(temp_output),
+    ]

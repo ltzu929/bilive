@@ -1,5 +1,4 @@
 import json
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 from src.server import watcher
@@ -216,21 +215,11 @@ def test_watcher_processes_action_jobs_without_video_markers(monkeypatch, tmp_pa
     assert calls == [videos.resolve()]
 
 
-def test_process_pending_videos_owns_one_managed_batch(monkeypatch, tmp_path):
+def test_process_pending_videos_does_not_start_legacy_managed_llm(monkeypatch, tmp_path):
     videos = tmp_path / "Videos"
     videos.mkdir()
-    events = []
 
-    @contextmanager
-    def recording_batch():
-        events.append("enter")
-        try:
-            yield
-        finally:
-            events.append("exit")
-
-    monkeypatch.setattr(watcher, "managed_llm_batch", recording_batch)
+    assert not hasattr(watcher, "managed_llm_batch")
     monkeypatch.setattr(watcher, "process_action_jobs", lambda _root: 0)
 
     assert watcher.process_pending_videos(videos) == 0
-    assert events == ["enter", "exit"]

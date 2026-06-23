@@ -19,13 +19,29 @@ def _analysis():
 
 
 def test_analyze_stage_requires_analysis_result():
+    calls = []
+
     result = analyze_stage(
         "clip.mp4",
         artist="artist",
         danmaku_text="danmaku",
-        analyzer=lambda *_args, **_kwargs: _analysis(),
+        candidate_start=100.0,
+        candidate_end=120.0,
+        candidate_duration=20.0,
+        analyzer=lambda *args, **kwargs: calls.append((args, kwargs)) or _analysis(),
     )
     assert result.judge_status == "keep"
+    assert calls == [
+        (
+            ("clip.mp4", "artist"),
+            {
+                "danmaku_text": "danmaku",
+                "candidate_start": 100.0,
+                "candidate_end": 120.0,
+                "candidate_duration": 20.0,
+            },
+        )
+    ]
 
 
 def test_subtitle_stage_returns_structured_failure():

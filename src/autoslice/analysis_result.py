@@ -47,11 +47,17 @@ class AnalysisResult:
     quality_reason: str = ""
     judge_status: str = "keep"
     judge_error: str = ""
+    model_name: str = ""
+    token_usage: Dict[str, Any] = field(default_factory=dict)
 
     # MCP 剪辑数据（待办功能使用）
     highlights: List[Highlight] = field(default_factory=list)
     emotion_peak_time: float = 0.0
     suggested_trim: Optional[TrimSuggestion] = None
+    candidate_start: Optional[float] = None
+    candidate_end: Optional[float] = None
+    source_start: Optional[float] = None
+    source_end: Optional[float] = None
     transcript: str = ""
     transcript_segments: List[TranscriptSegment] = field(default_factory=list)
 
@@ -94,9 +100,15 @@ class AnalysisResult:
             quality_reason=data.get("quality_reason", ""),
             judge_status=data.get("judge_status", "keep"),
             judge_error=data.get("judge_error", ""),
+            model_name=data.get("model_name", ""),
+            token_usage=data.get("token_usage", {}),
             highlights=highlights,
             emotion_peak_time=data.get("emotion_peak_time", 0.0),
             suggested_trim=suggested_trim,
+            candidate_start=data.get("candidate_start"),
+            candidate_end=data.get("candidate_end"),
+            source_start=data.get("source_start"),
+            source_end=data.get("source_end"),
             transcript=data.get("transcript", ""),
             transcript_segments=transcript_segments,
         )
@@ -130,6 +142,8 @@ class AnalysisResult:
             "quality_reason": self.quality_reason,
             "judge_status": self.judge_status,
             "judge_error": self.judge_error,
+            "model_name": self.model_name,
+            "token_usage": self.token_usage,
             "highlights": [
                 {"start": h.start, "end": h.end, "score": h.score, "desc": h.desc}
                 for h in self.highlights
@@ -140,6 +154,10 @@ class AnalysisResult:
                 "trim_end": self.suggested_trim.trim_end,
                 "reason": self.suggested_trim.reason
             } if self.suggested_trim else None,
+            "candidate_start": self.candidate_start,
+            "candidate_end": self.candidate_end,
+            "source_start": self.source_start,
+            "source_end": self.source_end,
             "transcript": self.transcript,
             "transcript_segments": [
                 {"start": s.start, "end": s.end, "text": s.text}

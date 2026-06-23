@@ -29,6 +29,7 @@ slice_config = config.get("slice", {})
 burst = slice_config.get("burst", {})
 judge = slice_config.get("llm_judge", {})
 multi_modal = slice_config.get("multi_modal", {})
+mimo = slice_config.get("mimo", {})
 analysis = slice_config.get("analysis", {})
 edit = slice_config.get("edit", {})
 
@@ -100,6 +101,13 @@ WHISPER_COMPUTE_TYPE = str(
 MULTI_MODAL_UNLOAD_AUDIO_MODEL = bool(
     multi_modal.get("unload_audio_model_after_analysis", True)
 )
+
+MIMO_MODEL = str(mimo.get("model", "mimo-v2.5"))
+MIMO_BASE_URL = str(mimo.get("base_url", "https://api.xiaomimimo.com/v1"))
+MIMO_FPS = float(mimo.get("fps", 1.0))
+MIMO_MEDIA_RESOLUTION = str(mimo.get("media_resolution", "default"))
+MIMO_TIMEOUT = float(mimo.get("timeout", 180))
+MIMO_MAX_BASE64_BYTES = int(mimo.get("max_base64_bytes", 48_000_000))
 
 OMNI_ENABLE_DEEP_ANALYSIS = bool(
     analysis.get("write_analysis_json", True)

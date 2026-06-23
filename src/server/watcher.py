@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from src.autoslice.mllm_sdk.managed_runtime import managed_llm_batch
 from src.burn.task_history import write_task_history
 from src.config.server_config import VIDEOS_DIR
 from src.log.logger import scan_log
@@ -122,8 +121,7 @@ def process_pending_videos(videos_dir: str | Path | None = None) -> int:
         scan_log.warning(f"Videos dir not found: {root}")
         return 0
 
-    with managed_llm_batch():
-        return _process_pending_root(root)
+    return _process_pending_root(root)
 
 
 def _process_pending_root(root: Path) -> int:

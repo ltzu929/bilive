@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bilive Studio · 切片工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260614-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260623-1" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -19,18 +19,18 @@
             <span class="nav-icon" data-icon="record"></span>
             <span class="nav-text">录播控制台</span>
           </a>
-          <a class="nav-item active" href="/tasks">
+          <a class="nav-item active" href="/tasks" data-view="tasks" aria-label="切片工作台">
             <span class="nav-icon" data-icon="scissor"></span>
             <span class="nav-text">切片</span>
           </a>
-          <span class="nav-item disabled" aria-disabled="true" title="上传">
+          <a class="nav-item" href="/uploads" data-view="uploads" title="上传中心">
             <span class="nav-icon" data-icon="upload"></span>
             <span class="nav-text">上传</span>
-          </span>
-          <span class="nav-item disabled" aria-disabled="true" title="设置">
+          </a>
+          <a class="nav-item" href="/settings" data-view="settings" title="系统设置">
             <span class="nav-icon" data-icon="setting"></span>
             <span class="nav-text">设置</span>
-          </span>
+          </a>
         </nav>
         <div class="sidebar-footer">
           <div class="sider-trigger" id="sider-toggle" role="button" tabindex="0" aria-label="展开侧栏">
@@ -41,6 +41,7 @@
       </aside>
 
       <main class="main">
+        <div id="tasks-view" class="app-view">
         <header class="studio-topbar toolbar">
           <div class="toolbar-left">
             <div class="title-line">
@@ -256,8 +257,76 @@
             <span id="burst-rank">-</span>
           </div>
         </section>
+        </div>
+
+        <div id="uploads-view" class="app-view hidden">
+          <header class="studio-topbar toolbar">
+            <div class="toolbar-left">
+              <div class="title-line"><h1>上传中心</h1><span id="upload-worker-pill" class="live-pill task-state-idle"><span class="live-dot"></span><span>读取中</span></span></div>
+              <p>Bilive Studio / 自动投稿 / 队列监控</p>
+            </div>
+            <div class="toolbar-controls">
+              <button id="upload-refresh-button" class="btn-secondary" type="button">刷新</button>
+              <button id="upload-wake-button" class="btn-primary" type="button">唤醒上传节点</button>
+            </div>
+          </header>
+          <section class="page management-page">
+            <div id="upload-error" class="error hidden"></div>
+            <section class="metric-strip" aria-label="上传统计">
+              <div class="metric-tile"><span>等待上传</span><strong id="upload-count-queued">0</strong><small>等待消费者领取</small></div>
+              <div class="metric-tile"><span>处理中</span><strong id="upload-count-active">0</strong><small>上传或投稿中</small></div>
+              <div class="metric-tile"><span>投稿成功</span><strong id="upload-count-published">0</strong><small>已获得 BV 号</small></div>
+              <div class="metric-tile"><span>失败</span><strong id="upload-count-failed">0</strong><small>需要检查或重试</small></div>
+            </section>
+            <section class="management-panel panel">
+              <div class="panel-header">
+                <div class="panel-title"><strong>投稿队列</strong><span id="upload-queue-count">0 个项目</span></div>
+                <label class="inline-filter"><span>状态</span><select id="upload-status-filter"><option value="all">全部</option><option value="queued">等待上传</option><option value="active">处理中</option><option value="published">已发布</option><option value="failed">失败</option></select></label>
+              </div>
+              <div id="upload-queue-list" class="upload-queue-list panel-body"><div class="task-empty">正在读取上传队列</div></div>
+            </section>
+          </section>
+        </div>
+
+        <div id="settings-view" class="app-view hidden">
+          <header class="studio-topbar toolbar">
+            <div class="toolbar-left"><div class="title-line"><h1>系统设置</h1></div><p>Bilive Studio / 处理链路 / 运行参数</p></div>
+            <div class="toolbar-controls"><button id="settings-save-button" class="btn-primary" type="button">保存界面偏好</button></div>
+          </header>
+          <section class="page management-page">
+            <div id="settings-message" class="notice hidden"></div>
+            <form id="settings-form" class="settings-layout">
+              <section class="settings-section panel">
+                <div class="panel-header"><div class="panel-title"><strong>切片检测</strong><span>当前生产配置，只读</span></div></div>
+                <div class="settings-grid panel-body">
+                  <label class="setting-field"><span>弹幕突增倍率</span><input id="setting-burst-ratio" readonly /></label>
+                  <label class="setting-field"><span>候选上下文</span><input id="setting-burst-context" readonly /></label>
+                  <label class="setting-field"><span>最多候选数</span><input id="setting-burst-top-n" readonly /></label>
+                  <label class="setting-field"><span>最小录像大小</span><input id="setting-min-video-size" readonly /></label>
+                </div>
+              </section>
+              <section class="settings-section panel">
+                <div class="panel-header"><div class="panel-title"><strong>模型运行时</strong><span>MiMo 判断与 Whisper 字幕</span></div></div>
+                <div class="settings-grid panel-body">
+                  <label class="setting-field"><span>MiMo 模型</span><input id="setting-mimo-model" readonly /></label>
+                  <label class="setting-field"><span>视频抽帧</span><input id="setting-mimo-fps" readonly /></label>
+                  <label class="setting-field"><span>API Key</span><input id="setting-mimo-key" readonly /></label>
+                  <label class="setting-field"><span>Whisper</span><input id="setting-whisper" readonly /></label>
+                </div>
+              </section>
+              <section class="settings-section panel settings-preferences">
+                <div class="panel-header"><div class="panel-title"><strong>界面偏好</strong><span>仅保存在当前浏览器</span></div></div>
+                <div class="settings-grid panel-body">
+                  <label class="setting-field"><span>自动刷新间隔</span><select id="pref-refresh-interval"><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">60 秒</option></select></label>
+                  <label class="setting-toggle"><input id="pref-compact-queue" type="checkbox" /><span><strong>紧凑队列</strong><small>减少每条录像的垂直占用</small></span></label>
+                  <label class="setting-toggle"><input id="pref-collapse-sidebar" type="checkbox" /><span><strong>默认收起侧栏</strong><small>在下次打开时沿用</small></span></label>
+                </div>
+              </section>
+            </form>
+          </section>
+        </div>
       </main>
     </div>
-    <script src="/app.js?v=20260614-3"></script>
+    <script src="/app.js?v=20260623-2"></script>
   </body>
 </html>

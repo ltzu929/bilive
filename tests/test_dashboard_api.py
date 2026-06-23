@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import time
 from types import SimpleNamespace
 
@@ -97,6 +98,33 @@ def test_normalize_feedback_preserves_reviewed_at_and_review_source(videos_root,
     })
     assert result["reviewed_at"] == "2026-06-01T12:00:00Z"
     assert result["review_source"] == "cli"
+
+
+def test_media_range_response_streams_instead_of_buffering(tmp_path):
+    from fastapi import Request
+    from fastapi.responses import StreamingResponse
+
+    from src.dashboard.app import media_response
+
+    media = tmp_path / "large.mp4"
+    media.write_bytes(b"0123456789")
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/api/media/test",
+        "headers": [(b"range", b"bytes=0-")],
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 1234),
+        "scheme": "http",
+        "http_version": "1.1",
+    })
+
+    response = media_response(media, request)
+
+    assert isinstance(response, StreamingResponse)
+    assert response.status_code == 206
+    assert response.headers["content-length"] == "10"
 
 
 @pytest.mark.anyio
@@ -311,6 +339,57 @@ async def test_source_recordings_api_lists_summary_counts(videos_root, dashboard
     body = response.json()
     assert body[0]["summary_counts"]["keep"] == 1
     assert body[0]["source_name"] == "22384516_20260602-12-56-49.mp4"
+
+
+def test_upload_path_parts_normalizes_windows_paths():
+    from src.dashboard.app import upload_path_parts
+
+    name, room = upload_path_parts(
+        r"D:\alldata\pi\bilive\Videos\22384516\clip.mp4"
+    )
+
+    assert name == "clip.mp4"
+    assert room == "22384516"
+
+
+@pytest.mark.anyio
+async def test_dashboard_secondary_pages_and_runtime_apis(
+    videos_root,
+    dashboard_client,
+    monkeypatch,
+):
+    from src.dashboard import app as dashboard_app
+
+    monkeypatch.setattr(
+        dashboard_app,
+        "read_upload_dashboard",
+        lambda: {
+            "queue_counts": {"queued": 1, "published": 2, "failed": 0, "total": 3},
+            "items": [{"id": 1, "name": "clip.mp4", "status": "queued"}],
+            "worker": {"process_status": "running"},
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_app,
+        "read_dashboard_settings",
+        lambda: {
+            "slice": {"burst_ratio": 3.0, "burst_context": 60},
+            "mimo": {"model": "mimo-v2.5", "configured": True},
+            "whisper": {"model": "large-v3", "device": "cpu"},
+            "upload": {"auto_start": True, "max_attempts": 3},
+        },
+    )
+
+    async with dashboard_client(videos_root, static_dir=Path("frontend")) as client:
+        uploads_page = await client.get("/uploads")
+        settings_page = await client.get("/settings")
+        uploads = await client.get("/api/upload-dashboard")
+        settings = await client.get("/api/dashboard-settings")
+
+    assert uploads_page.status_code == 200
+    assert settings_page.status_code == 200
+    assert uploads.json()["items"][0]["name"] == "clip.mp4"
+    assert settings.json()["mimo"]["model"] == "mimo-v2.5"
 
 
 @pytest.mark.anyio

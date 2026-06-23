@@ -22,9 +22,19 @@ def analyze_stage(
     *,
     artist: str,
     danmaku_text: str,
+    candidate_start: float | None = None,
+    candidate_end: float | None = None,
+    candidate_duration: float | None = None,
     analyzer: Callable[..., Any],
 ) -> AnalysisResult:
-    result = analyzer(video_path, artist, danmaku_text=danmaku_text)
+    result = analyzer(
+        video_path,
+        artist,
+        danmaku_text=danmaku_text,
+        candidate_start=candidate_start,
+        candidate_end=candidate_end,
+        candidate_duration=candidate_duration,
+    )
     if not isinstance(result, AnalysisResult):
         raise TypeError("candidate analyzer must return AnalysisResult")
     return result

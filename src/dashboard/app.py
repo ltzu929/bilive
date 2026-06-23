@@ -3,7 +3,7 @@
 import mimetypes
 import os
 import ipaddress
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, Iterator
 from urllib.parse import urlsplit
 
@@ -77,6 +77,83 @@ def process_feedback_directory(*args, **kwargs):
     from src.burn.feedback_refine import process_feedback_directory as process
 
     return process(*args, **kwargs)
+
+
+def upload_path_parts(value: str) -> tuple[str, str]:
+    text = str(value or "")
+    path = PureWindowsPath(text) if "\\" in text else Path(text)
+    return path.name or "-", path.parent.name or "-"
+
+
+def read_upload_dashboard() -> Dict[str, Any]:
+    from src.db.conn import get_upload_queue_counts, list_upload_queue
+    from src.server.upload_control import upload_worker_status
+
+    try:
+        counts = get_upload_queue_counts()
+        rows = list_upload_queue()
+        database = "ready"
+    except Exception as exc:
+        counts = {"queued": 0, "uploading": 0, "uploaded": 0, "publishing": 0, "published": 0, "failed": 0, "total": 0}
+        rows = []
+        database = f"unavailable: {exc}"
+
+    items = []
+    for row in reversed(rows):
+        name, room = upload_path_parts(str(row.get("video_path") or ""))
+        items.append({
+            "id": row.get("id"),
+            "name": name,
+            "room": room,
+            "status": str(row.get("status") or "queued"),
+            "attempts": int(row.get("attempts") or 0),
+            "next_attempt_at": float(row.get("next_attempt_at") or 0),
+            "last_error": str(row.get("last_error") or ""),
+            "bvid": str(row.get("bvid") or ""),
+            "updated_at": float(row.get("updated_at") or 0),
+        })
+    return {
+        "queue_counts": counts,
+        "items": items,
+        "database": database,
+        "worker": upload_worker_status(),
+    }
+
+
+def read_dashboard_settings() -> Dict[str, Any]:
+    from src import config
+
+    return {
+        "slice": {
+            "min_video_size_mb": config.MIN_VIDEO_SIZE,
+            "burst_ratio": config.BURST_RATIO,
+            "burst_window": config.BURST_WINDOW,
+            "burst_context": config.BURST_CONTEXT,
+            "burst_merge_gap": config.BURST_MERGE_GAP,
+            "burst_top_n": config.BURST_TOP_N,
+        },
+        "mimo": {
+            "model": config.MIMO_MODEL,
+            "fps": config.MIMO_FPS,
+            "media_resolution": config.MIMO_MEDIA_RESOLUTION,
+            "timeout": config.MIMO_TIMEOUT,
+            "max_base64_bytes": config.MIMO_MAX_BASE64_BYTES,
+            "configured": True if os.environ.get("MIMO_API_KEY") else None,
+        },
+        "whisper": {
+            "model": config.MULTI_MODAL_WHISPER_MODEL,
+            "engine": config.WHISPER_ENGINE,
+            "device": config.WHISPER_DEVICE,
+            "compute_type": config.WHISPER_COMPUTE_TYPE,
+        },
+        "upload": {
+            "auto_start": config.UPLOAD_AUTO_START,
+            "poll_interval_seconds": config.UPLOAD_POLL_INTERVAL_SECONDS,
+            "max_attempts": config.UPLOAD_MAX_ATTEMPTS,
+            "delete_after_success": config.UPLOAD_DELETE_AFTER_SUCCESS,
+            "line": config.UPLOAD_LINE,
+        },
+    }
 
 
 def default_videos_root() -> Path:
@@ -155,11 +232,8 @@ def media_response(
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Content-Length": str(content_length),
     }
-    with path.open("rb") as file:
-        file.seek(start)
-        content = file.read(content_length)
-    return Response(
-        content,
+    return StreamingResponse(
+        iter_file_range(path, start, end),
         status_code=206,
         media_type=response_media_type,
         headers=headers,
@@ -316,6 +390,14 @@ def create_app(
         result["status_url"] = f"/api/jobs/{result['job']['job_id']}"
         result["worker_trigger"] = trigger_worker(1)
         return result
+
+    @app.get("/api/upload-dashboard")
+    async def get_upload_dashboard() -> Dict[str, Any]:
+        return read_upload_dashboard()
+
+    @app.get("/api/dashboard-settings")
+    async def get_dashboard_settings() -> Dict[str, Any]:
+        return read_dashboard_settings()
 
     @app.get("/api/rooms")
     async def list_rooms() -> list[Dict[str, Any]]:
@@ -546,7 +628,9 @@ def create_app(
             if index_path.is_file():
 
                 @app.get("/tasks", include_in_schema=False)
-                async def tasks_page() -> FileResponse:
+                @app.get("/uploads", include_in_schema=False)
+                @app.get("/settings", include_in_schema=False)
+                async def workspace_page() -> FileResponse:
                     return FileResponse(index_path)
 
             app.mount("/", StaticFiles(directory=static_path, html=True), name="web")
