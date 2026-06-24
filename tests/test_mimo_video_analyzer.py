@@ -520,3 +520,51 @@ def test_mimo_prompt_describes_chat_slice_editor_role():
     assert "弹幕峰值只是候选来源" in prompt
     assert "clips" in prompt
     assert "B 站口语标题" in prompt
+
+
+def test_judge_candidate_clips_with_mimo_returns_multiple(monkeypatch):
+    from src.autoslice.mllm_sdk import mimo_video
+    from src.autoslice.mllm_sdk.mimo_video import EncodedMimoVideo
+
+    class Message:
+        content = (
+            '{"clips":[{"decision":"keep","clip_type":"story",'
+            '"topic_summary":"完整故事","why_viewer_would_watch":"有铺垫和落点",'
+            '"reason":"完整","title":"主播讲了一个离谱故事",'
+            '"description":"主播从弹幕聊到一次经历。","tags":["直播切片"],'
+            '"quality_score":0.9,"completeness_score":0.86,"confidence":0.87,'
+            '"trim_start":10,"trim_end":70}]}'
+        )
+
+    class Choice:
+        message = Message()
+
+    class Completion:
+        choices = [Choice()]
+        usage = {"total_tokens": 100}
+        model = "mimo-v2.5"
+
+    class Completions:
+        def create(self, **kwargs):
+            return Completion()
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        chat = Chat()
+
+    monkeypatch.setenv("MIMO_API_KEY", "key")
+
+    results = mimo_video.judge_candidate_clips_with_mimo(
+        video_path="candidate.mp4",
+        artist="主播",
+        danmaku_text="弹幕",
+        candidate_duration=240.0,
+        client_factory=lambda **kwargs: Client(),
+        encoder=lambda *args, **kwargs: EncodedMimoVideo("data:video/mp4;base64,AAAA", 4),
+    )
+
+    assert len(results) == 1
+    assert results[0].title == "主播讲了一个离谱故事"
+    assert results[0].token_usage == {"total_tokens": 100}

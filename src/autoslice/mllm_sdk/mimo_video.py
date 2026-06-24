@@ -156,7 +156,7 @@ def _double_bitrate(value: str) -> str:
     return value
 
 
-def judge_candidate_with_mimo(
+def judge_candidate_clips_with_mimo(
     *,
     video_path: str,
     artist: str,
@@ -170,12 +170,12 @@ def judge_candidate_with_mimo(
     max_base64_bytes: int = MIMO_MAX_BASE64_BYTES,
     client_factory=OpenAI,
     encoder: Callable[..., EncodedMimoVideo] = encode_video_for_mimo,
-) -> AnalysisResult:
+) -> list[AnalysisResult]:
     api_key = os.environ.get("MIMO_API_KEY")
     if not api_key:
         reason = "MIMO_API_KEY is not set"
         _set_status("error", error=reason)
-        return _failed_result(artist, reason, model=model)
+        return [_failed_result(artist, reason, model=model)]
 
     try:
         encoded = encoder(video_path, max_base64_bytes=max_base64_bytes)
@@ -187,9 +187,8 @@ def judge_candidate_with_mimo(
                 {
                     "role": "system",
                     "content": (
-                        "You judge livestream highlight candidates. "
-                        "Use video frames, audio, danmaku text, and timing together. "
-                        "Return only one JSON object."
+                        "你是直播聊天切片的短视频剪辑师和严格主编。"
+                        "根据视频、音频、弹幕和时间关系，返回严格 JSON。"
                     ),
                 },
                 {
@@ -212,7 +211,7 @@ def judge_candidate_with_mimo(
                     ],
                 },
             ],
-            max_completion_tokens=1024,
+            max_completion_tokens=2048,
             timeout=timeout,
             response_format={"type": "json_object"},
             extra_body={"thinking": {"type": "disabled"}},
@@ -221,7 +220,7 @@ def judge_candidate_with_mimo(
         reason = f"MiMo failed: {exc}"
         _set_status("error", error=reason)
         scan_log.warning(reason)
-        return _failed_result(artist, reason, model=model)
+        return [_failed_result(artist, reason, model=model)]
 
     try:
         if not completion.choices:
@@ -230,20 +229,65 @@ def judge_candidate_with_mimo(
         parsed = _extract_json(str(getattr(message, "content", "") or ""))
         if parsed is None:
             raise ValueError("MiMo JSON parse failed")
-        result = _analysis_from_mimo_dict(parsed, artist=artist, model=model)
-        result.token_usage = _usage_to_dict(getattr(completion, "usage", None))
-        result.model_name = str(getattr(completion, "model", model) or model)
+        results = _analysis_list_from_mimo_dict(parsed, artist=artist, model=model)
+        usage = _usage_to_dict(getattr(completion, "usage", None))
+        response_model = str(getattr(completion, "model", model) or model)
+        for result in results:
+            result.token_usage = usage
+            result.model_name = response_model
     except Exception as exc:
         reason = f"MiMo response failed: {exc}"
         _set_status("error", error=reason)
-        return _failed_result(artist, reason, model=model)
+        return [_failed_result(artist, reason, model=model)]
 
-    if result.judge_status == "judge_failed":
-        _set_status("error", error=result.judge_error)
+    failed = next((item for item in results if item.judge_status == "judge_failed"), None)
+    if failed is not None:
+        _set_status("error", error=failed.judge_error or failed.quality_reason)
     else:
         _set_status("idle")
-    return result
+    return results
 
+
+def judge_candidate_with_mimo(
+    *,
+    video_path: str,
+    artist: str,
+    danmaku_text: str,
+    candidate_duration: float,
+    model: str = MIMO_MODEL,
+    base_url: str = MIMO_BASE_URL,
+    fps: float = MIMO_FPS,
+    media_resolution: str = MIMO_MEDIA_RESOLUTION,
+    timeout: float = MIMO_TIMEOUT,
+    max_base64_bytes: int = MIMO_MAX_BASE64_BYTES,
+    client_factory=OpenAI,
+    encoder: Callable[..., EncodedMimoVideo] = encode_video_for_mimo,
+) -> AnalysisResult:
+    results = judge_candidate_clips_with_mimo(
+        video_path=video_path,
+        artist=artist,
+        danmaku_text=danmaku_text,
+        candidate_duration=candidate_duration,
+        model=model,
+        base_url=base_url,
+        fps=fps,
+        media_resolution=media_resolution,
+        timeout=timeout,
+        max_base64_bytes=max_base64_bytes,
+        client_factory=client_factory,
+        encoder=encoder,
+    )
+    if not results:
+        return AnalysisResult(
+            title=f"{artist} candidate",
+            description="Pending manual review",
+            tags=["live"],
+            retain_recommendation=False,
+            quality_reason="MiMo found no postable chat clips",
+            judge_status="drop",
+            model_name=model,
+        )
+    return results[0]
 
 def _build_prompt(*, artist: str, danmaku_text: str, candidate_duration: float) -> str:
     return (
@@ -424,7 +468,11 @@ def _analysis_list_from_mimo_dict(
     clips = data.get("clips")
     if clips is None:
         single = _analysis_from_mimo_dict(data, artist=artist, model=model)
-        return [single] if single.judge_status == "keep" else []
+        if single.judge_status == "keep":
+            return [single]
+        if single.judge_status == "judge_failed":
+            return [single]
+        return []
     if not isinstance(clips, list):
         return [
             _failed_result(
