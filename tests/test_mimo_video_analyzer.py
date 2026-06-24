@@ -447,3 +447,60 @@ def test_analysis_result_round_trips_chat_clip_fields():
     assert restored.why_viewer_would_watch == "陌生观众能快速理解包袱并看到主播反应"
     assert restored.completeness_score == 0.87
     assert restored.confidence == 0.9
+
+
+def test_mimo_multi_clip_response_parses_kept_clips():
+    from src.autoslice.mllm_sdk.mimo_video import _analysis_list_from_mimo_dict
+
+    data = {
+        "clips": [
+            {
+                "decision": "keep",
+                "clip_type": "story",
+                "topic_summary": "主播讲第一次遇到离谱弹幕",
+                "why_viewer_would_watch": "有完整铺垫、反应和收束",
+                "reason": "完整聊天短片",
+                "title": "这条弹幕让主播回忆起离谱往事",
+                "description": "主播从弹幕问题聊到一次离谱经历。",
+                "tags": ["直播切片", "聊天", "故事"],
+                "quality_score": 0.93,
+                "completeness_score": 0.9,
+                "confidence": 0.88,
+                "trim_start": 20.0,
+                "trim_end": 82.0,
+            },
+            {
+                "decision": "keep",
+                "clip_type": "emotional_reaction",
+                "topic_summary": "主播被观众一句话逗笑",
+                "why_viewer_would_watch": "笑点清楚，结尾自然",
+                "reason": "有明确情绪反应",
+                "title": "弹幕一句话把主播整笑了",
+                "description": "主播接住弹幕玩笑并自然收住。",
+                "tags": ["直播切片", "弹幕互动"],
+                "quality_score": 0.89,
+                "completeness_score": 0.85,
+                "confidence": 0.84,
+                "trim_start": 120.0,
+                "trim_end": 162.0,
+            },
+        ]
+    }
+
+    results = _analysis_list_from_mimo_dict(data, artist="主播", model="mimo-v2.5")
+
+    assert [item.title for item in results] == [
+        "这条弹幕让主播回忆起离谱往事",
+        "弹幕一句话把主播整笑了",
+    ]
+    assert results[0].clip_type == "story"
+    assert results[0].suggested_trim.trim_start == 20.0
+    assert results[1].confidence == 0.84
+
+
+def test_mimo_multi_clip_response_drops_empty_clip_list():
+    from src.autoslice.mllm_sdk.mimo_video import _analysis_list_from_mimo_dict
+
+    results = _analysis_list_from_mimo_dict({"clips": []}, artist="主播", model="mimo-v2.5")
+
+    assert results == []

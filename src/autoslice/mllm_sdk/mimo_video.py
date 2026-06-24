@@ -407,6 +407,62 @@ def _analysis_from_mimo_dict(
     )
 
 
+def _analysis_list_from_mimo_dict(
+    data: dict[str, Any],
+    *,
+    artist: str,
+    model: str,
+) -> list[AnalysisResult]:
+    clips = data.get("clips")
+    if clips is None:
+        single = _analysis_from_mimo_dict(data, artist=artist, model=model)
+        return [single] if single.judge_status == "keep" else []
+    if not isinstance(clips, list):
+        return [
+            _failed_result(
+                artist,
+                "MiMo response clips must be an array",
+                model=model,
+            )
+        ]
+
+    results: list[AnalysisResult] = []
+    for index, clip in enumerate(clips, start=1):
+        if not isinstance(clip, dict):
+            results.append(
+                _failed_result(
+                    artist,
+                    f"MiMo clip #{index} must be an object",
+                    model=model,
+                )
+            )
+            continue
+        result = _analysis_from_mimo_dict(clip, artist=artist, model=model)
+        if result.judge_status == "keep":
+            result.clip_type = str(clip.get("clip_type") or "").strip()
+            result.topic_summary = str(clip.get("topic_summary") or "").strip()
+            result.why_viewer_would_watch = str(
+                clip.get("why_viewer_would_watch") or ""
+            ).strip()
+            result.completeness_score = _bounded_float(
+                clip.get("completeness_score"),
+                default=0.0,
+            )
+            result.confidence = _bounded_float(clip.get("confidence"), default=0.0)
+            results.append(result)
+    return results
+
+
+def _bounded_float(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(0.0, min(1.0, parsed))
+
+
 def _usage_to_dict(usage: Any) -> dict[str, Any]:
     if usage is None:
         return {}
