@@ -419,3 +419,31 @@ def test_analysis_result_round_trips_mimo_audit_fields():
     assert restored.candidate_end == 120.0
     assert restored.source_start == 102.0
     assert restored.source_end == 108.0
+
+
+def test_analysis_result_round_trips_chat_clip_fields():
+    from src.autoslice.analysis_result import AnalysisResult, TrimSuggestion
+
+    result = AnalysisResult(
+        title="弹幕一句话把主播整不会了",
+        description="主播回应弹幕提问时被一句话逗笑，随后接梗收住。",
+        tags=["直播切片", "聊天", "弹幕互动"],
+        quality_score=0.91,
+        retain_recommendation=True,
+        quality_reason="完整互动，有铺垫和落点",
+        judge_status="keep",
+        suggested_trim=TrimSuggestion(12.0, 64.0, "best standalone clip"),
+        clip_type="audience_interaction",
+        topic_summary="弹幕一句话引出主播接梗",
+        why_viewer_would_watch="陌生观众能快速理解包袱并看到主播反应",
+        completeness_score=0.87,
+        confidence=0.9,
+    )
+
+    restored = AnalysisResult.from_dict(result.to_dict())
+
+    assert restored.clip_type == "audience_interaction"
+    assert restored.topic_summary == "弹幕一句话引出主播接梗"
+    assert restored.why_viewer_would_watch == "陌生观众能快速理解包袱并看到主播反应"
+    assert restored.completeness_score == 0.87
+    assert restored.confidence == 0.9

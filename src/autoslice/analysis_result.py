@@ -49,6 +49,11 @@ class AnalysisResult:
     judge_error: str = ""
     model_name: str = ""
     token_usage: Dict[str, Any] = field(default_factory=dict)
+    clip_type: str = ""
+    topic_summary: str = ""
+    why_viewer_would_watch: str = ""
+    completeness_score: float = 0.0
+    confidence: float = 0.0
 
     # MCP 剪辑数据（待办功能使用）
     highlights: List[Highlight] = field(default_factory=list)
@@ -102,6 +107,11 @@ class AnalysisResult:
             judge_error=data.get("judge_error", ""),
             model_name=data.get("model_name", ""),
             token_usage=data.get("token_usage", {}),
+            clip_type=data.get("clip_type", ""),
+            topic_summary=data.get("topic_summary", ""),
+            why_viewer_would_watch=data.get("why_viewer_would_watch", ""),
+            completeness_score=data.get("completeness_score", 0.0),
+            confidence=data.get("confidence", 0.0),
             highlights=highlights,
             emotion_peak_time=data.get("emotion_peak_time", 0.0),
             suggested_trim=suggested_trim,
@@ -144,6 +154,11 @@ class AnalysisResult:
             "judge_error": self.judge_error,
             "model_name": self.model_name,
             "token_usage": self.token_usage,
+            "clip_type": self.clip_type,
+            "topic_summary": self.topic_summary,
+            "why_viewer_would_watch": self.why_viewer_would_watch,
+            "completeness_score": self.completeness_score,
+            "confidence": self.confidence,
             "highlights": [
                 {"start": h.start, "end": h.end, "score": h.score, "desc": h.desc}
                 for h in self.highlights
