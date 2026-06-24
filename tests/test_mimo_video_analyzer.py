@@ -504,3 +504,19 @@ def test_mimo_multi_clip_response_drops_empty_clip_list():
     results = _analysis_list_from_mimo_dict({"clips": []}, artist="主播", model="mimo-v2.5")
 
     assert results == []
+
+
+def test_mimo_prompt_describes_chat_slice_editor_role():
+    from src.autoslice.mllm_sdk.mimo_video import _build_prompt
+
+    prompt = _build_prompt(
+        artist="主播",
+        danmaku_text="哈哈哈 主播被整不会了",
+        candidate_duration=240.0,
+    )
+
+    assert "短视频剪辑师" in prompt
+    assert "严格主编" in prompt
+    assert "弹幕峰值只是候选来源" in prompt
+    assert "clips" in prompt
+    assert "B 站口语标题" in prompt
