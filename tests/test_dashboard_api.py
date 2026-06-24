@@ -1097,3 +1097,13 @@ async def test_refine_run_does_not_enqueue_upload_by_default(
         "upload_queued": False,
     }
     assert calls == [(videos_root, False, False)]
+
+
+@pytest.mark.anyio
+async def test_slice_options_accept_chat_context_120(videos_root, dashboard_client):
+    async with dashboard_client(videos_root) as client:
+        response = await client.post(
+            "/api/slice/start",
+            json={"slice_options": {"burst_context": 120}},
+        )
+    assert response.status_code != 400

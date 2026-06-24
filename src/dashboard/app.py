@@ -350,9 +350,9 @@ def create_app(
                 validated[name] = value
 
         if "burst_context" in opts:
-            context = _int_option("burst_context", 30, 90)
-            if context not in (30, 45, 60, 90):
-                raise HTTPException(status_code=400, detail="burst_context must be 30/45/60/90")
+            context = _int_option("burst_context", 30, 120)
+            if context not in (30, 45, 60, 90, 120):
+                raise HTTPException(status_code=400, detail="burst_context must be 30/45/60/90/120")
             validated["burst_context"] = context
         return validated if validated else None
 

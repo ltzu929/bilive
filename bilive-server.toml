@@ -28,7 +28,7 @@ min_video_size = 20
 [slice.burst]
 burst_ratio = 3.0
 burst_window = 10
-burst_context = 60
+burst_context = 120
 burst_merge_gap = 5
 burst_top_n = 3
 
