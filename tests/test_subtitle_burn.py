@@ -246,3 +246,31 @@ def test_plain_transcript_fallback_uses_short_phrase_segments():
     ]
     assert all(len(segment.text) <= 14 for segment in segments)
     assert all(segment.end - segment.start <= 3.0 for segment in segments)
+
+
+def test_burn_subtitles_can_write_to_separate_output_path(tmp_path):
+    from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment, TrimSuggestion
+    from src.burn.subtitle_burn import burn_subtitles_from_analysis
+
+    source = tmp_path / "candidate.mp4"
+    output = tmp_path / "final_clip.mp4"
+    source.write_bytes(b"candidate")
+    analysis = AnalysisResult(
+        title="Clip",
+        description="Description",
+        transcript_segments=[TranscriptSegment(start=0.0, end=1.0, text="字幕")],
+        suggested_trim=TrimSuggestion(2.0, 8.0, "clip"),
+    )
+
+    commands = []
+
+    def fake_run(command, check, capture_output, text, encoding):
+        commands.append(command)
+        output.write_bytes(b"rendered")
+
+    result = burn_subtitles_from_analysis(source, analysis, output_path=output, run=fake_run)
+
+    assert result.burned is True
+    assert source.read_bytes() == b"candidate"
+    assert output.read_bytes() == b"rendered"
+    assert commands[0][-1] == str(output)

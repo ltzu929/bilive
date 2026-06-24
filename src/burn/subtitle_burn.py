@@ -135,6 +135,7 @@ def burn_subtitles_from_analysis(
     video_path: str | Path,
     analysis: AnalysisResult,
     *,
+    output_path: str | Path | None = None,
     font_size: int = 20,
     margin_v: int = 60,
     run=subprocess.run,
@@ -142,6 +143,7 @@ def burn_subtitles_from_analysis(
     allow_plain_transcript_fallback: bool = False,
 ) -> BurnSubtitleResult:
     video_path = Path(video_path)
+    final_output = Path(output_path) if output_path is not None else video_path
     srt_text = segments_to_srt(analysis.transcript_segments)
     if not srt_text and allow_plain_transcript_fallback and analysis.transcript:
         duration = (
@@ -155,13 +157,15 @@ def burn_subtitles_from_analysis(
     if not srt_text:
         return BurnSubtitleResult(
             burned=False,
-            video_path=str(video_path),
+            video_path=str(final_output),
             message="no valid timestamped transcript segments",
         )
 
     srt_path = video_path.with_name(f"{video_path.stem}_asr.srt")
-    temp_output = video_path.with_name(
-        f"{video_path.stem}_subtitled.tmp{video_path.suffix}"
+    temp_output = (
+        final_output
+        if output_path is not None
+        else video_path.with_name(f"{video_path.stem}_subtitled.tmp{video_path.suffix}")
     )
     try:
         srt_path.write_text(srt_text, encoding="utf-8")
@@ -174,11 +178,12 @@ def burn_subtitles_from_analysis(
             margin_v=margin_v,
         )
         run(command, check=True, capture_output=True, text=True, encoding="utf-8")
-        os.replace(temp_output, video_path)
+        if output_path is None:
+            os.replace(temp_output, video_path)
         scan_log.info(f"Burned ASR subtitles into slice: {video_path}")
         return BurnSubtitleResult(
             burned=True,
-            video_path=str(video_path),
+            video_path=str(final_output),
             srt_path=str(srt_path),
             message="subtitles burned",
         )
@@ -188,7 +193,7 @@ def burn_subtitles_from_analysis(
         scan_log.warning(f"Failed to burn ASR subtitles for {video_path}: {exc}")
         return BurnSubtitleResult(
             burned=False,
-            video_path=str(video_path),
+            video_path=str(final_output),
             srt_path=str(srt_path),
             message=str(exc),
         )
