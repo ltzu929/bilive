@@ -8,7 +8,10 @@ from src.autoslice.mllm_sdk.audio_analyzer import (
     analyze_audio,
     unload_asr_models,
 )
-from src.autoslice.mllm_sdk.mimo_video import judge_candidate_with_mimo
+from src.autoslice.mllm_sdk.mimo_video import (
+    judge_candidate_clips_with_mimo,
+    judge_candidate_with_mimo,
+)
 from src.config import (
     MULTI_MODAL_UNLOAD_AUDIO_MODEL,
     MULTI_MODAL_WHISPER_MODEL,
@@ -16,6 +19,101 @@ from src.config import (
     WHISPER_DEVICE,
 )
 
+
+def analyze_candidate_clips(
+    video_path: str,
+    artist: str,
+    danmaku_text: str,
+    *,
+    candidate_start: float = 0.0,
+    candidate_end: float | None = None,
+    candidate_duration: float | None = None,
+) -> list[AnalysisResult]:
+    duration = _resolve_candidate_duration(
+        candidate_start,
+        candidate_end,
+        candidate_duration,
+    )
+    results = judge_candidate_clips_with_mimo(
+        video_path=video_path,
+        artist=artist,
+        danmaku_text=str(danmaku_text or ""),
+        candidate_duration=duration,
+    )
+
+    analyzed: list[AnalysisResult] = []
+    for result in results:
+        _annotate_ranges(
+            result,
+            candidate_start,
+            candidate_end,
+            duration,
+            include_trim=False,
+        )
+        if result.judge_status == "judge_failed":
+            analyzed.append(result)
+            continue
+        if result.judge_status == "drop" or not result.retain_recommendation:
+            result.judge_status = "drop"
+            result.retain_recommendation = False
+            analyzed.append(result)
+            continue
+        if not str(result.title or "").strip():
+            analyzed.append(
+                _failed_result(
+                    artist,
+                    "MiMo keep response did not include a title",
+                    base=result,
+                )
+            )
+            continue
+        trim_error = _validate_trim(result, duration)
+        if trim_error:
+            result.suggested_trim = None
+            analyzed.append(_failed_result(artist, trim_error, base=result))
+            continue
+
+        trim = result.suggested_trim
+        assert trim is not None
+        _annotate_ranges(
+            result,
+            candidate_start,
+            candidate_end,
+            duration,
+            include_trim=True,
+        )
+        try:
+            audio = analyze_audio(
+                video_path,
+                MULTI_MODAL_WHISPER_MODEL,
+                whisper_device=WHISPER_DEVICE,
+                whisper_compute_type=WHISPER_COMPUTE_TYPE,
+                start_seconds=float(trim.trim_start),
+                duration_seconds=float(trim.trim_end - trim.trim_start),
+            )
+        except Exception as exc:
+            analyzed.append(_failed_result(artist, f"ASR failed: {exc}", base=result))
+            continue
+
+        transcript = str(audio.get("transcript") or "").strip()
+        if not transcript:
+            detail = str(audio.get("error") or "ASR produced no transcript")
+            analyzed.append(_failed_result(artist, detail, base=result))
+            continue
+        segments = _valid_transcript_segments(audio.get("segments"))
+        if not segments:
+            analyzed.append(
+                _failed_result(
+                    artist,
+                    "ASR produced no valid timestamped transcript segments",
+                    base=result,
+                )
+            )
+            continue
+        result.transcript = transcript
+        result.transcript_segments = segments
+        analyzed.append(result)
+    return analyzed
 
 def analyze_candidate(
     video_path: str,

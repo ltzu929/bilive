@@ -294,3 +294,53 @@ def test_unload_candidate_models_releases_configured_models(monkeypatch):
     candidate_analyzer.unload_candidate_models()
 
     assert calls == ["asr"]
+
+
+def test_analyze_candidate_clips_runs_asr_for_each_mimo_clip(monkeypatch):
+    from src.autoslice import candidate_analyzer
+
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_clips_with_mimo",
+        lambda **kwargs: [
+            _mimo_keep(trim_start=2.0, trim_end=12.0, title="Clip A"),
+            _mimo_keep(trim_start=30.0, trim_end=55.0, title="Clip B"),
+        ],
+    )
+    audio_calls = []
+
+    def fake_analyze_audio(video_path, model, **kwargs):
+        audio_calls.append(kwargs)
+        return {
+            "transcript": "有效字幕",
+            "segments": [{"start": 0.0, "end": 2.0, "text": "有效字幕"}],
+        }
+
+    monkeypatch.setattr(candidate_analyzer, "analyze_audio", fake_analyze_audio)
+
+    results = candidate_analyzer.analyze_candidate_clips(
+        "candidate.mp4",
+        "主播",
+        "弹幕",
+        candidate_start=100.0,
+        candidate_end=340.0,
+        candidate_duration=240.0,
+    )
+
+    assert [item.title for item in results] == ["Clip A", "Clip B"]
+    assert results[0].source_start == 102.0
+    assert results[1].source_end == 155.0
+    assert audio_calls == [
+        {
+            "whisper_device": candidate_analyzer.WHISPER_DEVICE,
+            "whisper_compute_type": candidate_analyzer.WHISPER_COMPUTE_TYPE,
+            "start_seconds": 2.0,
+            "duration_seconds": 10.0,
+        },
+        {
+            "whisper_device": candidate_analyzer.WHISPER_DEVICE,
+            "whisper_compute_type": candidate_analyzer.WHISPER_COMPUTE_TYPE,
+            "start_seconds": 30.0,
+            "duration_seconds": 25.0,
+        },
+    ]
