@@ -40,6 +40,31 @@ def analyze_stage(
     return result
 
 
+def analyze_clips_stage(
+    video_path: str,
+    *,
+    artist: str,
+    danmaku_text: str,
+    candidate_start: float | None = None,
+    candidate_end: float | None = None,
+    candidate_duration: float | None = None,
+    analyzer: Callable[..., Any],
+) -> list[AnalysisResult]:
+    results = analyzer(
+        video_path,
+        artist,
+        danmaku_text=danmaku_text,
+        candidate_start=candidate_start,
+        candidate_end=candidate_end,
+        candidate_duration=candidate_duration,
+    )
+    if not isinstance(results, list) or any(
+        not isinstance(item, AnalysisResult) for item in results
+    ):
+        raise TypeError("candidate analyzer must return list[AnalysisResult]")
+    return results
+
+
 def subtitle_stage(
     video_path: str,
     analysis: AnalysisResult,

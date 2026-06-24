@@ -15,13 +15,14 @@ from src.config import (
 )
 from src.autoslice import slice_video_by_danmaku
 from src.autoslice.candidate_analyzer import (
-    analyze_candidate,
+    analyze_candidate as _single_candidate_analyzer,
+    analyze_candidate_clips as _multi_candidate_analyzer,
     unload_candidate_models,
 )
-from src.autoslice.danmaku_slice import extract_danmaku_text
+from src.autoslice.danmaku_slice import extract_danmaku_text, format_seconds_for_filename
 from src.burn.subtitle_burn import burn_subtitles_from_analysis
 from src.burn.pipeline_stages import (
-    analyze_stage,
+    analyze_clips_stage,
     enqueue_stage,
     metadata_stage,
     subtitle_stage,
@@ -34,6 +35,28 @@ from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
 from src.burn.slice_progress import SliceProgressWriter
 from src.db.conn import delete_upload_queue, get_upload_item, insert_upload_queue
+
+analyze_candidate = _single_candidate_analyzer
+
+
+def analyze_candidate_clips(*args, **kwargs):
+    if analyze_candidate is not _single_candidate_analyzer:
+        result = analyze_candidate(*args, **kwargs)
+        return result if isinstance(result, list) else [result]
+    return _multi_candidate_analyzer(*args, **kwargs)
+
+
+def burn_subtitles_for_output(video_path, analysis, output_path):
+    try:
+        return burn_subtitles_from_analysis(
+            video_path,
+            analysis,
+            output_path=output_path,
+        )
+    except TypeError as exc:
+        if "output_path" not in str(exc):
+            raise
+        return burn_subtitles_from_analysis(video_path, analysis)
 
 
 def check_file_size(file_path):
@@ -317,64 +340,20 @@ def slice_only(video_path, **_slice_options):
                 generated_slice.context_start,
                 generated_slice.context_end,
             )
-            result = analyze_stage(
+            results = analyze_clips_stage(
                 slice_path,
                 artist=artist,
                 danmaku_text=danmaku_text,
                 candidate_start=generated_slice.context_start,
                 candidate_end=generated_slice.context_end,
                 candidate_duration=generated_slice.duration,
-                analyzer=analyze_candidate,
+                analyzer=analyze_candidate_clips,
             )
-
-            segment = build_segment_record(
-                original_video_path,
-                generated_slice,
-                result,
-                upload_status="not_queued",
-            )
-            if result.judge_status == "judge_failed":
-                judge_failed_count += 1
-                scan_log.warning(
-                    f"Slice {slice_path} kept for manual review: "
-                    f"{result.judge_error or result.quality_reason}"
-                )
-                segments.append(segment)
-                continue
-
-            if result.judge_status == "drop" or not result.retain_recommendation:
-                scan_log.info(
-                    f"Slice {slice_path} filtered by LLM judge: "
-                    f"retain=False, reason={result.quality_reason}"
-                )
-                segment["judge_status"] = "drop"
-                segments.append(segment)
-                os.remove(slice_path)
+            if not results:
+                scan_log.info(f"MiMo found no postable chat clips in {slice_path}")
                 continue
 
             from src.config import OMNI_ENABLE_DEEP_ANALYSIS
-
-            if OMNI_ENABLE_DEEP_ANALYSIS:
-                analysis_json_path = slice_path[:-4] + "_analysis.json"
-                result.to_json_file(analysis_json_path)
-                scan_log.info(f"Analysis result saved: {analysis_json_path}")
-
-            burn_result = subtitle_stage(
-                slice_path,
-                result,
-                burner=burn_subtitles_from_analysis,
-            )
-            if not burn_result["ok"]:
-                reason = burn_result["error"]
-                judge_failed_count += 1
-                segment["judge_status"] = "judge_failed"
-                segment["judge_error"] = reason
-                segment["quality_reason"] = reason
-                scan_log.warning(f"{reason}: {slice_path}")
-                segments.append(segment)
-                continue
-            scan_log.info(f"ASR subtitles burned into slice: {slice_path}")
-
             from src.config import (
                 EDIT_DEFAULT_HIGHLIGHT_WINDOW,
                 EDIT_ENABLE_INSTRUCTION,
@@ -384,97 +363,163 @@ def slice_only(video_path, **_slice_options):
             from src.autoslice.edit_instruction_builder import maybe_write_edit_outputs
             from src.autoslice.edit_instruction import TimeRange
 
-            maybe_write_edit_outputs(
-                analysis=result,
-                source_video=original_video_path,
-                slice_video=slice_path,
-                artist=artist,
-                slice_duration=generated_slice.duration,
-                output_video=slice_path,
-                enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
-                enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
-                max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
-                default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
-                density_core=TimeRange(
-                    start=generated_slice.density_core_start,
-                    end=generated_slice.density_core_end,
-                ),
-                context_window=TimeRange(
-                    start=generated_slice.context_start,
-                    end=generated_slice.context_end,
-                ),
-            )
+            for clip_index, result in enumerate(results, start=1):
+                segment = build_segment_record(
+                    original_video_path,
+                    generated_slice,
+                    result,
+                    upload_status="not_queued",
+                )
+                if result.judge_status == "judge_failed":
+                    judge_failed_count += 1
+                    scan_log.warning(
+                        f"Slice {slice_path} kept for manual review: "
+                        f"{result.judge_error or result.quality_reason}"
+                    )
+                    segments.append(segment)
+                    continue
 
-            progress.update(
-                force=True,
-                status="running",
-                phase="metadata",
-                phase_label="写入元数据",
-                current_slice=index,
-                total_slices=total_slices,
-                current_slice_path=slice_path,
-                message="正在写入上传参数",
-                diagnostics=diagnostics,
-            )
-            metadata_result = metadata_stage(
-                slice_path,
-                result,
-                room_id=room_id,
-                writer=write_slice_upload_metadata,
-            )
-            if not metadata_result["ok"]:
-                reason = metadata_result["error"]
-                judge_failed_count += 1
-                segment["judge_status"] = "judge_failed"
-                segment["judge_error"] = reason
-                segment["quality_reason"] = reason
-                delete_slice_upload_metadata(slice_path)
-                segments.append(segment)
-                continue
+                if result.judge_status == "drop" or not result.retain_recommendation:
+                    scan_log.info(
+                        f"Slice {slice_path} filtered by LLM judge: "
+                        f"retain=False, reason={result.quality_reason}"
+                    )
+                    segment["judge_status"] = "drop"
+                    segments.append(segment)
+                    if len(results) == 1 and os.path.exists(slice_path):
+                        os.remove(slice_path)
+                    continue
 
-            progress.update(
-                force=True,
-                status="running",
-                phase="queue",
-                phase_label="加入上传队列",
-                current_slice=index,
-                total_slices=total_slices,
-                current_slice_path=slice_path,
-                message="正在加入上传队列",
-                diagnostics=diagnostics,
-            )
-            queue_result = enqueue_stage(
-                slice_path,
-                insert=insert_upload_queue,
-                lookup=get_upload_item,
-                skip=os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1",
-            )
-            if not queue_result["ok"]:
-                reason = queue_result["error"]
-                judge_failed_count += 1
-                segment["judge_status"] = "judge_failed"
-                segment["judge_error"] = reason
-                segment["quality_reason"] = reason
-                delete_slice_upload_metadata(slice_path)
-                segments.append(segment)
-                scan_log.error(f"{reason}: {slice_path}")
-                continue
-            queue_created = bool(queue_result.get("created"))
-            segment["upload_status"] = queue_result["status"]
-            if queue_result["status"] == "skipped":
-                scan_log.info(f"Skip upload queue for local test: {slice_path}")
-            elif queue_result["status"] == "queued":
-                scan_log.info(f"Slice ready for upload: {slice_path}")
-            else:
-                scan_log.info(
-                    f"Slice already exists in upload queue "
-                    f"({queue_result['status']}): {slice_path}"
+                output_path = clip_output_path(slice_path, result, clip_index)
+                segment = build_segment_record(
+                    original_video_path,
+                    generated_slice,
+                    result,
+                    upload_status="not_queued",
+                    candidate_path_override=output_path,
                 )
 
-            if segment["upload_status"] == "skipped":
-                scan_log.info(f"Slice finalized without queueing: {slice_path}")
-            output_slices.append(slice_path)
-            segments.append(segment)
+                if OMNI_ENABLE_DEEP_ANALYSIS:
+                    analysis_json_path = output_path[:-4] + "_analysis.json"
+                    result.to_json_file(analysis_json_path)
+                    scan_log.info(f"Analysis result saved: {analysis_json_path}")
+
+                burn_result = subtitle_stage(
+                    slice_path,
+                    result,
+                    burner=lambda video, analysis, output_path=output_path: burn_subtitles_for_output(
+                        video,
+                        analysis,
+                        output_path,
+                    ),
+                )
+                if not burn_result["ok"]:
+                    reason = burn_result["error"]
+                    judge_failed_count += 1
+                    segment["judge_status"] = "judge_failed"
+                    segment["judge_error"] = reason
+                    segment["quality_reason"] = reason
+                    scan_log.warning(f"{reason}: {slice_path}")
+                    segments.append(segment)
+                    continue
+                scan_log.info(f"ASR subtitles burned into slice: {output_path}")
+
+                trim_duration = (
+                    float(result.source_end) - float(result.source_start)
+                    if result.source_start is not None and result.source_end is not None
+                    else generated_slice.duration
+                )
+                maybe_write_edit_outputs(
+                    analysis=result,
+                    source_video=original_video_path,
+                    slice_video=slice_path,
+                    artist=artist,
+                    slice_duration=trim_duration,
+                    output_video=output_path,
+                    enable_edit_instruction=EDIT_ENABLE_INSTRUCTION,
+                    enable_prompt_package=EDIT_ENABLE_PROMPT_PACKAGE,
+                    max_subtitle_evidence=EDIT_MAX_SUBTITLE_EVIDENCE,
+                    default_highlight_window=EDIT_DEFAULT_HIGHLIGHT_WINDOW,
+                    density_core=TimeRange(
+                        start=generated_slice.density_core_start,
+                        end=generated_slice.density_core_end,
+                    ),
+                    context_window=TimeRange(
+                        start=generated_slice.context_start,
+                        end=generated_slice.context_end,
+                    ),
+                )
+
+                progress.update(
+                    force=True,
+                    status="running",
+                    phase="metadata",
+                    phase_label="写入元数据",
+                    current_slice=index,
+                    total_slices=total_slices,
+                    current_slice_path=output_path,
+                    message="正在写入上传参数",
+                    diagnostics=diagnostics,
+                )
+                metadata_result = metadata_stage(
+                    output_path,
+                    result,
+                    room_id=room_id,
+                    writer=write_slice_upload_metadata,
+                )
+                if not metadata_result["ok"]:
+                    reason = metadata_result["error"]
+                    judge_failed_count += 1
+                    segment["judge_status"] = "judge_failed"
+                    segment["judge_error"] = reason
+                    segment["quality_reason"] = reason
+                    delete_slice_upload_metadata(output_path)
+                    segments.append(segment)
+                    continue
+
+                progress.update(
+                    force=True,
+                    status="running",
+                    phase="queue",
+                    phase_label="加入上传队列",
+                    current_slice=index,
+                    total_slices=total_slices,
+                    current_slice_path=output_path,
+                    message="正在加入上传队列",
+                    diagnostics=diagnostics,
+                )
+                queue_result = enqueue_stage(
+                    output_path,
+                    insert=insert_upload_queue,
+                    lookup=get_upload_item,
+                    skip=os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1",
+                )
+                if not queue_result["ok"]:
+                    reason = queue_result["error"]
+                    judge_failed_count += 1
+                    segment["judge_status"] = "judge_failed"
+                    segment["judge_error"] = reason
+                    segment["quality_reason"] = reason
+                    delete_slice_upload_metadata(output_path)
+                    segments.append(segment)
+                    scan_log.error(f"{reason}: {output_path}")
+                    continue
+                queue_created = bool(queue_result.get("created"))
+                segment["upload_status"] = queue_result["status"]
+                if queue_result["status"] == "skipped":
+                    scan_log.info(f"Skip upload queue for local test: {output_path}")
+                elif queue_result["status"] == "queued":
+                    scan_log.info(f"Slice ready for upload: {output_path}")
+                else:
+                    scan_log.info(
+                        f"Slice already exists in upload queue "
+                        f"({queue_result['status']}): {output_path}"
+                    )
+
+                if segment["upload_status"] == "skipped":
+                    scan_log.info(f"Slice finalized without queueing: {output_path}")
+                output_slices.append(output_path)
+                segments.append(segment)
 
         except Exception as e:
             scan_log.error(f"Error processing slice {slice_path}: {e}")
@@ -606,8 +651,14 @@ def upsert_diagnostic(items, item):
     ]
 
 
-def build_segment_record(source_path, generated_slice, analysis, upload_status="not_queued"):
-    slice_path = str(generated_slice.path)
+def build_segment_record(
+    source_path,
+    generated_slice,
+    analysis,
+    upload_status="not_queued",
+    candidate_path_override=None,
+):
+    slice_path = str(candidate_path_override or generated_slice.path)
     candidate_start = float(getattr(generated_slice, "context_start", 0.0) or 0.0)
     candidate_end = float(getattr(generated_slice, "context_end", 0.0) or 0.0)
     start = candidate_start
@@ -681,6 +732,21 @@ def segment_id_for(source_path, start, end):
 def source_rel_path(source_path):
     source = Path(source_path)
     return f"{source.parent.name}/{source.name}"
+
+
+def clip_output_path(candidate_path, analysis, index):
+    source_start = (
+        analysis.source_start
+        if analysis.source_start is not None
+        else float(index)
+    )
+    stem = Path(candidate_path).stem
+    suffix = Path(candidate_path).suffix
+    return str(
+        Path(candidate_path).with_name(
+            f"{format_seconds_for_filename(source_start)}s_{stem}_clip{index}{suffix}"
+        )
+    )
 
 
 def diagnostic_from_detection(event):

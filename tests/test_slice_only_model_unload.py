@@ -571,7 +571,9 @@ def test_slice_only_kept_candidate_burns_metadata_and_enters_queue(
     monkeypatch.setattr(
         slice_only_module,
         "burn_subtitles_from_analysis",
-        lambda path, value: burned.append((path, value)) or successful_burn(path, value),
+        lambda path, value, *, output_path=None: burned.append(
+            (path, value, output_path)
+        ) or successful_burn(output_path, value),
     )
     monkeypatch.setattr(
         slice_only_module,
@@ -589,12 +591,16 @@ def test_slice_only_kept_candidate_burns_metadata_and_enters_queue(
 
     result = slice_only_module.slice_only(str(source))
 
+    expected_output = str(slice_path.with_name(
+        "103s_10s_8792912_20260524-13-06-05_clip1.mp4"
+    ))
+
     assert result["status"] == "done"
     assert result["slice_count"] == 1
-    assert result["output_slices"] == [str(slice_path)]
-    assert burned == [(str(slice_path), analysis)]
-    assert metadata[0][0] == str(slice_path)
-    assert queued == [str(slice_path)]
+    assert result["output_slices"] == [expected_output]
+    assert burned == [(str(slice_path), analysis, expected_output)]
+    assert metadata[0][0] == expected_output
+    assert queued == [expected_output]
     assert result["segments"][0]["upload_status"] == "queued"
     assert result["segments"][0]["start_seconds"] == 103.0
     assert result["segments"][0]["end_seconds"] == 109.5
