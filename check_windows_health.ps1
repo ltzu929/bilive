@@ -13,6 +13,23 @@ $uploadLock = Join-Path $ProjectDir "logs\runtime\upload.lock"
 $env:PYTHONPATH = $ProjectDir
 $env:BILIVE_DIR = $ProjectDir
 $env:BILIVE_CONFIG = Join-Path $ProjectDir "bilive-server.toml"
+function Import-BiliveProjectEnv {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    foreach ($line in Get-Content -Encoding UTF8 -LiteralPath $Path) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) { continue }
+        $name, $value = $trimmed.Split("=", 2)
+        $name = $name.Trim()
+        if (-not $name -or [Environment]::GetEnvironmentVariable($name, "Process")) { continue }
+        $value = $value.Trim()
+        if ($value.Length -ge 2 -and $value[0] -eq $value[$value.Length - 1] -and ($value[0] -eq '"' -or $value[0] -eq "'")) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        [Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+}
+Import-BiliveProjectEnv -Path (Join-Path $ProjectDir ".secrets\env")
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue

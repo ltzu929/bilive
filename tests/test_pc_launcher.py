@@ -107,6 +107,8 @@ def test_windows_health_check_is_read_only_and_reports_all_dependencies():
     assert "upload.lock" in text
     assert "mimo" in text
     assert "MIMO_API_KEY" in text
+    assert "Import-BiliveProjectEnv" in text
+    assert ".secrets\\env" in text
     assert "managed_llm" not in text
     assert "lm_studio_port_1234" not in text
     assert '$env:PYTHONPATH = $ProjectDir' in text

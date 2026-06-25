@@ -43,3 +43,31 @@ def test_shutdown_callback_sets_uvicorn_should_exit():
     request_server_shutdown({"server": server})
 
     assert server.should_exit is True
+
+
+def test_configure_worker_environment_loads_project_secret_env(tmp_path, monkeypatch):
+    secret_dir = tmp_path / ".secrets"
+    secret_dir.mkdir()
+    (secret_dir / "env").write_text(
+        "MIMO_API_KEY=project-secret\n# comment\nEMPTY=\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MIMO_API_KEY", raising=False)
+
+    configure_worker_environment(tmp_path, auto_upload=False)
+
+    assert os.environ["MIMO_API_KEY"] == "project-secret"
+
+
+def test_configure_worker_environment_keeps_existing_process_secret(tmp_path, monkeypatch):
+    secret_dir = tmp_path / ".secrets"
+    secret_dir.mkdir()
+    (secret_dir / "env").write_text(
+        "MIMO_API_KEY=project-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MIMO_API_KEY", "process-secret")
+
+    configure_worker_environment(tmp_path, auto_upload=False)
+
+    assert os.environ["MIMO_API_KEY"] == "process-secret"

@@ -5,7 +5,7 @@
 ```powershell
 cd D:\alldata\pi\bilive
 .\setup_windows_env.ps1 -Dev
-[Environment]::SetEnvironmentVariable("MIMO_API_KEY", "<your-key>", "User")
+Add-Content .\.secrets\env "MIMO_API_KEY=<your-key>"
 .\install_windows_pi_ssh_key.ps1
 .\install_windows_worker_task.ps1 -NoUpload
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.ps1
@@ -18,7 +18,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 .\install_llama_runtime.ps1 -Force
 ```
 
-`MIMO_API_KEY` 必须配置到计划任务实际运行的 Windows 用户环境。临时 PowerShell 变量不会自动传播到下次登录或计划任务。
+`MIMO_API_KEY` 推荐配置到项目本地 `.secrets/env`。Worker 启动时会先加载该文件，再保留已有的进程环境变量；临时 PowerShell 变量只影响当前启动的 worker。
 
 ## MiMo 验收
 
@@ -94,10 +94,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 ### MiMo 预检失败
 
 ```powershell
-[Environment]::GetEnvironmentVariable("MIMO_API_KEY", "User")
+Select-String -Path .\.secrets\env -Pattern "^MIMO_API_KEY="
 ```
 
-返回空值时重新设置用户环境变量，然后重新登录或重启计划任务所在会话。不要把 API Key 写入 `bilive-server.toml`、日志或测试快照。
+没有匹配时把 key 写入 `.secrets/env`，然后重启 Worker API。不要把 API Key 写入 `bilive-server.toml`、日志或测试快照。
 
 ### MiMo 请求失败
 

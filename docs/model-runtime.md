@@ -27,13 +27,13 @@ timeout = 180
 max_base64_bytes = 48000000
 ```
 
-API Key 只从用户环境变量读取：
+API Key 默认从项目本地 `.secrets/env` 读取，进程环境变量可覆盖：
 
 ```powershell
-[Environment]::SetEnvironmentVariable("MIMO_API_KEY", "<your-key>", "User")
+Add-Content .\.secrets\env "MIMO_API_KEY=<your-key>"
 ```
 
-不要把 API Key 写入配置、日志、测试快照或提交信息。
+`.secrets/` 已被 git 忽略。不要把 API Key 写入 `bilive-server.toml`、日志、测试快照、提交信息或公开文档。
 
 ## 请求形态
 
