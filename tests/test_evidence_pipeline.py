@@ -113,13 +113,19 @@ def test_kept_candidate_is_queued_once_and_reprocessing_is_idempotent(
     first = slice_only_module.slice_only(str(source))
     second = slice_only_module.slice_only(str(source))
 
+    expected_output = str(candidate.with_name(
+        "1s_100s_22384516_20260609-10-00-00_clip1.mp4"
+    ))
+
     rows = conn.list_upload_queue(db_path)
     assert first["slice_count"] == 1
     assert second["slice_count"] == 1
     assert len(rows) == 1
-    assert rows[0]["video_path"] == str(candidate)
+    assert rows[0]["video_path"] == expected_output
     assert rows[0]["status"] == "queued"
-    assert candidate.with_suffix(".upload.json").is_file()
+    assert candidate.with_name(
+        "1s_100s_22384516_20260609-10-00-00_clip1.upload.json"
+    ).is_file()
 
 
 def test_review_candidate_has_no_sidecar_or_queue_row(tmp_path, monkeypatch):
@@ -262,7 +268,11 @@ def test_unexpected_failure_after_enqueue_rolls_back_new_queue_row(
     assert result["slice_count"] == 0
     assert result["judge_failed_count"] == 1
     assert result["segments"][0]["judge_status"] == "judge_failed"
+    expected_output = candidate.with_name(
+        "1s_100s_22384516_20260609-10-00-00_clip1.mp4"
+    )
+
     assert result["segments"][0]["upload_status"] == "not_queued"
     assert candidate.exists()
-    assert not candidate.with_suffix(".upload.json").exists()
+    assert not expected_output.with_suffix(".upload.json").exists()
     assert conn.list_upload_queue(db_path) == []

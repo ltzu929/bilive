@@ -535,11 +535,16 @@ def slice_only(video_path, **_slice_options):
             segment["judge_status"] = "judge_failed"
             segment["judge_error"] = str(e)
             segment["quality_reason"] = str(e)
+            cleanup_path = (
+                segment.get("candidate_path", slice_path)
+                if isinstance(segment, dict)
+                else slice_path
+            )
             if queue_created:
-                delete_upload_queue(slice_path)
+                delete_upload_queue(cleanup_path)
             segment["upload_status"] = "not_queued"
             segments.append(segment)
-            delete_slice_upload_metadata(slice_path)
+            delete_slice_upload_metadata(cleanup_path)
 
     if total_slices and not output_slices and not segments:
         error = "所有候选切片处理失败"
