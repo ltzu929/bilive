@@ -5,7 +5,21 @@
 ```powershell
 cd D:\alldata\pi\bilive
 .\setup_windows_env.ps1 -Dev
-Add-Content .\.secrets\env "MIMO_API_KEY=<your-key>"
+function Set-BiliveSecret {
+    param([string]$Name, [string]$Value)
+    New-Item -ItemType Directory -Force .\.secrets | Out-Null
+    $path = ".\.secrets\env"
+    $lines = if (Test-Path $path) { Get-Content $path } else { @() }
+    $line = "$Name=$Value"
+    $pattern = "^\s*$([regex]::Escape($Name))="
+    if ($lines -match $pattern) {
+        $lines = $lines | ForEach-Object { if ($_ -match $pattern) { $line } else { $_ } }
+    } else {
+        $lines += $line
+    }
+    Set-Content -Path $path -Value $lines -Encoding utf8
+}
+Set-BiliveSecret MIMO_API_KEY "<your-key>"
 .\install_windows_pi_ssh_key.ps1
 .\install_windows_worker_task.ps1 -NoUpload
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.ps1

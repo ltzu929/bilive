@@ -139,6 +139,9 @@ def test_slice_only_logs_mimo_clip_decisions(monkeypatch, tmp_path):
     log_text = captured.text()
 
     assert result["status"] == "done"
+    mimo = next(item for item in result["diagnostics"] if item["id"] == "mimo")
+    assert mimo["status"] == "ok"
+    assert {"label": "返回片段", "value": "2"} in mimo["details"]
     assert "MiMo returned 2 chat clip(s)" in log_text
     assert "Clip 1/2 keep: title=Clip A" in log_text
     assert "Clip 2/2 keep: title=Clip B" in log_text
@@ -176,6 +179,9 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
     log_text = captured.text()
 
     assert result["status"] == "failed"
+    mimo = next(item for item in result["diagnostics"] if item["id"] == "mimo")
+    assert mimo["status"] == "warning"
+    assert {"label": "返回片段", "value": "0"} in mimo["details"]
     assert "MiMo found no postable chat clips" in log_text
     assert "Slice-only summary: candidates=1, final_clips=0, judge_failed=0" in log_text
     assert "empty_candidates=1" in log_text

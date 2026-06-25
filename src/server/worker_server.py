@@ -18,18 +18,23 @@ def _load_project_env_file(env_path: Path) -> None:
         lines = env_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return
+    existing_names = set(os.environ)
+    loaded: dict[str, str] = {}
     for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         name, value = line.split("=", 1)
         name = name.strip()
-        if not name or name in os.environ:
+        if not name:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
-        os.environ[name] = value
+        loaded[name] = value
+    for name, value in loaded.items():
+        if name not in existing_names:
+            os.environ[name] = value
 
 
 def configure_worker_environment(

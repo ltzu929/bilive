@@ -298,6 +298,7 @@ function renderSliceProgress(progress) {
   );
   const status = progress.stale ? "stale" : (progress.status || "idle");
   const running = status === "running";
+  const stoppable = status === "running" || status === "stale";
   elements.progressPanel.dataset.status = status;
   elements.progressTitle.textContent = progress.phase_label || "空闲";
   elements.progressMessage.textContent = progress.stale
@@ -310,7 +311,7 @@ function renderSliceProgress(progress) {
   elements.progressBar.style.width = `${percent}%`;
   elements.startSliceButton.disabled = running;
   elements.startSliceButton.textContent = running ? "切片中" : "启动切片";
-  if (elements.stopSliceButton) elements.stopSliceButton.disabled = !running;
+  if (elements.stopSliceButton) elements.stopSliceButton.disabled = !stoppable;
   renderTaskState(status);
 }
 
@@ -1024,6 +1025,14 @@ async function runTaskAction(task, action) {
 }
 
 
+function assertStopSucceeded(result) {
+  const status = String(result?.status || "");
+  if (status === "stopped" || status === "idle") return "success";
+  if (status === "partial") return "partial";
+  const message = result?.message || result?.detail || result?.stderr || result?.stdout || `停止 Windows 重任务节点失败：${status || "未知状态"}`;
+  throw new Error(message);
+}
+
 async function stopSlicing() {
   showError("");
   if (!elements.stopSliceButton) return;
@@ -1033,12 +1042,20 @@ async function stopSlicing() {
     const result = await request("/api/worker-trigger/stop", {
       method: "POST",
     });
+    const outcome = assertStopSucceeded(result);
     const recovered = Number(result.recovered || 0);
+    const recoveredSources = Number(result.recovered_sources || 0);
+    const recoveredActions = Number(result.recovered_actions || 0);
     const pending = Number(result.pending_tasks || 0);
+    const partialDetail = Array.isArray(result.errors) && result.errors.length
+      ? ` 未终止：${result.errors.join("；")}`
+      : "";
     renderSliceProgress({
-      status: "idle",
-      phase_label: "已停止",
-      message: `已停止 Windows 重任务节点，恢复 ${recovered} 个处理中任务，待处理 ${pending} 个。`,
+      status: outcome === "partial" ? "error" : "idle",
+      phase_label: outcome === "partial" ? "部分停止" : "已停止",
+      message: outcome === "partial"
+        ? `已恢复 ${recovered} 个处理中任务（录播 ${recoveredSources}，动作 ${recoveredActions}），待处理 ${pending} 个。${partialDetail}`
+        : `已停止 Windows 重任务节点，恢复 ${recovered} 个处理中任务（录播 ${recoveredSources}，动作 ${recoveredActions}），待处理 ${pending} 个。`,
       current_slice_percent: 0,
     });
     await refreshWorkerStatus();

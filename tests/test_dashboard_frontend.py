@@ -170,7 +170,13 @@ def test_frontend_source_recording_status_filter_contract():
     assert "stopSlicing" in texts["js"]
     assert "progress.display_title" in texts["js"]
     assert "progress.source_file" in texts["js"]
-    assert "stopSliceButton.disabled = !running" in texts["js"]
+    assert "const stoppable = status === \"running\" || status === \"stale\"" in texts["js"]
+    assert "stopSliceButton.disabled = !stoppable" in texts["js"]
+    assert "stopSliceButton.disabled = !running" not in texts["js"]
+    assert "function assertStopSucceeded" in texts["js"]
+    assert "status === \"stopped\" || status === \"idle\"" in texts["js"]
+    assert "status === \"partial\"" in texts["js"]
+    assert "throw new Error" in texts["js"]
 
 def test_frontend_api_endpoint_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")

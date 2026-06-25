@@ -30,7 +30,21 @@ max_base64_bytes = 48000000
 API Key 默认从项目本地 `.secrets/env` 读取，进程环境变量可覆盖：
 
 ```powershell
-Add-Content .\.secrets\env "MIMO_API_KEY=<your-key>"
+function Set-BiliveSecret {
+    param([string]$Name, [string]$Value)
+    New-Item -ItemType Directory -Force .\.secrets | Out-Null
+    $path = ".\.secrets\env"
+    $lines = if (Test-Path $path) { Get-Content $path } else { @() }
+    $line = "$Name=$Value"
+    $pattern = "^\s*$([regex]::Escape($Name))="
+    if ($lines -match $pattern) {
+        $lines = $lines | ForEach-Object { if ($_ -match $pattern) { $line } else { $_ } }
+    } else {
+        $lines += $line
+    }
+    Set-Content -Path $path -Value $lines -Encoding utf8
+}
+Set-BiliveSecret MIMO_API_KEY "<your-key>"
 ```
 
 `.secrets/` 已被 git 忽略。不要把 API Key 写入 `bilive-server.toml`、日志、测试快照、提交信息或公开文档。

@@ -136,6 +136,8 @@ def test_mimo_runtime_is_documented_without_lm_studio_setup():
 
     assert "BILIVE_LM_STUDIO_PATH" not in public_docs
     assert "MIMO_API_KEY" in public_docs
+    assert r'Add-Content .\.secrets\env "MIMO_API_KEY=<your-key>"' not in public_docs
+    assert "Set-BiliveSecret" in public_docs
     assert "mimo-v2.5" in public_docs
     assert "managed_runtime --smoke-test" not in public_docs
     assert "llama-server.exe" not in readme

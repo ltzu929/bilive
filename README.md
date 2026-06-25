@@ -43,7 +43,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 需要先在项目本地密钥文件 `.secrets/env` 中配置：
 
 ```powershell
-Add-Content .\.secrets\env "MIMO_API_KEY=<your-key>"
+function Set-BiliveSecret {
+    param([string]$Name, [string]$Value)
+    New-Item -ItemType Directory -Force .\.secrets | Out-Null
+    $path = ".\.secrets\env"
+    $lines = if (Test-Path $path) { Get-Content $path } else { @() }
+    $line = "$Name=$Value"
+    $pattern = "^\s*$([regex]::Escape($Name))="
+    if ($lines -match $pattern) {
+        $lines = $lines | ForEach-Object { if ($_ -match $pattern) { $line } else { $_ } }
+    } else {
+        $lines += $line
+    }
+    Set-Content -Path $path -Value $lines -Encoding utf8
+}
+Set-BiliveSecret MIMO_API_KEY "<your-key>"
 ```
 
 `setup_windows_env.ps1` 默认只创建 `.venv-win`、安装依赖并执行 `pip check`。旧本地模型运行时安装脚本保留为回滚工具，默认不会下载。

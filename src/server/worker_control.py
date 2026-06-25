@@ -100,6 +100,8 @@ def stop_worker(
         from src.server.watcher import recover_processing_markers
 
         recoverer = recover_processing_markers
+    from src.server.action_jobs import count_pending_action_jobs, recover_action_jobs
+
     count_pending = pending_counter or _count_pending_markers
 
     pids: list[int] = []
@@ -122,19 +124,25 @@ def stop_worker(
         except Exception as exc:  # pragma: no cover - OS boundary
             errors.append(f"{pid}: {exc}")
 
-    recovered = int(recoverer(videos))
+    recovered_sources = int(recoverer(videos))
+    recovered_actions = int(recover_action_jobs(videos))
+    recovered = recovered_sources + recovered_actions
+    pending_tasks = int(count_pending(videos))
+    if pending_counter is None:
+        pending_tasks += int(count_pending_action_jobs(videos))
     result: dict[str, Any] = {
         "status": "stopped" if stopped else "idle",
         "stopped_pids": stopped,
         "recovered": recovered,
-        "pending_tasks": int(count_pending(videos)),
+        "recovered_sources": recovered_sources,
+        "recovered_actions": recovered_actions,
+        "pending_tasks": pending_tasks,
         "log_path": _worker_log_path,
     }
     if errors:
         result["status"] = "partial"
         result["errors"] = errors
     return result
-
 
 def _count_pending_markers(videos: Path) -> int:
     return len(list(videos.rglob("*.mp4.pending"))) if videos.is_dir() else 0
@@ -145,7 +153,7 @@ def _terminate_pid(pid: int) -> None:
         return
     if os.name == "nt":
         completed = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/F"],
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             text=True,
             encoding="utf-8",

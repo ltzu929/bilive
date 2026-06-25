@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -137,7 +138,75 @@ def test_stop_worker_terminates_watcher_and_lock_owner_then_recovers(tmp_path, m
         "status": "stopped",
         "stopped_pids": [100, 200],
         "recovered": 1,
+        "recovered_sources": 1,
+        "recovered_actions": 0,
         "pending_tasks": 4,
         "log_path": "logs/runtime/pc-worker-test.log",
     }
     assert recovered == [videos]
+
+
+def test_stop_worker_recovers_action_jobs_and_counts_all_pending(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260624-12-55-18.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".mp4.pending").write_text("{}", encoding="utf-8")
+
+    job_id = "a" * 32
+    jobs = videos / ".bilive-jobs"
+    jobs.mkdir()
+    processing_job = jobs / f"{job_id}.processing.json"
+    processing_job.write_text(
+        json.dumps(
+            {
+                "job_id": job_id,
+                "action": "retry_judge",
+                "segment_id": "segment-1",
+                "status": "processing",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(worker_control, "_worker_process", None)
+    monkeypatch.setattr(worker_control, "_worker_log_path", "")
+
+    result = worker_control.stop_worker(
+        project_root=tmp_path,
+        videos_root=videos,
+        lock_reader=lambda _path: {
+            "status": "unlocked",
+            "pid": None,
+            "owner_running": False,
+        },
+    )
+
+    assert result["status"] == "idle"
+    assert result["recovered_sources"] == 0
+    assert result["recovered_actions"] == 1
+    assert result["recovered"] == 1
+    assert result["pending_tasks"] == 2
+    assert not processing_job.exists()
+    assert (jobs / f"{job_id}.pending.json").exists()
+
+
+def test_terminate_pid_kills_windows_process_tree(monkeypatch):
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(worker_control.os, "name", "nt")
+    monkeypatch.setattr(worker_control.subprocess, "run", fake_run)
+
+    worker_control._terminate_pid(4321)
+
+    assert calls[0][0] == ["taskkill", "/PID", "4321", "/T", "/F"]

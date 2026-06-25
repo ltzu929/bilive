@@ -395,6 +395,16 @@ def slice_only(video_path, **_slice_options):
                 ("弹幕数", str(int(getattr(generated_slice, "danmaku_count", 0) or 0))),
                 ("弹幕字符", str(len(danmaku_text))),
             ]
+            diagnostics = upsert_diagnostic(
+                diagnostics,
+                diagnostic_item(
+                    "mimo",
+                    "MiMo 判断",
+                    "pending",
+                    f"等待 MiMo 返回候选 {index}/{total_slices}",
+                    mimo_details,
+                ),
+            )
             progress.update(
                 force=True,
                 status="running",
@@ -406,16 +416,7 @@ def slice_only(video_path, **_slice_options):
                 current_slice_percent=100.0,
                 message=f"已发送候选 {index}/{total_slices} 给 MiMo，等待判断结果",
                 error="",
-                diagnostics=upsert_diagnostic(
-                    diagnostics,
-                    diagnostic_item(
-                        "mimo",
-                        "MiMo 判断",
-                        "pending",
-                        f"等待 MiMo 返回候选 {index}/{total_slices}",
-                        mimo_details,
-                    ),
-                ),
+                diagnostics=diagnostics,
             )
             results = analyze_clips_stage(
                 slice_path,
@@ -431,6 +432,16 @@ def slice_only(video_path, **_slice_options):
                 if results
                 else "MiMo 未返回可投稿片段"
             )
+            diagnostics = upsert_diagnostic(
+                diagnostics,
+                diagnostic_item(
+                    "mimo",
+                    "MiMo 判断",
+                    "ok" if results else "warning",
+                    result_message,
+                    [*mimo_details, ("返回片段", str(len(results)))],
+                ),
+            )
             progress.update(
                 force=True,
                 status="running",
@@ -442,16 +453,7 @@ def slice_only(video_path, **_slice_options):
                 current_slice_percent=100.0,
                 message=result_message,
                 error="",
-                diagnostics=upsert_diagnostic(
-                    diagnostics,
-                    diagnostic_item(
-                        "mimo",
-                        "MiMo 判断",
-                        "ok" if results else "warning",
-                        result_message,
-                        [*mimo_details, ("返回片段", str(len(results)))],
-                    ),
-                ),
+                diagnostics=diagnostics,
             )
             if not results:
                 empty_candidate_count += 1
