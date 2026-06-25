@@ -13,6 +13,7 @@ import toml
 
 
 DEFAULT_TIMEOUT = 10.0
+DEFAULT_STOP_TIMEOUT = 30.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class RemoteWorkerConfig:
     stop_command: list[str] = field(default_factory=list)
     wake_command: list[str] = field(default_factory=list)
     timeout: float = DEFAULT_TIMEOUT
+    stop_timeout: float = DEFAULT_STOP_TIMEOUT
     startup_timeout: float = 30.0
     poll_interval: float = 1.0
 
@@ -59,6 +61,12 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
     )
     timeout = _as_timeout(
         os.environ.get("BILIVE_REMOTE_WORKER_TIMEOUT", section.get("timeout", DEFAULT_TIMEOUT))
+    )
+    stop_timeout = _as_timeout(
+        os.environ.get(
+            "BILIVE_REMOTE_WORKER_STOP_TIMEOUT",
+            section.get("stop_timeout", DEFAULT_STOP_TIMEOUT),
+        )
     )
     startup_timeout = _as_timeout(
         os.environ.get(
@@ -124,6 +132,7 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
         stop_command=stop_command,
         wake_command=wake_command,
         timeout=timeout,
+        stop_timeout=stop_timeout,
         startup_timeout=startup_timeout,
         poll_interval=poll_interval,
     )
@@ -291,12 +300,12 @@ def stop_remote_worker(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=cfg.timeout,
+            timeout=cfg.stop_timeout,
         )
     except subprocess.TimeoutExpired as exc:
         return {
             "status": "failed",
-            "message": f"remote worker stop timed out after {cfg.timeout:g}s",
+            "message": f"remote worker stop timed out after {cfg.stop_timeout:g}s",
             "command": cfg.stop_command,
             "stdout": exc.stdout or "",
             "stderr": exc.stderr or "",

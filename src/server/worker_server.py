@@ -15,7 +15,7 @@ def _load_project_env_file(env_path: Path) -> None:
     if not env_path.is_file():
         return
     try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
+        lines = env_path.read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         return
     existing_names = set(os.environ)

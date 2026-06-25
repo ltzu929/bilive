@@ -72,6 +72,22 @@ def test_configure_worker_environment_uses_last_project_secret_value(tmp_path, m
     assert os.environ["MIMO_API_KEY"] == "new-secret"
 
 
+
+
+def test_configure_worker_environment_reads_bom_prefixed_project_secret(tmp_path, monkeypatch):
+    secret_dir = tmp_path / ".secrets"
+    secret_dir.mkdir()
+    (secret_dir / "env").write_bytes(
+        b"\xef\xbb\xbfMIMO_API_KEY=project-secret\n"
+    )
+    monkeypatch.delenv("MIMO_API_KEY", raising=False)
+    monkeypatch.delenv("\ufeffMIMO_API_KEY", raising=False)
+
+    configure_worker_environment(tmp_path, auto_upload=False)
+
+    assert os.environ["MIMO_API_KEY"] == "project-secret"
+    assert "\ufeffMIMO_API_KEY" not in os.environ
+
 def test_configure_worker_environment_keeps_existing_process_secret(tmp_path, monkeypatch):
     secret_dir = tmp_path / ".secrets"
     secret_dir.mkdir()

@@ -77,6 +77,48 @@ def test_stop_remote_worker_runs_configured_stop_command():
     assert result["recovered"] == 1
     assert calls[0][0] == ["ssh", "win", "curl.exe", "-X", "POST", "stop"]
 
+def test_stop_remote_worker_uses_dedicated_stop_timeout():
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result(returncode=0, stdout='{"status":"idle"}')
+
+    from src.dashboard import remote_worker
+
+    result = remote_worker.stop_remote_worker(
+        RemoteWorkerConfig(
+            enabled=True,
+            stop_command=["ssh", "win", "curl.exe", "-X", "POST", "stop"],
+            timeout=8,
+        ),
+        runner=fake_runner,
+    )
+
+    assert result["status"] == "idle"
+    assert calls[0][1]["timeout"] == 30
+
+
+def test_load_remote_worker_config_reads_stop_timeout(tmp_path):
+    config_path = tmp_path / "bilive-server.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[dashboard.remote_worker]",
+                "enabled = true",
+                "timeout = 8",
+                "stop_timeout = 45",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_remote_worker_config(config_path)
+
+    assert config.timeout == 8
+    assert config.stop_timeout == 45
+
+
 def test_trigger_remote_worker_runs_configured_command():
     calls = []
 
