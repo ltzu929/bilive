@@ -66,6 +66,59 @@ def check_file_size(file_path):
     return file_size_mb
 
 
+def _format_seconds_range(start, end):
+    if start is None or end is None:
+        return "-"
+    try:
+        return f"{float(start):.3f}-{float(end):.3f}s"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_score(value):
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _log_mimo_clip_decision(clip_index, total_clips, result, output_path=None):
+    trim = result.suggested_trim
+    trim_range = (
+        _format_seconds_range(trim.trim_start, trim.trim_end)
+        if trim is not None
+        else "-"
+    )
+    source_range = _format_seconds_range(result.source_start, result.source_end)
+    output_text = f", output={output_path}" if output_path else ""
+    title = result.title or "-"
+    clip_type = result.clip_type or "-"
+    status = result.judge_status or ("keep" if result.retain_recommendation else "drop")
+    scan_log.info(
+        f"Clip {clip_index}/{total_clips} {status}: title={title}, "
+        f"type={clip_type}, score={_format_score(result.quality_score)}, "
+        f"completeness={_format_score(result.completeness_score)}, "
+        f"confidence={_format_score(result.confidence)}, source={source_range}, "
+        f"trim={trim_range}{output_text}, reason={result.quality_reason or '-'}"
+    )
+
+
+def _log_slice_only_summary(
+    total_slices,
+    output_slices,
+    judge_failed_count,
+    dropped_count,
+    empty_candidate_count,
+    segments,
+):
+    scan_log.info(
+        f"Slice-only summary: candidates={total_slices}, "
+        f"final_clips={len(output_slices)}, judge_failed={judge_failed_count}, "
+        f"dropped={dropped_count}, empty_candidates={empty_candidate_count}, "
+        f"segments={len(segments)}"
+    )
+
+
 def slice_only(video_path, **_slice_options):
     """Run the standalone slice pipeline for one completed recording.
 
@@ -317,6 +370,8 @@ def slice_only(video_path, **_slice_options):
     output_slices = []
     segments = []
     judge_failed_count = 0
+    dropped_count = 0
+    empty_candidate_count = 0
     for index, generated_slice in enumerate(slices_path, start=1):
         slice_path = generated_slice.path
         segment = None
@@ -350,8 +405,20 @@ def slice_only(video_path, **_slice_options):
                 analyzer=analyze_candidate_clips,
             )
             if not results:
+                empty_candidate_count += 1
                 scan_log.info(f"MiMo found no postable chat clips in {slice_path}")
                 continue
+            context_range = _format_seconds_range(
+                getattr(generated_slice, "context_start", None),
+                getattr(generated_slice, "context_end", None),
+            )
+            scan_log.info(
+                f"MiMo returned {len(results)} chat clip(s) for candidate {slice_path}: "
+                f"context={context_range}, "
+                f"duration={_format_score(getattr(generated_slice, 'duration', None))}s, "
+                f"danmaku_count={int(getattr(generated_slice, 'danmaku_count', 0) or 0)}, "
+                f"danmaku_chars={len(danmaku_text)}"
+            )
 
             from src.config import OMNI_ENABLE_DEEP_ANALYSIS
             from src.config import (
@@ -372,6 +439,7 @@ def slice_only(video_path, **_slice_options):
                 )
                 if result.judge_status == "judge_failed":
                     judge_failed_count += 1
+                    _log_mimo_clip_decision(clip_index, len(results), result)
                     scan_log.warning(
                         f"Slice {slice_path} kept for manual review: "
                         f"{result.judge_error or result.quality_reason}"
@@ -380,6 +448,8 @@ def slice_only(video_path, **_slice_options):
                     continue
 
                 if result.judge_status == "drop" or not result.retain_recommendation:
+                    dropped_count += 1
+                    _log_mimo_clip_decision(clip_index, len(results), result)
                     scan_log.info(
                         f"Slice {slice_path} filtered by LLM judge: "
                         f"retain=False, reason={result.quality_reason}"
@@ -391,6 +461,7 @@ def slice_only(video_path, **_slice_options):
                     continue
 
                 output_path = clip_output_path(slice_path, result, clip_index)
+                _log_mimo_clip_decision(clip_index, len(results), result, output_path)
                 segment = build_segment_record(
                     original_video_path,
                     generated_slice,
@@ -547,6 +618,14 @@ def slice_only(video_path, **_slice_options):
             delete_slice_upload_metadata(cleanup_path)
 
     if total_slices and not output_slices and not segments:
+        _log_slice_only_summary(
+            total_slices,
+            output_slices,
+            judge_failed_count,
+            dropped_count,
+            empty_candidate_count,
+            segments,
+        )
         error = "所有候选切片处理失败"
         progress.error(error, current_slice=total_slices, total_slices=total_slices)
         return {
@@ -624,6 +703,14 @@ def slice_only(video_path, **_slice_options):
         current_slice=total_slices,
         total_slices=total_slices,
         diagnostics=diagnostics,
+    )
+    _log_slice_only_summary(
+        total_slices,
+        output_slices,
+        judge_failed_count,
+        dropped_count,
+        empty_candidate_count,
+        segments,
     )
     scan_log.info(f"Slice-only processing complete for: {original_video_path}")
     return {
