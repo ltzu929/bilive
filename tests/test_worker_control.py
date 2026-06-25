@@ -103,3 +103,41 @@ def test_worker_status_reports_idle(monkeypatch):
     assert "last_started_at" in status
     assert "last_command" in status
     assert "last_log_path" in status
+
+
+def test_stop_worker_terminates_watcher_and_lock_owner_then_recovers(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    stopped = []
+    recovered = []
+
+    class FakeProcess:
+        pid = 100
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(worker_control, "_worker_process", FakeProcess())
+    monkeypatch.setattr(worker_control, "_worker_log_path", "logs/runtime/pc-worker-test.log")
+
+    result = worker_control.stop_worker(
+        project_root=tmp_path,
+        videos_root=videos,
+        lock_reader=lambda _path: {
+            "status": "locked",
+            "pid": 200,
+            "owner_running": True,
+        },
+        terminator=lambda pid: stopped.append(pid),
+        recoverer=lambda path: recovered.append(path) or 1,
+        pending_counter=lambda path: 4,
+    )
+
+    assert result == {
+        "status": "stopped",
+        "stopped_pids": [100, 200],
+        "recovered": 1,
+        "pending_tasks": 4,
+        "log_path": "logs/runtime/pc-worker-test.log",
+    }
+    assert recovered == [videos]

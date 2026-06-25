@@ -58,6 +58,7 @@
               Windows 重任务节点：检测中
             </span>
             <button id="refresh-button" class="btn-secondary" type="button">刷新</button>
+            <button id="stop-slice-button" class="btn-danger" type="button" disabled>停止</button>
             <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
           </div>
         </header>
@@ -69,6 +70,7 @@
             <div class="overview-file">
               <div class="eyebrow">当前处理文件</div>
               <div id="slice-progress-source" class="current-file">-</div>
+              <div id="slice-progress-file" class="file-meta">-</div>
               <div id="slice-progress-message" class="file-meta">暂无切片任务</div>
               <div class="progress-line">
                 <div class="progress-track">
@@ -133,9 +135,11 @@
                   <span>状态</span>
                   <select id="status-filter">
                     <option value="all">全部</option>
-                    <option value="review">待确认</option>
-                    <option value="keep">保留</option>
-                    <option value="drop">丢弃</option>
+                    <option value="todo">待处理</option>
+                    <option value="processing">处理中</option>
+                    <option value="failed">失败</option>
+                    <option value="done">已完成</option>
+                    <option value="has_keep">有保留片段</option>
                   </select>
                 </label>
               </div>
@@ -327,6 +331,6 @@
         </div>
       </main>
     </div>
-    <script src="/app.js?v=20260623-2"></script>
+    <script src="/app.js?v=20260625-1"></script>
   </body>
 </html>

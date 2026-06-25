@@ -91,3 +91,21 @@ def test_start_slice_scan_writes_slice_options_in_marker(tmp_path):
     assert result["queued"] == 1
     assert marker["slice_options"]["burst_ratio"] == 3.0
     assert marker["slice_options"]["burst_top_n"] == 2
+
+
+def test_start_slice_scan_skips_source_recordings_below_min_size(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260524-12-57-08.mp4"
+    source.write_bytes(b"x" * (20 * 1024 * 1024))
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    monkeypatch.setattr(slice_control, "MIN_SOURCE_RECORDING_SIZE_MB", 100, raising=False)
+
+    result = slice_control.start_slice_scan(videos_root=videos)
+
+    assert result["status"] == "empty"
+    assert result["queued"] == 0
+    assert result["pending_tasks"] == 0
+    assert result["skipped"] == 1
+    assert not source.with_suffix(".mp4.pending").exists()

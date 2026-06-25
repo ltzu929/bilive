@@ -20,6 +20,7 @@ class RemoteWorkerConfig:
     enabled: bool = False
     command: list[str] = field(default_factory=list)
     status_command: list[str] = field(default_factory=list)
+    stop_command: list[str] = field(default_factory=list)
     wake_command: list[str] = field(default_factory=list)
     timeout: float = DEFAULT_TIMEOUT
     startup_timeout: float = 30.0
@@ -42,6 +43,12 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
         os.environ.get(
             "BILIVE_REMOTE_WORKER_STATUS_COMMAND",
             section.get("status_command", []),
+        )
+    )
+    stop_command = _command_from_value(
+        os.environ.get(
+            "BILIVE_REMOTE_WORKER_STOP_COMMAND",
+            section.get("stop_command", []),
         )
     )
     wake_command = _command_from_value(
@@ -90,6 +97,16 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
             "-sS",
             "http://127.0.0.1:2235/api/worker/status",
         ]
+    if target and not stop_command:
+        stop_command = [
+            "ssh",
+            target,
+            "curl.exe",
+            "-sS",
+            "-X",
+            "POST",
+            "http://127.0.0.1:2235/api/worker/stop",
+        ]
     if target and task_name and not wake_command:
         wake_command = [
             "ssh",
@@ -104,6 +121,7 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
         enabled=enabled,
         command=command,
         status_command=status_command,
+        stop_command=stop_command,
         wake_command=wake_command,
         timeout=timeout,
         startup_timeout=startup_timeout,
@@ -251,6 +269,67 @@ def trigger_remote_worker(
         **payload,
         "returncode": completed.returncode,
         "command": cfg.command,
+        "stdout": (completed.stdout or "").strip(),
+        "stderr": (completed.stderr or "").strip(),
+    }
+
+
+def stop_remote_worker(
+    config: RemoteWorkerConfig | None = None,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, Any]:
+    cfg = config or load_remote_worker_config()
+    if not cfg.enabled:
+        return {"status": "disabled", "message": "remote worker stop is disabled"}
+    if not cfg.stop_command:
+        return {"status": "disabled", "message": "remote worker stop command is empty"}
+    try:
+        completed = runner(
+            cfg.stop_command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=cfg.timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "status": "failed",
+            "message": f"remote worker stop timed out after {cfg.timeout:g}s",
+            "command": cfg.stop_command,
+            "stdout": exc.stdout or "",
+            "stderr": exc.stderr or "",
+        }
+    except OSError as exc:
+        return {
+            "status": "failed",
+            "message": str(exc),
+            "command": cfg.stop_command,
+            "stdout": "",
+            "stderr": "",
+        }
+
+    if completed.returncode != 0:
+        return {
+            "status": "failed",
+            "returncode": completed.returncode,
+            "command": cfg.stop_command,
+            "stdout": (completed.stdout or "").strip(),
+            "stderr": (completed.stderr or "").strip(),
+        }
+
+    try:
+        payload = json.loads((completed.stdout or "").strip() or "{}")
+    except json.JSONDecodeError:
+        payload = {
+            "status": "failed",
+            "message": "Windows worker API returned invalid JSON",
+        }
+    return {
+        **payload,
+        "returncode": completed.returncode,
+        "command": cfg.stop_command,
         "stdout": (completed.stdout or "").strip(),
         "stderr": (completed.stderr or "").strip(),
     }

@@ -667,6 +667,29 @@ async def test_worker_wake_api_calls_remote_waker(tmp_path, dashboard_client):
 
 
 @pytest.mark.anyio
+async def test_worker_trigger_stop_uses_remote_worker_stopper(tmp_path, dashboard_client):
+    calls = []
+
+    async with dashboard_client(
+        tmp_path / "Videos",
+        remote_worker_stopper=lambda: calls.append("stop")
+        or {
+            "status": "stopped",
+            "recovered": 1,
+            "pending_tasks": 4,
+        },
+    ) as client:
+        response = await client.post("/api/worker-trigger/stop")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "stopped",
+        "recovered": 1,
+        "pending_tasks": 4,
+    }
+    assert calls == ["stop"]
+
+@pytest.mark.anyio
 async def test_slice_progress_api_reads_runtime_file(tmp_path, dashboard_client, monkeypatch):
     progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
     progress_path.parent.mkdir(parents=True)
@@ -692,6 +715,59 @@ async def test_slice_progress_api_reads_runtime_file(tmp_path, dashboard_client,
     assert response.json()["phase_label"] == "切片中"
     assert response.json()["current_slice_percent"] == 42.5
 
+
+@pytest.mark.anyio
+async def test_slice_progress_api_enriches_current_recording_display(
+    make_room,
+    dashboard_client,
+    tmp_path,
+    monkeypatch,
+):
+    room = make_room("22384516")
+    source = room / "22384516_20260617-14-23-25.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    (room / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "cmd": "DANMU_MSG",
+                "info": [None, None, None, [None, None, "呜米", "22384516"]],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    progress_path = tmp_path / "logs" / "runtime" / "slice-progress.json"
+    progress_path.parent.mkdir(parents=True)
+    progress_path.write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "phase": "mimo_wait",
+                "phase_label": "等待 MiMo 返回",
+                "room_id": "22384516",
+                "source_name": source.name,
+                "current_slice": 1,
+                "total_slices": 2,
+                "updated_at": time.time(),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BILIVE_DIR", str(tmp_path))
+    monkeypatch.delenv("BILIVE_RUNTIME_DIR", raising=False)
+
+    async with dashboard_client(tmp_path / "Videos") as client:
+        response = await client.get("/api/slice-progress")
+
+    body = response.json()
+    assert body["room_name"] == "呜米"
+    assert body["recorded_at"] == "2026-06-17 14:23:25"
+    assert body["display_title"] == "呜米 · 2026-06-17 14:23:25"
+    assert body["source_file"] == source.name
+    assert body["phase_label"] == "等待 MiMo 返回"
 
 @pytest.mark.anyio
 async def test_slice_progress_api_marks_stale(tmp_path, dashboard_client, monkeypatch):

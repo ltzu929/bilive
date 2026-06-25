@@ -16,7 +16,7 @@ from src.server.upload_control import (
     stop_upload_worker,
     upload_worker_status,
 )
-from src.server.worker_control import start_worker_once, worker_status
+from src.server.worker_control import start_worker_once, stop_worker, worker_status
 from src.server.worker_idle import IdleWatchdog
 from src.server.worker_lock import default_worker_lock_path, read_worker_lock
 
@@ -24,6 +24,7 @@ from src.server.worker_lock import default_worker_lock_path, read_worker_lock
 def create_app(
     worker_starter: Callable[[], Dict[str, Any]] | None = None,
     worker_status_reader: Callable[[], Dict[str, Any]] | None = None,
+    worker_stopper: Callable[[], Dict[str, Any]] | None = None,
     upload_starter: Callable[[], Dict[str, Any]] | None = None,
     upload_status_reader: Callable[[], Dict[str, Any]] | None = None,
     upload_stopper: Callable[[], Dict[str, Any]] | None = None,
@@ -40,6 +41,7 @@ def create_app(
 ) -> FastAPI:
     start_worker = worker_starter or start_worker_once
     read_worker_status = worker_status_reader or worker_status
+    stop_current_worker = worker_stopper or stop_worker
     start_upload = upload_starter or start_upload_worker
     read_upload_status = upload_status_reader or upload_worker_status
     stop_upload = upload_stopper or stop_upload_worker
@@ -183,6 +185,14 @@ def create_app(
     @app.get("/api/worker/status")
     async def get_worker_status() -> Dict[str, Any]:
         return read_runtime_state()
+
+    @app.post("/api/worker/stop")
+    async def stop_worker_once() -> Dict[str, Any]:
+        touch_activity(app)
+        try:
+            return stop_current_worker()
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/api/upload/start")
     async def start_upload_consumer() -> Dict[str, Any]:

@@ -55,6 +55,7 @@ def test_slice_only_outputs_multiple_mimo_clips(monkeypatch, tmp_path):
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice
 
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
     room = tmp_path / "Videos" / "123"
     room.mkdir(parents=True)
     source = _write_source(room)
@@ -101,6 +102,7 @@ def test_slice_only_logs_mimo_clip_decisions(monkeypatch, tmp_path):
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice
 
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
     room = tmp_path / "Videos" / "123"
     room.mkdir(parents=True)
     source = _write_source(room)
@@ -148,6 +150,7 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice
 
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
     room = tmp_path / "Videos" / "123"
     room.mkdir(parents=True)
     source = _write_source(room)

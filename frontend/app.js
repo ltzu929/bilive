@@ -49,6 +49,7 @@ const elements = {
   roomFilter: document.querySelector("#room-filter"),
   statusFilter: document.querySelector("#status-filter"),
   startSliceButton: document.querySelector("#start-slice-button"),
+  stopSliceButton: document.querySelector("#stop-slice-button"),
   refreshButton: document.querySelector("#refresh-button"),
   workerBadge: document.querySelector("#worker-badge"),
   sliceCount: document.querySelector("#slice-count"),
@@ -72,6 +73,7 @@ const elements = {
   progressTitle: document.querySelector("#slice-progress-title"),
   progressMessage: document.querySelector("#slice-progress-message"),
   progressSource: document.querySelector("#slice-progress-source"),
+  progressFile: document.querySelector("#slice-progress-file"),
   progressCount: document.querySelector("#slice-progress-count"),
   progressPercent: document.querySelector("#slice-progress-percent"),
   progressBar: document.querySelector("#slice-progress-bar"),
@@ -295,17 +297,20 @@ function renderSliceProgress(progress) {
     Math.min(100, Number(progress.current_slice_percent || 0)),
   );
   const status = progress.stale ? "stale" : (progress.status || "idle");
+  const running = status === "running";
   elements.progressPanel.dataset.status = status;
   elements.progressTitle.textContent = progress.phase_label || "空闲";
   elements.progressMessage.textContent = progress.stale
     ? "进度已过期，请检查切片进程"
     : (progress.error || progress.message || "暂无切片任务");
-  elements.progressSource.textContent = progress.source_name || "-";
+  elements.progressSource.textContent = progress.display_title || progress.source_name || "-";
+  if (elements.progressFile) elements.progressFile.textContent = progress.source_file || progress.source_name || "-";
   elements.progressCount.textContent = `${Number(progress.current_slice || 0)}/${Number(progress.total_slices || 0)}`;
   elements.progressPercent.textContent = `${percent.toFixed(0)}%`;
   elements.progressBar.style.width = `${percent}%`;
-  elements.startSliceButton.disabled = status === "running";
-  elements.startSliceButton.textContent = status === "running" ? "切片中" : "启动切片";
+  elements.startSliceButton.disabled = running;
+  elements.startSliceButton.textContent = running ? "切片中" : "启动切片";
+  if (elements.stopSliceButton) elements.stopSliceButton.disabled = !running;
   renderTaskState(status);
 }
 
@@ -518,6 +523,49 @@ function sourceReviewPriority(item) {
   return 0;
 }
 
+
+function sourceRecordingMatchesStatus(item, status) {
+  if (!status || status === "all") return true;
+  const counts = item.summary_counts || {};
+  if (status === "todo") return ["ready", "pending", "stale"].includes(item.status || "");
+  if (status === "processing") return item.status === "processing" || item.status === "running";
+  if (status === "failed") return item.status === "failed";
+  if (status === "done") return item.status === "done";
+  if (status === "has_keep") {
+    return Number(counts.keep || 0) + Number(counts.manual_keep || 0) > 0;
+  }
+  return true;
+}
+
+function filteredSourceRecordings() {
+  const status = elements.statusFilter?.value || "all";
+  return state.sourceRecordings.filter((item) => sourceRecordingMatchesStatus(item, status));
+}
+
+function sortedSourceRecordings() {
+  return filteredSourceRecordings()
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => (
+      sourceReviewPriority(right.item) - sourceReviewPriority(left.item)
+      || left.index - right.index
+    ))
+    .map(({ item }) => item);
+}
+
+function ensureVisibleSourceSelection() {
+  const items = sortedSourceRecordings();
+  if (!items.some((item) => item.task_id === state.selectedSourceId)) {
+    const preferredSource = items
+      .filter((item) => Number(item.segment_count || 0) > 0)
+      .sort((left, right) => sourceReviewPriority(right) - sourceReviewPriority(left))[0]
+      || items[0];
+    state.selectedSourceId = preferredSource?.task_id || "";
+    state.selectedSegmentId = "";
+    return true;
+  }
+  return false;
+}
+
 async function refreshSourceRecordings() {
   const requestId = ++sourceRecordingRequestId;
   const roomId = elements.roomFilter.value;
@@ -526,14 +574,7 @@ async function refreshSourceRecordings() {
     const sourceRecordings = await request(`/api/source-recordings${query}`);
     if (requestId !== sourceRecordingRequestId) return;
     state.sourceRecordings = sourceRecordings;
-    if (!state.sourceRecordings.some((item) => item.task_id === state.selectedSourceId)) {
-      const preferredSource = [...state.sourceRecordings]
-        .filter((item) => Number(item.segment_count || 0) > 0)
-        .sort((left, right) => sourceReviewPriority(right) - sourceReviewPriority(left))[0]
-        || state.sourceRecordings[0];
-      state.selectedSourceId = preferredSource?.task_id || "";
-      state.selectedSegmentId = "";
-    }
+    ensureVisibleSourceSelection();
     renderSourceRecordings();
     if (state.selectedSourceId) {
       await refreshSourceDetail(state.selectedSourceId);
@@ -549,13 +590,7 @@ async function refreshSourceRecordings() {
 
 function renderSourceRecordings() {
   if (!elements.sourceRecordingList || !elements.sourceRecordingCount) return;
-  const items = state.sourceRecordings
-    .map((item, index) => ({ item, index }))
-    .sort((left, right) => (
-      sourceReviewPriority(right.item) - sourceReviewPriority(left.item)
-      || left.index - right.index
-    ))
-    .map(({ item }) => item);
+  const items = sortedSourceRecordings();
   elements.sourceRecordingCount.textContent = `${items.length} 条录播`;
   elements.sourceRecordingList.innerHTML = "";
   updateOverviewStats();
@@ -988,6 +1023,36 @@ async function runTaskAction(task, action) {
   }
 }
 
+
+async function stopSlicing() {
+  showError("");
+  if (!elements.stopSliceButton) return;
+  elements.stopSliceButton.disabled = true;
+  elements.stopSliceButton.textContent = "停止中";
+  try {
+    const result = await request("/api/worker-trigger/stop", {
+      method: "POST",
+    });
+    const recovered = Number(result.recovered || 0);
+    const pending = Number(result.pending_tasks || 0);
+    renderSliceProgress({
+      status: "idle",
+      phase_label: "已停止",
+      message: `已停止 Windows 重任务节点，恢复 ${recovered} 个处理中任务，待处理 ${pending} 个。`,
+      current_slice_percent: 0,
+    });
+    await refreshWorkerStatus();
+    await refreshSliceProgress();
+    await refreshSliceDiagnostics();
+    await refreshTasks();
+    await refreshSourceRecordings();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    elements.stopSliceButton.textContent = "停止";
+  }
+}
+
 async function startSlicing() {
   showError("");
   elements.startSliceButton.disabled = true;
@@ -1288,11 +1353,21 @@ document.addEventListener("keydown", (event) => {
 });
 
 elements.startSliceButton.addEventListener("click", startSlicing);
+elements.stopSliceButton?.addEventListener("click", stopSlicing);
 elements.refreshButton.addEventListener("click", () => {
   refresh();
   refreshSourceRecordings();
 });
-elements.statusFilter.addEventListener("change", render);
+elements.statusFilter.addEventListener("change", () => {
+  const changed = ensureVisibleSourceSelection();
+  renderSourceRecordings();
+  if (changed && state.selectedSourceId) {
+    refreshSourceDetail(state.selectedSourceId).catch((error) => showError(error.message));
+  } else if (!state.selectedSourceId) {
+    state.sourceDetail = null;
+    renderSourceDetail();
+  }
+});
 elements.roomFilter.addEventListener("change", () => {
   refresh();
   refreshTasks();

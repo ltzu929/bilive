@@ -55,6 +55,28 @@ def test_load_remote_worker_config_reads_toml_command(tmp_path):
     )
 
 
+def test_stop_remote_worker_runs_configured_stop_command():
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result(returncode=0, stdout='{"status":"stopped","recovered":1}')
+
+    from src.dashboard import remote_worker
+
+    result = remote_worker.stop_remote_worker(
+        RemoteWorkerConfig(
+            enabled=True,
+            stop_command=["ssh", "win", "curl.exe", "-X", "POST", "stop"],
+            timeout=8,
+        ),
+        runner=fake_runner,
+    )
+
+    assert result["status"] == "stopped"
+    assert result["recovered"] == 1
+    assert calls[0][0] == ["ssh", "win", "curl.exe", "-X", "POST", "stop"]
+
 def test_trigger_remote_worker_runs_configured_command():
     calls = []
 
@@ -196,6 +218,7 @@ def test_load_remote_worker_config_builds_commands_from_environment(tmp_path, mo
         "http://127.0.0.1:2235/api/worker/run-once",
     ]
     assert config.status_command[-1] == "http://127.0.0.1:2235/api/worker/status"
+    assert config.stop_command[-1] == "http://127.0.0.1:2235/api/worker/stop"
     assert config.wake_command == [
         "ssh",
         "worker-host",

@@ -15,13 +15,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.burn.task_history import read_task_history, write_task_history
+from src.config import MIN_VIDEO_SIZE
 
 
 # Matches slice output names like "120s_22384516_20260527-12-55-32.mp4"
 _SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
 
 # Source recording pattern: {room_id}_{YYYYMMDD-HH-MM-SS}.mp4
-_SOURCE_RE = re.compile(r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}\.mp4$")
+_SOURCE_RE = re.compile(r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}(?:_\(\d+\))?\.mp4$")
+MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
 
 # Status descriptions in Chinese
 _STATUS_MESSAGES: Dict[str, str] = {
@@ -66,7 +68,11 @@ def build_task_inventory(
             continue
 
         sources = sorted(
-            [f for f in room_dir.glob("*.mp4") if _SOURCE_RE.match(f.name)],
+            [
+                f
+                for f in room_dir.glob("*.mp4")
+                if _SOURCE_RE.match(f.name) and _meets_min_source_size(f)
+            ],
             key=lambda f: f.name,
         )
 
@@ -75,6 +81,16 @@ def build_task_inventory(
             tasks.append(task)
 
     return tasks
+
+
+def _meets_min_source_size(source: Path) -> bool:
+    minimum = float(MIN_SOURCE_RECORDING_SIZE_MB or 0)
+    if minimum <= 0:
+        return True
+    try:
+        return source.stat().st_size >= minimum * 1024 * 1024
+    except OSError:
+        return False
 
 
 def _rel_path(p: Path, root: Path) -> str:

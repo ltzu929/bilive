@@ -23,7 +23,7 @@ auth_retry_seconds = 120
 delete_after_success = true
 
 [slice]
-min_video_size = 20
+min_video_size = 100
 
 [slice.burst]
 burst_ratio = 3.0

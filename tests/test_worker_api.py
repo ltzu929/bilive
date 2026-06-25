@@ -157,6 +157,31 @@ async def test_worker_api_reports_status():
         },
     }
 
+@pytest.mark.anyio
+async def test_worker_api_stops_worker_and_reports_recovery():
+    calls = []
+
+    def fake_stopper():
+        calls.append("stop")
+        return {
+            "status": "stopped",
+            "stopped_pids": [100, 200],
+            "recovered": 1,
+            "pending_tasks": 4,
+            "log_path": "logs/runtime/pc-worker-test.log",
+        }
+
+    app = create_app(worker_stopper=fake_stopper, auto_upload=False)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/worker/stop")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert response.json()["recovered"] == 1
+    assert response.json()["pending_tasks"] == 4
+    assert calls == ["stop"]
 
 @pytest.mark.anyio
 async def test_worker_api_lifespan_starts_and_stops_upload_worker():

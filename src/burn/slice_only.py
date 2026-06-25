@@ -377,23 +377,45 @@ def slice_only(video_path, **_slice_options):
         segment = None
         queue_created = False
         try:
-            progress.update(
-                force=True,
-                status="running",
-                phase="analyze",
-                phase_label="分析标题",
-                current_slice=index,
-                total_slices=total_slices,
-                current_slice_path=slice_path,
-                current_slice_percent=100.0,
-                message=f"正在分析切片 {index}/{total_slices}",
-                error="",
-                diagnostics=diagnostics,
-            )
             danmaku_text = extract_danmaku_text(
                 xml_path,
                 generated_slice.context_start,
                 generated_slice.context_end,
+            )
+            mimo_details = [
+                ("候选", f"{index}/{total_slices}"),
+                (
+                    "候选区间",
+                    _format_seconds_range(
+                        generated_slice.context_start,
+                        generated_slice.context_end,
+                    ),
+                ),
+                ("候选时长", f"{_format_score(generated_slice.duration)}s"),
+                ("弹幕数", str(int(getattr(generated_slice, "danmaku_count", 0) or 0))),
+                ("弹幕字符", str(len(danmaku_text))),
+            ]
+            progress.update(
+                force=True,
+                status="running",
+                phase="mimo_wait",
+                phase_label="等待 MiMo 返回",
+                current_slice=index,
+                total_slices=total_slices,
+                current_slice_path=slice_path,
+                current_slice_percent=100.0,
+                message=f"已发送候选 {index}/{total_slices} 给 MiMo，等待判断结果",
+                error="",
+                diagnostics=upsert_diagnostic(
+                    diagnostics,
+                    diagnostic_item(
+                        "mimo",
+                        "MiMo 判断",
+                        "pending",
+                        f"等待 MiMo 返回候选 {index}/{total_slices}",
+                        mimo_details,
+                    ),
+                ),
             )
             results = analyze_clips_stage(
                 slice_path,
@@ -403,6 +425,33 @@ def slice_only(video_path, **_slice_options):
                 candidate_end=generated_slice.context_end,
                 candidate_duration=generated_slice.duration,
                 analyzer=analyze_candidate_clips,
+            )
+            result_message = (
+                f"MiMo 返回 {len(results)} 个可处理片段"
+                if results
+                else "MiMo 未返回可投稿片段"
+            )
+            progress.update(
+                force=True,
+                status="running",
+                phase="mimo_result",
+                phase_label="解析 MiMo 结果",
+                current_slice=index,
+                total_slices=total_slices,
+                current_slice_path=slice_path,
+                current_slice_percent=100.0,
+                message=result_message,
+                error="",
+                diagnostics=upsert_diagnostic(
+                    diagnostics,
+                    diagnostic_item(
+                        "mimo",
+                        "MiMo 判断",
+                        "ok" if results else "warning",
+                        result_message,
+                        [*mimo_details, ("返回片段", str(len(results)))],
+                    ),
+                ),
             )
             if not results:
                 empty_candidate_count += 1

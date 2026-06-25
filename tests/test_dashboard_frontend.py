@@ -53,7 +53,7 @@ def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
     assert "由 Windows 环境管理" in texts["js"]
     assert 'aria-label="切片工作台"' in texts["html"]
     assert "?????" not in texts["html"]
-    assert 'src="/app.js?v=20260623-2"' in texts["html"]
+    assert 'src="/app.js?v=20260625-1"' in texts["html"]
 
     for contract in [
         "activateCurrentView",
@@ -88,6 +88,7 @@ def test_frontend_dashboard_dom_contract():
         "quality-score",
         "burst-ratio",
         "start-slice-button",
+        "stop-slice-button",
     ]:
         assert f'id="{element_id}"' in texts["html"]
 
@@ -151,6 +152,26 @@ def test_source_recording_refresh_ignores_stale_responses():
     assert "if (requestId !== sourceRecordingRequestId) return;" in text
 
 
+def test_frontend_source_recording_status_filter_contract():
+    texts = _frontend_texts()
+
+    for option in [
+        '<option value="todo">待处理</option>',
+        '<option value="processing">处理中</option>',
+        '<option value="failed">失败</option>',
+        '<option value="done">已完成</option>',
+        '<option value="has_keep">有保留片段</option>',
+    ]:
+        assert option in texts["html"]
+
+    assert "function sourceRecordingMatchesStatus" in texts["js"]
+    assert "filteredSourceRecordings" in texts["js"]
+    assert "renderSourceRecordings();" in texts["js"]
+    assert "stopSlicing" in texts["js"]
+    assert "progress.display_title" in texts["js"]
+    assert "progress.source_file" in texts["js"]
+    assert "stopSliceButton.disabled = !running" in texts["js"]
+
 def test_frontend_api_endpoint_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")
 
@@ -161,6 +182,7 @@ def test_frontend_api_endpoint_contract():
         'request("/api/slice-diagnostics")',
         'request("/api/slice/start", {',
         'request("/api/worker-trigger/status")',
+        'request("/api/worker-trigger/stop", {',
     ]:
         assert endpoint in text
 

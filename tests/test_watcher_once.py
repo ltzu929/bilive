@@ -110,6 +110,37 @@ def test_watcher_marks_slice_pipeline_failed_result_failed(monkeypatch, tmp_path
     assert history["error"] == "burst detector failed"
 
 
+def test_watcher_skips_pending_source_recording_below_min_size(monkeypatch, tmp_path):
+    from src.burn import slice_only as slice_module
+
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"x" * (20 * 1024 * 1024))
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    pending = source.with_suffix(".mp4.pending")
+    pending.write_text(
+        '{"video_rel_path":"22384516/22384516_20260527-12-55-32.mp4","action":"slice"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(watcher, "MIN_SOURCE_RECORDING_SIZE_MB", 100, raising=False)
+    monkeypatch.setattr(
+        slice_module,
+        "slice_only",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should skip")),
+    )
+
+    assert watcher.process_pending_videos(str(videos)) == 1
+
+    assert not pending.exists()
+    assert not source.with_suffix(".mp4.processing").exists()
+    assert source.with_suffix(".mp4.done").exists()
+    history = read_task_history(source)
+    assert history is not None
+    assert history["status"] == "skipped"
+
+
 def test_watcher_writes_slice_count_to_done_history(monkeypatch, tmp_path):
     from src.burn import slice_only as slice_module
 

@@ -258,6 +258,20 @@ def test_mark_done_task_updates_terminal_history(tmp_path):
     assert read_task_history(source)["status"] == "done"
 
 
+def test_build_task_inventory_excludes_source_recordings_below_min_size(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"x" * (20 * 1024 * 1024))
+    source.with_suffix(".xml").write_text("<danmaku/>", encoding="utf-8")
+    monkeypatch.setattr(task_state, "MIN_SOURCE_RECORDING_SIZE_MB", 100, raising=False)
+
+    tasks = task_state.build_task_inventory(videos_root=videos)
+
+    assert tasks == []
+
+
 def test_build_task_inventory_returns_skipped_when_no_xml(tmp_path):
     """Source without .xml → skipped."""
     videos = tmp_path / "Videos"

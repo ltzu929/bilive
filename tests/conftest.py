@@ -64,3 +64,14 @@ def write_source_recording(make_room):
         return source
 
     return write
+
+
+@pytest.fixture(autouse=True)
+def default_source_recording_size_threshold(monkeypatch):
+    """Keep legacy tiny fixture videos valid unless a test opts into filtering."""
+    from src.dashboard import slice_control, task_state
+    from src.server import watcher
+
+    monkeypatch.setattr(slice_control, "MIN_SOURCE_RECORDING_SIZE_MB", 0, raising=False)
+    monkeypatch.setattr(task_state, "MIN_SOURCE_RECORDING_SIZE_MB", 0, raising=False)
+    monkeypatch.setattr(watcher, "MIN_SOURCE_RECORDING_SIZE_MB", 0, raising=False)

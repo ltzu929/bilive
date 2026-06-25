@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from src.burn.task_history import write_task_history
+from src.config import MIN_VIDEO_SIZE
 
 
 SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
+MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
 
 
 def start_slice_scan(
@@ -92,6 +94,8 @@ def _is_queue_candidate(video_path: Path) -> bool:
         return False
     if "_slice" in video_path.name or SLICE_OUTPUT_RE.match(video_path.name):
         return False
+    if not _meets_min_source_size(video_path):
+        return False
     if not video_path.with_suffix(".xml").is_file():
         return False
     if video_path.with_suffix(".mp4.pending").exists():
@@ -99,6 +103,16 @@ def _is_queue_candidate(video_path: Path) -> bool:
     if video_path.with_suffix(".mp4.done").exists():
         return False
     return True
+
+
+def _meets_min_source_size(video_path: Path) -> bool:
+    minimum = float(MIN_SOURCE_RECORDING_SIZE_MB or 0)
+    if minimum <= 0:
+        return True
+    try:
+        return video_path.stat().st_size >= minimum * 1024 * 1024
+    except OSError:
+        return False
 
 
 def _write_pending_marker(

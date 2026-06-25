@@ -3,6 +3,7 @@
 import mimetypes
 import os
 import ipaddress
+import re
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, Iterator
 from urllib.parse import urlsplit
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from src.dashboard.file_store import DashboardFileStore
 from src.dashboard.remote_worker import (
     remote_worker_status,
+    stop_remote_worker,
     trigger_remote_worker,
     wake_remote_worker,
 )
@@ -256,6 +258,7 @@ def create_app(
     remote_worker_trigger=None,
     remote_worker_status_reader=None,
     remote_worker_waker=None,
+    remote_worker_stopper=None,
 ) -> FastAPI:
     app = FastAPI(title="bilive dashboard", version="0.1.0")
     store = DashboardFileStore(videos_root or default_videos_root())
@@ -380,6 +383,11 @@ def create_app(
         if remote_worker_waker is not None:
             return remote_worker_waker()
         return wake_remote_worker()
+
+    def stop_worker() -> Dict[str, Any]:
+        if remote_worker_stopper is not None:
+            return remote_worker_stopper()
+        return stop_remote_worker()
 
     def queue_segment_action(action: str, segment_id: str) -> Dict[str, Any]:
         result = enqueue_action_job(
@@ -517,7 +525,7 @@ def create_app(
             progress = build_queued_progress(queue_state)
         else:
             progress.update(queue_state)
-        return progress
+        return enrich_slice_progress(progress, store)
 
     @app.get("/api/slice-diagnostics")
     async def get_slice_diagnostics() -> Dict[str, Any]:
@@ -552,6 +560,10 @@ def create_app(
     @app.post("/api/worker-trigger/wake")
     async def wake_worker_api() -> Dict[str, Any]:
         return wake_worker()
+
+    @app.post("/api/worker-trigger/stop")
+    async def stop_worker_api() -> Dict[str, Any]:
+        return stop_worker()
 
     @app.patch("/api/slices/{slice_id}/feedback")
     async def update_feedback(
@@ -636,6 +648,52 @@ def create_app(
             app.mount("/", StaticFiles(directory=static_path, html=True), name="web")
 
     return app
+
+
+_RECORDING_NAME_RE = re.compile(
+    r"^(?P<room>\d+)_(?P<date>\d{8})-(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})(?:_\(\d+\))?\.mp4$"
+)
+
+
+def enrich_slice_progress(
+    progress: Dict[str, Any],
+    store: DashboardFileStore,
+) -> Dict[str, Any]:
+    enriched = dict(progress)
+    source_name = Path(str(enriched.get("source_name") or enriched.get("source_path") or "")).name
+    room_id = str(enriched.get("room_id") or "")
+    match = _RECORDING_NAME_RE.match(source_name)
+    if match and not room_id:
+        room_id = match.group("room")
+
+    room_name = room_id
+    if room_id:
+        room_names = {room.room_id: room.name for room in store.list_rooms()}
+        room_name = room_names.get(room_id, room_id)
+
+    recorded_at = _recording_time_label(source_name)
+    display_parts = [part for part in [room_name or "", recorded_at] if part]
+    enriched.update(
+        {
+            "room_id": room_id,
+            "room_name": room_name,
+            "recorded_at": recorded_at,
+            "source_file": source_name,
+            "display_title": " · ".join(display_parts) if display_parts else source_name,
+        }
+    )
+    return enriched
+
+
+def _recording_time_label(source_name: str) -> str:
+    match = _RECORDING_NAME_RE.match(source_name or "")
+    if not match:
+        return ""
+    date = match.group("date")
+    return (
+        f"{date[0:4]}-{date[4:6]}-{date[6:8]} "
+        f"{match.group('hour')}:{match.group('minute')}:{match.group('second')}"
+    )
 
 
 def build_slice_diagnostics(

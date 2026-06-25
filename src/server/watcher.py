@@ -10,9 +10,12 @@ from pathlib import Path
 from typing import Callable
 
 from src.burn.task_history import write_task_history
+from src.config import MIN_VIDEO_SIZE
 from src.config.server_config import VIDEOS_DIR
 from src.log.logger import scan_log
 from src.server.action_jobs import process_action_jobs
+MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
+
 from src.server.worker_lock import (
     WorkerAlreadyRunning,
     WorkerProcessLock,
@@ -114,6 +117,51 @@ def _relative_output_slices(output_slices, videos_dir: Path):
     return normalized
 
 
+def _meets_min_source_size(video: Path) -> bool:
+    minimum = float(MIN_SOURCE_RECORDING_SIZE_MB or 0)
+    if minimum <= 0:
+        return True
+    try:
+        return video.stat().st_size >= minimum * 1024 * 1024
+    except OSError:
+        return False
+
+
+def _mark_processing_skipped(
+    processing: Path,
+    marker: dict,
+    video: Path,
+    root: Path,
+    started_at: str,
+    worker_pid: int,
+) -> None:
+    marker.pop("worker_pid", None)
+    marker["processed_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    marker["status"] = "skipped"
+    marker["reason"] = "below_min_video_size"
+    done = processing.with_suffix(".done")
+    _write_json_atomic(done, marker)
+    processing.unlink(missing_ok=True)
+    write_task_history(
+        video,
+        status="skipped",
+        videos_root=root,
+        started_at=started_at,
+        worker_pid=worker_pid,
+        diagnostics=[
+            {
+                "id": "result",
+                "title": "切片结果",
+                "status": "warning",
+                "message": "录像小于切片阈值，已跳过",
+                "details": [
+                    {"label": "最小阈值", "value": f"{float(MIN_SOURCE_RECORDING_SIZE_MB):.1f} MB"},
+                ],
+            }
+        ],
+    )
+
+
 def process_pending_videos(videos_dir: str | Path | None = None) -> int:
     """Process every marker that can be atomically claimed."""
     root = Path(videos_dir or VIDEOS_DIR).expanduser().resolve()
@@ -141,20 +189,33 @@ def _process_pending_root(root: Path) -> int:
                 raise FileNotFoundError(f"Video file not found: {video}")
 
             started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-            write_task_history(
-                video,
-                status="processing",
-                videos_root=root,
-                started_at=started_at,
-                worker_pid=os.getpid(),
-            )
             action = str(marker.get("action") or "slice")
-            scan_log.info(f"Processing {action}: {video}")
             worker_pid = os.getpid()
             slice_options = marker.get("slice_options", {}) or {}
 
             if action != "slice":
                 raise ValueError(f"Unknown action: {action}")
+            if not _meets_min_source_size(video):
+                scan_log.info(f"Skipping small source recording: {video}")
+                _mark_processing_skipped(
+                    processing,
+                    marker,
+                    video,
+                    root,
+                    started_at,
+                    worker_pid,
+                )
+                processed += 1
+                continue
+
+            write_task_history(
+                video,
+                status="processing",
+                videos_root=root,
+                started_at=started_at,
+                worker_pid=worker_pid,
+            )
+            scan_log.info(f"Processing {action}: {video}")
 
             from src.burn.slice_only import slice_only
 
