@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 
 
 FRONTEND_HTML = Path("frontend/index.html")
@@ -267,6 +268,38 @@ def test_frontend_source_recording_status_filter_contract():
     assert "status === \"stopped\" || status === \"idle\"" in texts["js"]
     assert "status === \"partial\"" in texts["js"]
     assert "throw new Error" in texts["js"]
+
+def test_frontend_status_filter_matches_segment_review_counts():
+    import shutil
+    import subprocess
+    import textwrap
+
+    if shutil.which("node") is None:
+        pytest.skip("node is required for frontend behavior test")
+
+    script = textwrap.dedent(
+        """
+        const fs = require('fs');
+        const source = fs.readFileSync('frontend/app.js', 'utf8');
+        const names = ['sourceReviewCount', 'sourceKeepCount', 'sourceRecordingMatchesStatus'];
+        for (const name of names) {
+          const match = source.match(new RegExp(`function ${name}\\\\([^]*?\\\\n}`));
+          if (!match) throw new Error(`missing ${name}`);
+          eval(match[0]);
+        }
+        const doneWithReview = { status: 'done', summary_counts: { review: 1, judge_failed: 0 } };
+        const doneWithJudgeFailure = { status: 'done', summary_counts: { review: 0, judge_failed: 1 } };
+        const readyWithoutReview = { status: 'ready', summary_counts: {} };
+        const failedRecording = { status: 'failed', summary_counts: {} };
+        if (!sourceRecordingMatchesStatus(doneWithReview, 'todo')) throw new Error('review segment hidden from todo');
+        if (!sourceRecordingMatchesStatus(doneWithJudgeFailure, 'todo')) throw new Error('judge_failed segment hidden from todo');
+        if (!sourceRecordingMatchesStatus(doneWithJudgeFailure, 'failed')) throw new Error('judge_failed segment hidden from failed');
+        if (!sourceRecordingMatchesStatus(readyWithoutReview, 'todo')) throw new Error('ready source hidden from todo');
+        if (!sourceRecordingMatchesStatus(failedRecording, 'failed')) throw new Error('failed source hidden from failed');
+        """
+    )
+    subprocess.run(["node", "-e", script], check=True)
+
 
 def test_frontend_api_endpoint_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")

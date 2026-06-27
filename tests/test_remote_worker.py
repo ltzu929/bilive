@@ -119,6 +119,30 @@ def test_load_remote_worker_config_reads_stop_timeout(tmp_path):
     assert config.stop_timeout == 45
 
 
+def test_load_remote_worker_config_invalid_timeouts_use_field_defaults(tmp_path):
+    config_path = tmp_path / "bilive-server.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[dashboard.remote_worker]",
+                "enabled = true",
+                "timeout = 0",
+                "stop_timeout = -5",
+                "startup_timeout = \"bad\"",
+                "poll_interval = 0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_remote_worker_config(config_path)
+
+    assert config.timeout == 10
+    assert config.stop_timeout == 30
+    assert config.startup_timeout == 30
+    assert config.poll_interval == 1
+
+
 def test_trigger_remote_worker_runs_configured_command():
     calls = []
 

@@ -60,21 +60,24 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
         )
     )
     timeout = _as_timeout(
-        os.environ.get("BILIVE_REMOTE_WORKER_TIMEOUT", section.get("timeout", DEFAULT_TIMEOUT))
+        os.environ.get("BILIVE_REMOTE_WORKER_TIMEOUT", section.get("timeout", DEFAULT_TIMEOUT)),
+        DEFAULT_TIMEOUT,
     )
     stop_timeout = _as_timeout(
         os.environ.get(
             "BILIVE_REMOTE_WORKER_STOP_TIMEOUT",
             section.get("stop_timeout", DEFAULT_STOP_TIMEOUT),
-        )
+        ),
+        DEFAULT_STOP_TIMEOUT,
     )
     startup_timeout = _as_timeout(
         os.environ.get(
             "BILIVE_REMOTE_WORKER_STARTUP_TIMEOUT",
             section.get("startup_timeout", 30),
-        )
+        ),
+        30.0,
     )
-    poll_interval = _as_timeout(section.get("poll_interval", 1))
+    poll_interval = _as_timeout(section.get("poll_interval", 1), 1.0)
     task_name = str(
         os.environ.get(
             "BILIVE_WINDOWS_WORKER_TASK",
@@ -434,9 +437,9 @@ def _command_from_value(raw: Any) -> list[str]:
     return []
 
 
-def _as_timeout(raw: Any) -> float:
+def _as_timeout(raw: Any, default: float) -> float:
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return DEFAULT_TIMEOUT
-    return value if value > 0 else DEFAULT_TIMEOUT
+        return default
+    return value if value > 0 else default

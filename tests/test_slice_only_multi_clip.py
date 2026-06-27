@@ -128,7 +128,7 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
     active_requests = 0
     max_active_requests = 0
 
-    def fake_analyze(video_path, *args, **kwargs):
+    def fake_judge(video_path, *args, **kwargs):
         nonlocal active_requests, max_active_requests
         with lock:
             active_requests += 1
@@ -141,6 +141,12 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
         title = "Clip A" if Path(video_path) == candidate_a else "Clip B"
         return [_clip(title, 10.0, 40.0)]
 
+    finalized_titles = []
+
+    def fake_finalize(results, *args, **kwargs):
+        finalized_titles.extend(result.title for result in results)
+        return results
+
     burned_titles = []
 
     def fake_burn(video_path, analysis, *, output_path=None):
@@ -148,7 +154,8 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
         burned_titles.append(analysis.title)
         return type("Burn", (), {"burned": True, "message": "ok"})()
 
-    monkeypatch.setattr(slice_module, "analyze_candidate_clips", fake_analyze)
+    monkeypatch.setattr(slice_module, "judge_candidate_clips_with_mimo", fake_judge)
+    monkeypatch.setattr(slice_module, "analyze_candidate_clip_results", fake_finalize)
     monkeypatch.setattr(slice_module, "burn_subtitles_from_analysis", fake_burn)
     monkeypatch.setattr(slice_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(slice_module, "insert_upload_queue", lambda path: True)
@@ -160,8 +167,95 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
 
     assert result["status"] == "done"
     assert max_active_requests >= 2
+    assert finalized_titles == ["Clip A", "Clip B"]
     assert burned_titles == ["Clip A", "Clip B"]
     assert [segment["title"] for segment in result["segments"]] == ["Clip A", "Clip B"]
+
+
+def test_slice_only_parallel_mimo_does_not_run_full_asr_analyzer_in_workers(monkeypatch, tmp_path):
+    from src.burn import slice_only as slice_module
+    from src.autoslice.danmaku_slice import GeneratedSlice
+
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
+    room = tmp_path / "Videos" / "123"
+    room.mkdir(parents=True)
+    source = _write_source(room)
+    candidate_a = room / "0s_123_20260624-10-00-00.mp4"
+    candidate_b = room / "100s_123_20260624-10-00-00.mp4"
+    candidate_a.write_bytes(b"candidate a")
+    candidate_b.write_bytes(b"candidate b")
+
+    monkeypatch.setattr(slice_module, "MIN_VIDEO_SIZE", 1)
+    monkeypatch.setattr(
+        slice_module,
+        "slice_video_by_danmaku",
+        lambda *args, **kwargs: [
+            GeneratedSlice(str(candidate_a), 0.0, 10.0, 0.0, 240.0, 240.0, 2),
+            GeneratedSlice(str(candidate_b), 100.0, 110.0, 100.0, 340.0, 240.0, 3),
+        ],
+    )
+    monkeypatch.setattr(slice_module, "extract_danmaku_text", lambda *args, **kwargs: "弹幕")
+    monkeypatch.setattr(
+        slice_module,
+        "analyze_candidate_clips",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("full ASR analyzer must not run in MiMo worker")
+        ),
+    )
+
+    lock = threading.Lock()
+    second_request_started = threading.Event()
+    active_requests = 0
+    max_active_requests = 0
+    judge_threads = []
+
+    def fake_judge(video_path, *args, **kwargs):
+        nonlocal active_requests, max_active_requests
+        judge_threads.append(threading.get_ident())
+        with lock:
+            active_requests += 1
+            max_active_requests = max(max_active_requests, active_requests)
+            if active_requests >= 2:
+                second_request_started.set()
+        second_request_started.wait(0.2)
+        with lock:
+            active_requests -= 1
+        title = "Clip A" if Path(video_path) == candidate_a else "Clip B"
+        return [_clip(title, 10.0, 40.0)]
+
+    finalize_threads = []
+
+    def fake_finalize(results, *args, **kwargs):
+        finalize_threads.append(threading.get_ident())
+        return results
+
+    burned_titles = []
+
+    def fake_burn(video_path, analysis, *, output_path=None):
+        Path(output_path).write_bytes(f"rendered {analysis.title}".encode("utf-8"))
+        burned_titles.append(analysis.title)
+        return type("Burn", (), {"burned": True, "message": "ok"})()
+
+    monkeypatch.setattr(slice_module, "judge_candidate_clips_with_mimo", fake_judge, raising=False)
+    monkeypatch.setattr(slice_module, "analyze_candidate_clip_results", fake_finalize, raising=False)
+    monkeypatch.setattr(slice_module, "burn_subtitles_from_analysis", fake_burn)
+    monkeypatch.setattr(slice_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(slice_module, "insert_upload_queue", lambda path: True)
+    monkeypatch.setattr(slice_module, "get_upload_item", lambda path: None)
+    monkeypatch.setattr(slice_module, "get_video_info", lambda path: ("title", "主播", "date"))
+    monkeypatch.setattr(slice_module, "unload_candidate_models", lambda: None)
+
+    main_thread = threading.get_ident()
+    result = slice_module.slice_only(str(source), burst_context=120, mimo_parallelism=2)
+
+    assert result["status"] == "done"
+    assert max_active_requests >= 2
+    assert all(thread_id != main_thread for thread_id in judge_threads)
+    assert finalize_threads == [main_thread, main_thread]
+    assert burned_titles == ["Clip A", "Clip B"]
+    assert [segment["title"] for segment in result["segments"]] == ["Clip A", "Clip B"]
+
+
 def test_slice_only_logs_mimo_clip_decisions(monkeypatch, tmp_path):
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice

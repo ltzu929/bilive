@@ -589,9 +589,12 @@ function sourceReviewPriority(item) {
 function sourceRecordingMatchesStatus(item, status) {
   if (!status || status === "all") return true;
   const counts = item.summary_counts || {};
-  if (status === "todo") return ["ready", "pending", "stale"].includes(item.status || "");
+  if (status === "todo") {
+    return sourceReviewCount(counts) > 0
+      || ["ready", "pending", "stale"].includes(item.status || "");
+  }
   if (status === "processing") return item.status === "processing" || item.status === "running";
-  if (status === "failed") return item.status === "failed";
+  if (status === "failed") return Number(counts.judge_failed || 0) > 0 || item.status === "failed";
   if (status === "done") return item.status === "done";
   if (status === "has_keep") {
     return Number(counts.keep || 0) + Number(counts.manual_keep || 0) > 0;

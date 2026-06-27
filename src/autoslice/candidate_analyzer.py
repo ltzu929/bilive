@@ -20,7 +20,7 @@ from src.config import (
 )
 
 
-def analyze_candidate_clips(
+def judge_candidate_clips_only(
     video_path: str,
     artist: str,
     danmaku_text: str,
@@ -34,13 +34,28 @@ def analyze_candidate_clips(
         candidate_end,
         candidate_duration,
     )
-    results = judge_candidate_clips_with_mimo(
+    return judge_candidate_clips_with_mimo(
         video_path=video_path,
         artist=artist,
         danmaku_text=str(danmaku_text or ""),
         candidate_duration=duration,
     )
 
+
+def analyze_candidate_clip_results(
+    results: list[AnalysisResult],
+    video_path: str,
+    artist: str,
+    *,
+    candidate_start: float = 0.0,
+    candidate_end: float | None = None,
+    candidate_duration: float | None = None,
+) -> list[AnalysisResult]:
+    duration = _resolve_candidate_duration(
+        candidate_start,
+        candidate_end,
+        candidate_duration,
+    )
     analyzed: list[AnalysisResult] = []
     for result in results:
         _annotate_ranges(
@@ -114,6 +129,34 @@ def analyze_candidate_clips(
         result.transcript_segments = segments
         analyzed.append(result)
     return analyzed
+
+
+def analyze_candidate_clips(
+    video_path: str,
+    artist: str,
+    danmaku_text: str,
+    *,
+    candidate_start: float = 0.0,
+    candidate_end: float | None = None,
+    candidate_duration: float | None = None,
+) -> list[AnalysisResult]:
+    results = judge_candidate_clips_only(
+        video_path,
+        artist,
+        danmaku_text,
+        candidate_start=candidate_start,
+        candidate_end=candidate_end,
+        candidate_duration=candidate_duration,
+    )
+    return analyze_candidate_clip_results(
+        results,
+        video_path,
+        artist,
+        candidate_start=candidate_start,
+        candidate_end=candidate_end,
+        candidate_duration=candidate_duration,
+    )
+
 
 def analyze_candidate(
     video_path: str,

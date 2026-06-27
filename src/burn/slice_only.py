@@ -18,7 +18,9 @@ from src.config import (
 from src.autoslice import slice_video_by_danmaku
 from src.autoslice.candidate_analyzer import (
     analyze_candidate as _single_candidate_analyzer,
+    analyze_candidate_clip_results as _candidate_clip_result_analyzer,
     analyze_candidate_clips as _multi_candidate_analyzer,
+    judge_candidate_clips_only as _mimo_candidate_judge,
     unload_candidate_models,
 )
 from src.autoslice.danmaku_slice import extract_danmaku_text, format_seconds_for_filename
@@ -46,6 +48,14 @@ def analyze_candidate_clips(*args, **kwargs):
         result = analyze_candidate(*args, **kwargs)
         return result if isinstance(result, list) else [result]
     return _multi_candidate_analyzer(*args, **kwargs)
+
+
+def judge_candidate_clips_with_mimo(*args, **kwargs):
+    return _mimo_candidate_judge(*args, **kwargs)
+
+
+def analyze_candidate_clip_results(*args, **kwargs):
+    return _candidate_clip_result_analyzer(*args, **kwargs)
 
 
 def burn_subtitles_for_output(video_path, analysis, output_path):
@@ -420,7 +430,7 @@ def slice_only(video_path, **_slice_options):
                 candidate_start=generated_slice.context_start,
                 candidate_end=generated_slice.context_end,
                 candidate_duration=generated_slice.duration,
-                analyzer=analyze_candidate_clips,
+                analyzer=judge_candidate_clips_with_mimo,
             )
             return {
                 "index": index,
@@ -514,7 +524,14 @@ def slice_only(video_path, **_slice_options):
                 if precomputed_mimo.get("error") is not None:
                     raise precomputed_mimo["error"]
                 danmaku_text = precomputed_mimo.get("danmaku_text", danmaku_text)
-                results = precomputed_mimo["results"]
+                results = analyze_candidate_clip_results(
+                    precomputed_mimo["results"],
+                    slice_path,
+                    artist,
+                    candidate_start=generated_slice.context_start,
+                    candidate_end=generated_slice.context_end,
+                    candidate_duration=generated_slice.duration,
+                )
             else:
                 results = analyze_clips_stage(
                     slice_path,
