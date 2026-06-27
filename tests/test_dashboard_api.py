@@ -1,4 +1,5 @@
 import json
+import base64
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -351,6 +352,27 @@ def test_upload_path_parts_normalizes_windows_paths():
     assert name == "clip.mp4"
     assert room == "22384516"
 
+
+def test_dashboard_settings_exposes_mimo_parallelism():
+    from src.dashboard.app import read_dashboard_settings
+
+    settings = read_dashboard_settings()
+
+    assert settings["mimo"]["parallelism"] == 3
+
+def test_upload_dashboard_missing_database_is_read_only(tmp_path, monkeypatch):
+    from src.db import conn
+    from src.dashboard.app import read_upload_dashboard
+
+    missing_db = tmp_path / "missing-upload.db"
+    monkeypatch.setattr(conn, "DATA_BASE_FILE", str(missing_db))
+
+    payload = read_upload_dashboard()
+
+    assert payload["database"].startswith("unavailable")
+    assert payload["queue_counts"]["total"] == 0
+    assert payload["items"] == []
+    assert not missing_db.exists()
 
 @pytest.mark.anyio
 async def test_dashboard_secondary_pages_and_runtime_apis(
@@ -767,6 +789,12 @@ async def test_slice_progress_api_enriches_current_recording_display(
     assert body["recorded_at"] == "2026-06-17 14:23:25"
     assert body["display_title"] == "呜米 · 2026-06-17 14:23:25"
     assert body["source_file"] == source.name
+    expected_rel_path = "22384516/22384516_20260617-14-23-25.mp4"
+    expected_task_id = base64.urlsafe_b64encode(
+        expected_rel_path.encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    assert body["source_rel_path"] == expected_rel_path
+    assert body["source_task_id"] == expected_task_id
     assert body["phase_label"] == "等待 MiMo 返回"
 
 @pytest.mark.anyio

@@ -38,6 +38,15 @@ watcher -> 原子领取 -> 弹幕密度候选范围
 
 Pi 的 retry/render API 只验证输入、原子写任务并触发 worker，不导入重型处理模块。Windows worker 对任务执行 `pending -> processing -> done/failed`。崩溃后只恢复没有存活所有者的 processing 任务。
 
+## Dashboard 工作台
+
+Pi dashboard 提供同屏审核和投稿状态工作台，但不改变运行边界：
+
+- `/api/source-recordings` 提供录播列表，前端按 `room_id/room_name` 分组为 `UP 主 -> 直播场次` 队列。
+- `/api/source-recordings/{task_id}` 返回源录播、连续弹幕密度点和候选片段。密度图只做导航和边界辅助，真正的裁剪仍由 Windows worker 执行。
+- 片段动作仍通过 `/api/segments/{segment_id}/manual-keep|drop|range|retry-judge|render`。`manual-keep` 是人工确认发布闸门，会写上传元数据并插入 `upload_queue`。
+- 任务页底部投稿流水线复用 `/api/upload-dashboard`。该接口只读取上传队列和 worker 状态；数据库文件不存在时返回 unavailable，不创建 SQLite 文件、不迁移 schema。
+- `/uploads` 独立页面仍保留，用于更完整地查看投稿队列；`/tasks` 上的流水线是审核时的就地概览。
 ## 模型边界
 
 `src/autoslice/mllm_sdk/mimo_video.py` 是生产判断适配器：

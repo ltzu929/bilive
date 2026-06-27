@@ -1,89 +1,45 @@
-# Modern Slice Dashboard Design QA
+# Publish Workbench Design QA
 
-source visual truth path: `C:\Users\zk\Downloads\bilive_modern_dashboard_preview.png`
+source visual truth path: `C:\Users\zk\.codex\generated_images\019f0408-5099-7a41-a1e7-ac354c190045\ig_0ca94ef2c04bcb2c016a3e81255bec8191a05d9660e8799cbe.png`
 
-implementation screenshot path: `D:\alldata\pi\bilive\artifacts\modern-slice-dashboard.png`
+implementation screenshot path: `D:\alldata\pi\bilive\artifacts\publish-workbench-final-viewport.png`
 
-viewport: `1920x1080`
+viewport: `1440x1024`
 
-state: Real local Dashboard data, stale batch progress, one `judge_failed` segment selected.
+state: Local Dashboard `/tasks` with real project data, one source recording selected, manual review panel visible, upload/publish queue populated.
 
-full-view comparison evidence:
-`D:\alldata\pi\bilive\artifacts\modern-slice-dashboard-comparison.png`
+full-view comparison evidence: `D:\alldata\pi\bilive\artifacts\publish-workbench-final-comparison.png`
 
-focused region comparison evidence:
-`D:\alldata\pi\bilive\artifacts\modern-slice-dashboard-focused-comparison.png`
+focused region comparison evidence: `D:\alldata\pi\bilive\artifacts\publish-workbench-focused-comparison.png`
 
 ## Findings
 
 No actionable P0, P1, or P2 findings remain.
 
-- Fonts and typography: The implementation uses the reference system-font stack,
-  compact 10-15px UI hierarchy, strong section titles, and matching truncation.
-- Spacing and layout rhythm: The 76px sidebar, 76px topbar, 16px card radius,
-  overview card, and 300px / fluid / 330px review workspace align with the
-  reference composition.
-- Colors and visual tokens: The light blue-gray canvas, white cards, blue primary
-  actions, semantic green/amber/red states, subtle borders, and shadows match the
-  reference design language.
-- Image quality and asset fidelity: The center panel intentionally displays the
-  real recorded video instead of the reference placeholder artwork. Existing
-  project navigation icons are retained. Queue thumbnails are omitted because the
-  current Dashboard API does not expose thumbnail assets.
-- Copy and content: Labels reflect the real product workflow and current API
-  states. The task pill is data-driven and correctly reports stale, running,
-  complete, error, or idle state.
-- Interaction: Three real `judge_failed` density overlays were visible. Clicking
-  a second overlay changed the selected range from `1385.0s - 1505.0s` to
-  `6176.0s - 6296.0s` and kept the segment status synchronized.
-- Browser console: No application warnings or errors were reported.
+- Fonts and typography: The implementation keeps the existing Bilive Studio system-font stack and compact SaaS hierarchy. Dense Chinese labels remain readable at the target viewport, and long filenames are truncated inside bounded rows instead of pushing layout width.
+- Spacing and layout rhythm: The final pass fixes the largest layout mismatch by clamping the desktop overview, review workspace, and publish panel heights. At 1440x1024, the review workspace is 540px tall, the decision actions sit at 626-763px, and the publish pipeline sits at 786-976px, keeping review and publish visible in the first viewport.
+- Colors and visual tokens: The implementation follows the reference intent with a dark navigation rail, white panels, light blue canvas, blue primary actions, green success, amber pending, and red failure states. It stays aligned with the existing production dashboard tokens instead of introducing a separate mock-only theme.
+- Image quality and asset fidelity: The implementation uses the real video preview surface and real danmaku density SVG rather than the mock placeholder artwork. No custom decorative image assets were introduced.
+- Copy and content: The page uses production workflow labels: review queue, segment preview, manual decision, publish pipeline, upload queue counts, and worker wake actions. AI `keep` remains a recommendation; manual keep is the visible publish gate.
+- Interaction states: Primary manual actions are sticky inside the right review panel, so the user can always keep/drop/save/retry/render while reviewing. The publish pipeline exposes refresh and wake controls in the same first viewport.
 
 ## Intentional Differences
 
-- The reference has four decorative pipeline nodes; the implementation renders
-  the three diagnostic stages returned by the live API.
-- The reference uses mock queue thumbnails; the implementation uses structured
-  filename, status, room, size, and review-count rows.
-- The reference shows a simulated pause action; the implementation preserves the
-  production `启动切片` and `刷新` controls.
+- The implementation keeps the production top progress card because it shows the active Pi/Windows worker boundary and current slice queue state. The source mock skipped this operational state.
+- The right decision panel does not duplicate every score shown in the mock. The production quality score is already rendered in the density metadata row, and confidence/type are not guaranteed by the current Dashboard API for every historical candidate.
+- The publish pipeline is queue-oriented rather than a decorative stage diagram. It shows live queued/active/published/failed counts plus the first queue row, matching the current upload API.
 
-## Patches Made
+## Patches Made Since Previous QA Pass
 
-- Rebuilt the page around the modern sidebar, topbar, overview, and three-column
-  review workspace.
-- Preserved the real danmaku density SVG and clickable keep/failure overlays.
-- Added data-driven task-state and segment-state styling.
-- Added overview totals and prioritized recordings with reviewable segments.
-- Kept the detailed task queue below the primary review workspace.
+- Moved `publish-panel` above `task-panel` so publish status is part of the primary review workflow.
+- Added desktop fixed-height rules for the progress card, three-column review workspace, and publish panel so content cannot push the publish pipeline below the first viewport.
+- Clamped workbench panels to the fixed row height and kept overflow inside panel bodies.
+- Made the manual decision action group sticky at the bottom of the right panel.
+- Re-captured full and focused comparison evidence after the layout fixes.
 
 ## Follow-up Polish
 
-- P3: Add real queue thumbnails if a future API exposes thumbnail media.
-- P3: Add a client-side queue search only if the real recording count grows enough
-  to justify another persistent control.
-
-final result: passed
-
-## 2026-06-23 Secondary Views And Queue Scrolling
-
-reference: User-provided `/tasks` screenshot showing disabled upload/settings navigation and an overlong review queue.
-
-verification target: Live Pi dashboard through a local SSH tunnel to `127.0.0.1:2234`.
-
-### Findings
-
-No actionable P0, P1, or P2 findings remain.
-
-- Navigation: Upload and Settings are real routes with matching active views and accessible labels.
-- Review queue: 14 rows remain available inside a bounded panel; measured `clientHeight=297`, `scrollHeight=1265`, and `overflow-y=auto`.
-- Upload center: Live queue metrics and two published rows rendered; Windows paths are normalized to filename and room ID.
-- Settings: Production slice, MiMo, and Whisper values render read-only. The MiMo key correctly states that it is managed by the Windows environment.
-- Layout: Tasks, Uploads, and Settings reported no horizontal document overflow at the desktop verification viewport.
-- Service: `bilive-dashboard.service` was restarted and the new APIs responded successfully.
-
-### Intentional Boundaries
-
-- Upload actions only wake the existing Windows worker; heavy upload processing remains off the Pi.
-- Runtime settings are read-only. Only browser-local display preferences can be changed from the page.
+- P3: Add a favicon or explicit ignored resource route to remove the harmless browser 404 seen during Playwright capture.
+- P3: If the backend later exposes stable confidence/type fields for every candidate, mirror them in the right decision summary.
 
 final result: passed

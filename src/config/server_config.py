@@ -107,6 +107,7 @@ MIMO_BASE_URL = str(mimo.get("base_url", "https://api.xiaomimimo.com/v1"))
 MIMO_FPS = float(mimo.get("fps", 1.0))
 MIMO_MEDIA_RESOLUTION = str(mimo.get("media_resolution", "default"))
 MIMO_TIMEOUT = float(mimo.get("timeout", 180))
+MIMO_PARALLELISM = int(mimo.get("parallelism", 3))
 MIMO_MAX_BASE64_BYTES = int(mimo.get("max_base64_bytes", 48_000_000))
 
 OMNI_ENABLE_DEEP_ANALYSIS = bool(

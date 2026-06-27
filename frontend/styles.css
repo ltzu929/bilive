@@ -403,6 +403,12 @@ button:disabled,
   background: #fff;
 }
 
+.btn-compact {
+  min-height: 30px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
 .btn-danger {
   border-color: var(--danger);
   background: var(--danger);
@@ -505,6 +511,13 @@ button:disabled,
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.progress-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .progress-line {
@@ -864,6 +877,11 @@ button:disabled,
 .source-row.active {
   border-color: #ccddff;
   background: var(--primary-light);
+}
+
+.source-row.source-row-locate {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px rgba(57, 120, 246, 0.32);
 }
 
 .source-name {
@@ -1931,4 +1949,363 @@ button:disabled,
   .metric-strip {
     grid-template-columns: 1fr;
   }
+}
+
+/* Unified review and publish workbench */
+.source-group {
+  margin-bottom: 10px;
+}
+
+.source-group:last-child {
+  margin-bottom: 0;
+}
+
+.source-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 8px 6px;
+  color: var(--text-soft);
+}
+
+.source-group-header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-group-header span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.tag-input input {
+  min-width: 0;
+}
+
+.publish-panel {
+  min-height: 238px;
+}
+
+.publish-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.publish-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfe;
+}
+
+.publish-metric {
+  min-width: 0;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.publish-metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.publish-metric strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.publish-queue-compact {
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.publish-queue-compact .upload-row {
+  grid-template-columns: minmax(220px, 1.2fr) 96px minmax(120px, 0.55fr) minmax(180px, 0.9fr);
+  min-height: 62px;
+}
+
+.publish-queue-compact .upload-row-main strong {
+  font-size: 12px;
+}
+
+@media (max-width: 820px) {
+  .publish-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .publish-queue-compact .upload-row {
+    grid-template-columns: 1fr auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .publish-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .publish-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .publish-actions button {
+    flex: 1;
+  }
+}
+/* First-screen review and publish density */
+@media (min-width: 1200px) {
+  .page {
+    gap: 12px;
+    padding-top: 14px;
+  }
+
+  .progress-panel,
+  .overview-card {
+    grid-template-columns: minmax(240px, 0.9fr) minmax(420px, 1.7fr) minmax(190px, 0.7fr);
+    gap: 16px;
+    min-height: 118px;
+    padding: 14px 16px;
+  }
+
+  .current-file {
+    margin-top: 6px;
+    font-size: 15px;
+  }
+
+  .file-meta {
+    margin-top: 4px;
+  }
+
+  .progress-actions {
+    margin-top: 8px;
+  }
+
+  .progress-line {
+    margin-top: 10px;
+  }
+
+  .diagnostics-header {
+    margin-bottom: 8px;
+  }
+
+  .diagnostics-list {
+    gap: 6px;
+  }
+
+  .diagnostic-item {
+    min-height: 54px;
+    padding: 9px 8px;
+  }
+
+  .diagnostic-message {
+    -webkit-line-clamp: 1;
+  }
+
+  .stat-card {
+    min-height: 46px;
+    padding: 8px 10px;
+  }
+
+  .stat-card strong {
+    margin-top: 3px;
+    font-size: 16px;
+  }
+
+  .workbench,
+  .review-workspace {
+    grid-template-columns: 280px minmax(500px, 1fr) 320px;
+    gap: 12px;
+    min-height: 520px;
+  }
+
+  .panel-header {
+    min-height: 50px;
+    padding: 0 14px;
+  }
+
+  .queue-tools {
+    padding: 10px 12px 8px;
+  }
+
+  .preview-body {
+    padding: 12px;
+  }
+
+  .preview-video {
+    min-height: 230px;
+    max-height: 330px;
+  }
+
+  .density-card {
+    margin-top: 10px;
+    padding: 10px;
+  }
+
+  .density-header {
+    margin-bottom: 8px;
+  }
+
+  .density-chart {
+    height: 76px;
+  }
+
+  .metadata-grid {
+    gap: 6px;
+    margin-top: 9px;
+  }
+
+  .feedback-body {
+    gap: 9px;
+    padding: 12px;
+  }
+
+  .review-summary {
+    padding: 10px;
+  }
+
+  .field,
+  .range-field {
+    gap: 5px;
+  }
+
+  .field input {
+    height: 34px;
+  }
+
+  .field textarea {
+    min-height: 58px;
+    padding: 8px 10px;
+    line-height: 1.4;
+  }
+
+  #quality-reason {
+    min-height: 74px;
+  }
+
+  .review-note {
+    padding: 8px 10px;
+    line-height: 1.4;
+  }
+
+  .segment-actions {
+    gap: 7px;
+  }
+
+  .publish-panel {
+    min-height: 176px;
+  }
+
+  .publish-overview {
+    gap: 8px;
+    padding: 10px 14px;
+  }
+
+  .publish-metric {
+    min-height: 46px;
+    padding: 8px 10px;
+  }
+
+  .publish-metric strong {
+    margin-top: 3px;
+    font-size: 16px;
+  }
+
+  .publish-queue-compact {
+    max-height: 140px;
+  }
+
+  .publish-queue-compact .upload-row {
+    min-height: 54px;
+  }
+
+  .task-list {
+    max-height: 180px;
+  }
+}
+/* Fixed first-screen workbench heights */
+@media (min-width: 1200px) {
+  .progress-panel,
+  .overview-card {
+    height: 132px;
+    min-height: 0;
+  }
+
+  .workbench,
+  .review-workspace {
+    height: 540px;
+    min-height: 0;
+  }
+
+  .publish-panel {
+    height: 190px;
+    min-height: 0;
+  }
+
+  .publish-queue-compact {
+    max-height: 84px;
+  }
+
+  .feedback-body {
+    gap: 7px;
+    padding: 10px;
+  }
+
+  .review-summary {
+    gap: 9px;
+    padding: 8px 10px;
+  }
+
+  .field textarea {
+    min-height: 48px;
+  }
+
+  #segment-description {
+    min-height: 52px;
+  }
+
+  #quality-reason {
+    min-height: 58px;
+  }
+
+  .review-note {
+    padding: 6px 8px;
+    font-size: 9px;
+  }
+}
+/* Clamp workbench panels into the fixed viewport row */
+@media (min-width: 1200px) {
+  .review-workspace > .panel,
+  .workbench > .panel {
+    height: 100%;
+    min-height: 0;
+    align-self: stretch;
+  }
+}
+/* Sticky decision actions */
+.segment-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
 }

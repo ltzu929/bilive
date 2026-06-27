@@ -43,6 +43,7 @@ const state = {
   taskPanelCollapsed: false,
   selectedId: "",
   decision: "review",
+  currentSliceProgress: null,
 };
 
 const elements = {
@@ -77,6 +78,7 @@ const elements = {
   progressCount: document.querySelector("#slice-progress-count"),
   progressPercent: document.querySelector("#slice-progress-percent"),
   progressBar: document.querySelector("#slice-progress-bar"),
+  progressOpenSourceButton: document.querySelector("#slice-progress-open-source"),
   sliceDiagnosticsList: document.querySelector("#slice-diagnostics-list"),
   sliceDiagnosticsSource: document.querySelector("#slice-diagnostics-source"),
   taskPanel: document.querySelector("#task-panel"),
@@ -96,6 +98,7 @@ const elements = {
   segmentStatus: document.querySelector("#segment-status"),
   segmentTitle: document.querySelector("#segment-title"),
   segmentDescription: document.querySelector("#segment-description"),
+  segmentTags: document.querySelector("#segment-tags"),
   segmentKeepButton: document.querySelector("#segment-keep-button"),
   segmentDropButton: document.querySelector("#segment-drop-button"),
   segmentRetryButton: document.querySelector("#segment-retry-button"),
@@ -106,6 +109,10 @@ const elements = {
   overviewTaskTotal: document.querySelector("#overview-task-total"),
   overviewReviewTotal: document.querySelector("#overview-review-total"),
   overviewKeepTotal: document.querySelector("#overview-keep-total"),
+  publishQueueList: document.querySelector("#publish-queue-list"),
+  publishQueueCount: document.querySelector("#publish-queue-count"),
+  publishRefreshButton: document.querySelector("#publish-refresh-button"),
+  publishWakeButton: document.querySelector("#publish-wake-button"),
 };
 
 function mediaUrl(item) {
@@ -292,6 +299,7 @@ function render() {
 }
 
 function renderSliceProgress(progress) {
+  state.currentSliceProgress = progress || null;
   const percent = Math.max(
     0,
     Math.min(100, Number(progress.current_slice_percent || 0)),
@@ -309,6 +317,9 @@ function renderSliceProgress(progress) {
   elements.progressCount.textContent = `${Number(progress.current_slice || 0)}/${Number(progress.total_slices || 0)}`;
   elements.progressPercent.textContent = `${percent.toFixed(0)}%`;
   elements.progressBar.style.width = `${percent}%`;
+  if (elements.progressOpenSourceButton) {
+    elements.progressOpenSourceButton.disabled = !progress.source_task_id;
+  }
   elements.startSliceButton.disabled = running;
   elements.startSliceButton.textContent = running ? "切片中" : "启动切片";
   if (elements.stopSliceButton) elements.stopSliceButton.disabled = !stoppable;
@@ -589,10 +600,80 @@ async function refreshSourceRecordings() {
   }
 }
 
+function renderSourceRow(item) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `source-row${item.task_id === state.selectedSourceId ? " active" : ""}`;
+  button.dataset.taskId = item.task_id;
+
+  const header = document.createElement("span");
+  header.className = "source-row-header";
+
+  const name = document.createElement("span");
+  name.className = "source-name";
+  name.textContent = item.source_name || item.source_rel_path || "-";
+
+  const status = sourceStatusPresentation(item.status);
+  const statusBadge = document.createElement("span");
+  statusBadge.className = `source-status-badge source-status-${status.tone}`;
+  statusBadge.textContent = status.label;
+  header.append(name, statusBadge);
+
+  const meta = document.createElement("span");
+  meta.className = "source-meta";
+  meta.textContent = `${item.room_name || item.room_id || "-"} / ${formatMegabytes(item.source_size_mb)}`;
+
+  const summary = document.createElement("span");
+  summary.className = "source-summary-line";
+  summary.textContent = sourceSummaryLabel(item.summary_counts);
+
+  button.append(header, meta, summary);
+  button.addEventListener("click", () => selectSourceRecording(item.task_id));
+  return button;
+}
+
+function groupSourceRecordingsByRoom(items) {
+  const groups = [];
+  const byRoom = new Map();
+  for (const item of items) {
+    const roomId = item.room_id || "unknown";
+    if (!byRoom.has(roomId)) {
+      const group = {
+        roomId,
+        roomName: item.room_name || item.room_id || "-",
+        sources: [],
+      };
+      byRoom.set(roomId, group);
+      groups.push(group);
+    }
+    byRoom.get(roomId).sources.push(item);
+  }
+  return groups;
+}
+
+function renderSourceGroup(group) {
+  const section = document.createElement("section");
+  section.className = "source-group";
+
+  const header = document.createElement("div");
+  header.className = "source-group-header";
+  const title = document.createElement("strong");
+  title.textContent = group.roomName || group.roomId || "-";
+  const count = document.createElement("span");
+  count.textContent = `${group.sources.length} 场`;
+  header.append(title, count);
+  section.appendChild(header);
+
+  for (const item of group.sources) {
+    section.appendChild(renderSourceRow(item));
+  }
+  return section;
+}
+
 function renderSourceRecordings() {
   if (!elements.sourceRecordingList || !elements.sourceRecordingCount) return;
   const items = sortedSourceRecordings();
-  elements.sourceRecordingCount.textContent = `${items.length} 条录播`;
+  elements.sourceRecordingCount.textContent = `${items.length} 场录播`;
   elements.sourceRecordingList.innerHTML = "";
   updateOverviewStats();
 
@@ -604,45 +685,51 @@ function renderSourceRecordings() {
     return;
   }
 
-  for (const item of items) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `source-row${item.task_id === state.selectedSourceId ? " active" : ""}`;
-
-    const header = document.createElement("span");
-    header.className = "source-row-header";
-
-    const name = document.createElement("span");
-    name.className = "source-name";
-    name.textContent = item.source_name || item.source_rel_path || "-";
-
-    const status = sourceStatusPresentation(item.status);
-    const statusBadge = document.createElement("span");
-    statusBadge.className = `source-status-badge source-status-${status.tone}`;
-    statusBadge.textContent = status.label;
-    header.append(name, statusBadge);
-
-    const meta = document.createElement("span");
-    meta.className = "source-meta";
-    meta.textContent = `${item.room_name || item.room_id || "-"} · ${formatMegabytes(item.source_size_mb)}`;
-
-    const summary = document.createElement("span");
-    summary.className = "source-summary-line";
-    summary.textContent = sourceSummaryLabel(item.summary_counts);
-
-    button.append(header, meta, summary);
-    button.addEventListener("click", () => selectSourceRecording(item.task_id));
-    elements.sourceRecordingList.appendChild(button);
+  for (const group of groupSourceRecordingsByRoom(items)) {
+    elements.sourceRecordingList.appendChild(renderSourceGroup(group));
   }
 }
-
 function selectSourceRecording(taskId) {
   state.selectedSourceId = taskId;
   state.selectedSegmentId = "";
   renderSourceRecordings();
-  refreshSourceDetail(taskId);
+  return refreshSourceDetail(taskId);
 }
 
+function scrollSourceRecordingIntoView(taskId) {
+  const rows = elements.sourceRecordingList?.querySelectorAll("[data-task-id]") || [];
+  for (const row of rows) {
+    if (row.dataset.taskId !== taskId) continue;
+    row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    row.classList.add("source-row-locate");
+    window.setTimeout(() => row.classList.remove("source-row-locate"), 1200);
+    break;
+  }
+}
+
+async function gotoCurrentSourceRecording() {
+  const progress = state.currentSliceProgress || {};
+  const taskId = progress.source_task_id || "";
+  if (!taskId) return;
+
+  if (elements.statusFilter && elements.statusFilter.value !== "all") {
+    elements.statusFilter.value = "all";
+  }
+  if (elements.roomFilter && progress.room_id && elements.roomFilter.value !== progress.room_id) {
+    elements.roomFilter.value = progress.room_id;
+  }
+
+  await refreshSourceRecordings();
+  const target = state.sourceRecordings.find((item) => (
+    item.task_id === taskId || item.source_rel_path === progress.source_rel_path
+  ));
+  if (!target) {
+    showError("当前录播未出现在审核队列");
+    return;
+  }
+  await selectSourceRecording(target.task_id);
+  scrollSourceRecordingIntoView(target.task_id);
+}
 async function refreshSourceDetail(taskId) {
   if (!taskId) return;
   state.sourceDetail = await request(`/api/source-recordings/${encodeURIComponent(taskId)}`);
@@ -739,6 +826,7 @@ function renderSegmentPanel() {
   for (const element of [
     elements.segmentTitle,
     elements.segmentDescription,
+    elements.segmentTags,
     elements.qualityReason,
     elements.manualStart,
     elements.manualEnd,
@@ -759,6 +847,7 @@ function renderSegmentPanel() {
     if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = "-";
     if (elements.segmentTitle) elements.segmentTitle.value = "";
     if (elements.segmentDescription) elements.segmentDescription.value = "";
+    if (elements.segmentTags) elements.segmentTags.value = "";
     if (elements.qualityReason) elements.qualityReason.value = "";
     if (elements.manualStart) elements.manualStart.value = 0;
     if (elements.manualEnd) elements.manualEnd.value = 0;
@@ -777,6 +866,7 @@ function renderSegmentPanel() {
   if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = segmentRangeLabel(segment);
   if (elements.segmentTitle) elements.segmentTitle.value = segment.title || "";
   if (elements.segmentDescription) elements.segmentDescription.value = segment.description || "";
+  if (elements.segmentTags) elements.segmentTags.value = Array.isArray(segment.tags) ? segment.tags.join(", ") : "";
   if (elements.qualityReason) elements.qualityReason.value = segment.quality_reason || segment.judge_error || "";
   if (elements.manualStart) elements.manualStart.value = Number(segment.start_seconds || 0);
   if (elements.manualEnd) elements.manualEnd.value = Number(segment.end_seconds || 0);
@@ -830,11 +920,18 @@ async function saveSegmentRange() {
   });
 }
 
+function parseTags(value) {
+  return String(value || "")
+    .split(/[,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 async function manualKeepCurrentSegment() {
   await runSegmentAction("manual-keep", {
     title: elements.segmentTitle?.value || "",
     description: elements.segmentDescription?.value || "",
-    tags: [],
+    tags: parseTags(elements.segmentTags?.value || ""),
     start_seconds: Number(elements.manualStart?.value || 0),
     end_seconds: Number(elements.manualEnd?.value || 0),
   });
@@ -1236,19 +1333,62 @@ async function refreshUploadDashboard() {
   }
 }
 
-function renderUploadQueue() {
-  const counts = uploadDashboardState.queue_counts || {};
+function updateUploadMetrics(prefix, counts = uploadDashboardState.queue_counts || {}) {
   const active = Number(counts.uploading || 0) + Number(counts.uploaded || 0) + Number(counts.publishing || 0);
   const values = {
-    "upload-count-queued": counts.queued || 0,
-    "upload-count-active": active,
-    "upload-count-published": counts.published || 0,
-    "upload-count-failed": counts.failed || 0,
+    [`${prefix}-count-queued`]: counts.queued || 0,
+    [`${prefix}-count-active`]: active,
+    [`${prefix}-count-published`]: counts.published || 0,
+    [`${prefix}-count-failed`]: counts.failed || 0,
   };
   Object.entries(values).forEach(([id, value]) => {
     const element = document.getElementById(id);
     if (element) element.textContent = String(value);
   });
+}
+
+function filteredUploadItems(filter) {
+  return (uploadDashboardState.items || []).filter((item) => {
+    if (filter === "all") return true;
+    if (filter === "active") return ["uploading", "uploaded", "publishing"].includes(item.status);
+    return item.status === filter;
+  });
+}
+
+function createUploadRow(item, compact = false) {
+  const row = document.createElement("article");
+  const status = uploadStatusPresentation(item.status);
+  row.className = compact ? "upload-row publish-row" : "upload-row";
+  row.innerHTML = `
+    <div class="upload-row-main">
+      <strong title="${escapeHtml(item.name || "-")}">${escapeHtml(item.name || "-")}</strong>
+      <span>${escapeHtml(item.room || "-")} / 更新于 ${formatTimestamp(item.updated_at)}</span>
+    </div>
+    <span class="upload-status upload-status-${status.tone}">${status.label}</span>
+    <div class="upload-row-meta"><span>尝试 ${Number(item.attempts || 0)} 次</span><span>${item.bvid ? escapeHtml(item.bvid) : "暂无 BV 号"}</span></div>
+    <div class="upload-row-error">${item.last_error ? escapeHtml(item.last_error) : "-"}</div>`;
+  return row;
+}
+
+function renderPublishQueue() {
+  updateUploadMetrics("publish");
+  if (!elements.publishQueueList) return;
+  const items = filteredUploadItems("all").slice(0, 6);
+  if (elements.publishQueueCount) elements.publishQueueCount.textContent = `${items.length} 个项目`;
+  elements.publishQueueList.innerHTML = "";
+  if (!items.length) {
+    elements.publishQueueList.innerHTML = '<div class="task-empty">当前没有投稿任务</div>';
+    return;
+  }
+  for (const item of items) {
+    elements.publishQueueList.appendChild(createUploadRow(item, true));
+  }
+}
+
+function renderUploadQueue() {
+  const counts = uploadDashboardState.queue_counts || {};
+  updateUploadMetrics("upload", counts);
+  updateUploadMetrics("publish", counts);
 
   const worker = uploadDashboardState.worker || {};
   const pill = document.querySelector("#upload-worker-pill");
@@ -1259,36 +1399,22 @@ function renderUploadQueue() {
   }
 
   const filter = document.querySelector("#upload-status-filter")?.value || "all";
-  const items = (uploadDashboardState.items || []).filter((item) => {
-    if (filter === "all") return true;
-    if (filter === "active") return ["uploading", "uploaded", "publishing"].includes(item.status);
-    return item.status === filter;
-  });
+  const items = filteredUploadItems(filter);
   const count = document.querySelector("#upload-queue-count");
   const list = document.querySelector("#upload-queue-list");
   if (count) count.textContent = `${items.length} 个项目`;
-  if (!list) return;
-  list.innerHTML = "";
-  if (!items.length) {
-    list.innerHTML = '<div class="task-empty">当前筛选条件下没有投稿任务</div>';
-    return;
+  if (list) {
+    list.innerHTML = "";
+    if (!items.length) {
+      list.innerHTML = '<div class="task-empty">当前筛选条件下没有投稿任务</div>';
+    } else {
+      for (const item of items) {
+        list.appendChild(createUploadRow(item));
+      }
+    }
   }
-  for (const item of items) {
-    const row = document.createElement("article");
-    const status = uploadStatusPresentation(item.status);
-    row.className = "upload-row";
-    row.innerHTML = `
-      <div class="upload-row-main">
-        <strong title="${escapeHtml(item.name || "-")}">${escapeHtml(item.name || "-")}</strong>
-        <span>${escapeHtml(item.room || "-")} · 更新于 ${formatTimestamp(item.updated_at)}</span>
-      </div>
-      <span class="upload-status upload-status-${status.tone}">${status.label}</span>
-      <div class="upload-row-meta"><span>尝试 ${Number(item.attempts || 0)} 次</span><span>${item.bvid ? escapeHtml(item.bvid) : "暂无 BV 号"}</span></div>
-      <div class="upload-row-error">${item.last_error ? escapeHtml(item.last_error) : "-"}</div>`;
-    list.appendChild(row);
-  }
+  renderPublishQueue();
 }
-
 async function wakeUploadWorker() {
   const button = document.querySelector("#upload-wake-button");
   if (button) button.disabled = true;
@@ -1371,6 +1497,9 @@ document.addEventListener("keydown", (event) => {
 
 elements.startSliceButton.addEventListener("click", startSlicing);
 elements.stopSliceButton?.addEventListener("click", stopSlicing);
+elements.progressOpenSourceButton?.addEventListener("click", () => {
+  gotoCurrentSourceRecording().catch((error) => showError(error.message));
+});
 elements.refreshButton.addEventListener("click", () => {
   refresh();
   refreshSourceRecordings();
@@ -1393,7 +1522,9 @@ elements.roomFilter.addEventListener("change", () => {
 elements.saveButton.addEventListener("click", saveFeedback);
 elements.taskToggle?.addEventListener("click", toggleTaskPanel);
 document.querySelector("#upload-refresh-button")?.addEventListener("click", refreshUploadDashboard);
+elements.publishRefreshButton?.addEventListener("click", refreshUploadDashboard);
 document.querySelector("#upload-wake-button")?.addEventListener("click", wakeUploadWorker);
+elements.publishWakeButton?.addEventListener("click", wakeUploadWorker);
 document.querySelector("#upload-status-filter")?.addEventListener("change", renderUploadQueue);
 document.querySelector("#settings-form")?.addEventListener("submit", saveDashboardPreferences);
 document.querySelector("#settings-save-button")?.addEventListener("click", saveDashboardPreferences);
@@ -1462,6 +1593,7 @@ if (activeView === "tasks") {
   refreshSliceProgress();
   refreshSliceDiagnostics();
   refreshTasks();
+  refreshUploadDashboard();
   wakeWorkerOnPageLoad();
 } else if (activeView === "uploads") {
   refreshUploadDashboard();
@@ -1484,6 +1616,7 @@ setInterval(() => {
     refreshSourceRecordings();
     refreshTasks();
     refreshWorkerStatus();
+    refreshUploadDashboard();
   } else if (view === "uploads") {
     refreshUploadDashboard();
   }
@@ -1513,6 +1646,7 @@ document.addEventListener("visibilitychange", () => {
     refreshSliceProgress();
     refreshSliceDiagnostics();
     refreshWorkerStatus();
+    refreshUploadDashboard();
   } else if (view === "uploads") {
     refreshUploadDashboard();
   }

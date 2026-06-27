@@ -2,6 +2,7 @@
 # Slice-only pipeline: skip full-stream rendering and generate/upload clips directly.
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from src.config import (
     BURST_CONTEXT,
     BURST_MERGE_GAP,
     BURST_TOP_N,
+    MIMO_PARALLELISM,
 )
 from src.autoslice import slice_video_by_danmaku
 from src.autoslice.candidate_analyzer import (
@@ -73,6 +75,17 @@ def _format_seconds_range(start, end):
         return f"{float(start):.3f}-{float(end):.3f}s"
     except (TypeError, ValueError):
         return "-"
+
+
+def _resolve_mimo_parallelism(value, total_slices):
+    configured = MIMO_PARALLELISM if value is None else value
+    try:
+        workers = int(configured)
+    except (TypeError, ValueError):
+        workers = 1
+    if total_slices <= 1:
+        return 1
+    return max(1, min(workers, total_slices))
 
 
 def _format_score(value):
@@ -372,6 +385,84 @@ def slice_only(video_path, **_slice_options):
     judge_failed_count = 0
     dropped_count = 0
     empty_candidate_count = 0
+    mimo_results_by_index = {}
+    mimo_parallelism = _resolve_mimo_parallelism(
+        _slice_options.get("mimo_parallelism"),
+        total_slices,
+    )
+    if mimo_parallelism > 1:
+        scan_log.info(
+            f"Submitting {total_slices} candidate(s) to MiMo with parallelism={mimo_parallelism}"
+        )
+        progress.update(
+            force=True,
+            status="running",
+            phase="mimo_wait",
+            phase_label="等待 MiMo 返回",
+            current_slice=0,
+            total_slices=total_slices,
+            current_slice_percent=100.0,
+            message=f"已并发发送 {total_slices} 个候选给 MiMo，并发数 {mimo_parallelism}",
+            error="",
+            diagnostics=diagnostics,
+        )
+
+        def run_mimo_candidate(index, generated_slice):
+            danmaku_text = extract_danmaku_text(
+                xml_path,
+                generated_slice.context_start,
+                generated_slice.context_end,
+            )
+            results = analyze_clips_stage(
+                generated_slice.path,
+                artist=artist,
+                danmaku_text=danmaku_text,
+                candidate_start=generated_slice.context_start,
+                candidate_end=generated_slice.context_end,
+                candidate_duration=generated_slice.duration,
+                analyzer=analyze_candidate_clips,
+            )
+            return {
+                "index": index,
+                "danmaku_text": danmaku_text,
+                "results": results,
+            }
+
+        with ThreadPoolExecutor(max_workers=mimo_parallelism) as executor:
+            futures = {
+                executor.submit(run_mimo_candidate, index, generated_slice): index
+                for index, generated_slice in enumerate(slices_path, start=1)
+            }
+            completed = 0
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    mimo_results_by_index[index] = future.result()
+                except Exception as exc:
+                    mimo_results_by_index[index] = {"index": index, "error": exc}
+                completed += 1
+                diagnostics = upsert_diagnostic(
+                    diagnostics,
+                    diagnostic_item(
+                        "mimo",
+                        "MiMo 判断",
+                        "pending" if completed < total_slices else "ok",
+                        f"MiMo 并发判断完成 {completed}/{total_slices}",
+                        [("并发数", str(mimo_parallelism)), ("已完成", f"{completed}/{total_slices}")],
+                    ),
+                )
+                progress.update(
+                    force=True,
+                    status="running",
+                    phase="mimo_wait",
+                    phase_label="等待 MiMo 返回",
+                    current_slice=completed,
+                    total_slices=total_slices,
+                    current_slice_percent=100.0,
+                    message=f"MiMo 判断中：已完成 {completed}/{total_slices}，并发数 {mimo_parallelism}",
+                    error="",
+                    diagnostics=diagnostics,
+                )
     for index, generated_slice in enumerate(slices_path, start=1):
         slice_path = generated_slice.path
         segment = None
@@ -418,15 +509,22 @@ def slice_only(video_path, **_slice_options):
                 error="",
                 diagnostics=diagnostics,
             )
-            results = analyze_clips_stage(
-                slice_path,
-                artist=artist,
-                danmaku_text=danmaku_text,
-                candidate_start=generated_slice.context_start,
-                candidate_end=generated_slice.context_end,
-                candidate_duration=generated_slice.duration,
-                analyzer=analyze_candidate_clips,
-            )
+            precomputed_mimo = mimo_results_by_index.get(index)
+            if precomputed_mimo is not None:
+                if precomputed_mimo.get("error") is not None:
+                    raise precomputed_mimo["error"]
+                danmaku_text = precomputed_mimo.get("danmaku_text", danmaku_text)
+                results = precomputed_mimo["results"]
+            else:
+                results = analyze_clips_stage(
+                    slice_path,
+                    artist=artist,
+                    danmaku_text=danmaku_text,
+                    candidate_start=generated_slice.context_start,
+                    candidate_end=generated_slice.context_end,
+                    candidate_duration=generated_slice.duration,
+                    analyzer=analyze_candidate_clips,
+                )
             result_message = (
                 f"MiMo 返回 {len(results)} 个可处理片段"
                 if results

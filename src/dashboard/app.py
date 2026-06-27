@@ -1,5 +1,6 @@
 # Copyright (c) 2024 bilive.
 
+import base64
 import mimetypes
 import os
 import ipaddress
@@ -88,12 +89,29 @@ def upload_path_parts(value: str) -> tuple[str, str]:
 
 
 def read_upload_dashboard() -> Dict[str, Any]:
-    from src.db.conn import get_upload_queue_counts, list_upload_queue
+    from src.db import conn as upload_conn
     from src.server.upload_control import upload_worker_status
 
+    db_path = Path(upload_conn.DATA_BASE_FILE)
+    if not db_path.exists():
+        return {
+            "queue_counts": {
+                "queued": 0,
+                "uploading": 0,
+                "uploaded": 0,
+                "publishing": 0,
+                "published": 0,
+                "failed": 0,
+                "total": 0,
+            },
+            "items": [],
+            "database": f"unavailable: missing {db_path}",
+            "worker": upload_worker_status(),
+        }
+
     try:
-        counts = get_upload_queue_counts()
-        rows = list_upload_queue()
+        counts = upload_conn.get_upload_queue_counts()
+        rows = upload_conn.list_upload_queue()
         database = "ready"
     except Exception as exc:
         counts = {"queued": 0, "uploading": 0, "uploaded": 0, "publishing": 0, "published": 0, "failed": 0, "total": 0}
@@ -120,8 +138,6 @@ def read_upload_dashboard() -> Dict[str, Any]:
         "database": database,
         "worker": upload_worker_status(),
     }
-
-
 def read_dashboard_settings() -> Dict[str, Any]:
     from src import config
 
@@ -139,6 +155,7 @@ def read_dashboard_settings() -> Dict[str, Any]:
             "fps": config.MIMO_FPS,
             "media_resolution": config.MIMO_MEDIA_RESOLUTION,
             "timeout": config.MIMO_TIMEOUT,
+            "parallelism": config.MIMO_PARALLELISM,
             "max_base64_bytes": config.MIMO_MAX_BASE64_BYTES,
             "configured": True if os.environ.get("MIMO_API_KEY") else None,
         },
@@ -671,6 +688,12 @@ def enrich_slice_progress(
         room_names = {room.room_id: room.name for room in store.list_rooms()}
         room_name = room_names.get(room_id, room_id)
 
+    source_rel_path = _progress_source_rel_path(
+        enriched,
+        room_id,
+        source_name,
+        store.videos_root,
+    )
     recorded_at = _recording_time_label(source_name)
     display_parts = [part for part in [room_name or "", recorded_at] if part]
     enriched.update(
@@ -679,11 +702,41 @@ def enrich_slice_progress(
             "room_name": room_name,
             "recorded_at": recorded_at,
             "source_file": source_name,
+            "source_rel_path": source_rel_path,
+            "source_task_id": (
+                _encode_source_task_id(source_rel_path) if source_rel_path else ""
+            ),
             "display_title": " · ".join(display_parts) if display_parts else source_name,
         }
     )
     return enriched
 
+
+def _progress_source_rel_path(
+    progress: Dict[str, Any],
+    room_id: str,
+    source_name: str,
+    videos_root: Path,
+) -> str:
+    source_path = str(progress.get("source_path") or "")
+    if source_path:
+        try:
+            resolved = Path(source_path).expanduser().resolve()
+            root = Path(videos_root).expanduser().resolve()
+            return resolved.relative_to(root).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            pass
+    if room_id and source_name:
+        return f"{room_id}/{source_name}"
+    return ""
+
+
+def _encode_source_task_id(source_rel_path: str) -> str:
+    return (
+        base64.urlsafe_b64encode(source_rel_path.encode("utf-8"))
+        .decode("ascii")
+        .rstrip("=")
+    )
 
 def _recording_time_label(source_name: str) -> str:
     match = _RECORDING_NAME_RE.match(source_name or "")

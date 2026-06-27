@@ -24,6 +24,7 @@ base_url = "https://api.xiaomimimo.com/v1"
 fps = 1.0
 media_resolution = "default"
 timeout = 180
+parallelism = 3
 max_base64_bytes = 48000000
 ```
 
@@ -57,7 +58,7 @@ Set-BiliveSecret MIMO_API_KEY "<your-key>"
 - 使用 Base64 `data:video/mp4;base64,...` 传入 MiMo。
 - 编码后 Base64 字符串硬限制为 `48_000_000` 字节。
 - 超限时降低码率重试一次；仍超限则 `judge_failed`。
-- 请求设置 `fps=1.0`、`media_resolution=default`。
+- 请求设置 `fps=1.0`、`media_resolution=default`。候选 MiMo 判断默认并发数为 `parallelism=3`，只并发云端判断，本地 Whisper、烧字幕、元数据和上传入队仍按候选顺序串行执行。
 - 请求设置 `thinking.type=disabled`。
 - 要求 JSON 输出：`decision`、`reason`、`title`、`description`、`tags`、`quality_score`、`trim_start`、`trim_end`。
 - 所有字段都必须存在并通过本地类型校验；`quality_score` 范围为 `[0,1]`。

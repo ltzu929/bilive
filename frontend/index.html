@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bilive Studio · 切片工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260623-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260627-1" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -72,6 +72,9 @@
               <div id="slice-progress-source" class="current-file">-</div>
               <div id="slice-progress-file" class="file-meta">-</div>
               <div id="slice-progress-message" class="file-meta">暂无切片任务</div>
+              <div class="progress-actions">
+                <button id="slice-progress-open-source" class="btn-secondary btn-compact" type="button" disabled>定位到审核队列</button>
+              </div>
               <div class="progress-line">
                 <div class="progress-track">
                   <div id="slice-progress-bar" class="progress-fill" style="width: 0%"></div>
@@ -213,6 +216,10 @@
                   <span>描述</span>
                   <textarea id="segment-description" rows="3"></textarea>
                 </label>
+                <label class="field tag-input">
+                  <span>标签</span>
+                  <input id="segment-tags" type="text" placeholder="直播切片, 聊天, 弹幕互动" />
+                </label>
                 <label class="field">
                   <span>判断原因</span>
                   <textarea id="quality-reason" rows="5"></textarea>
@@ -237,6 +244,28 @@
               </div>
             </section>
           </div>
+
+          <section id="publish-panel" class="publish-panel panel" aria-label="投稿流水线">
+            <div class="panel-header">
+              <div class="panel-title">
+                <strong>投稿流水线</strong>
+                <span id="publish-queue-count">0 个项目</span>
+              </div>
+              <div class="publish-actions">
+                <button id="publish-refresh-button" class="btn-secondary btn-compact" type="button">刷新</button>
+                <button id="publish-wake-button" class="btn-primary btn-compact" type="button">唤醒上传节点</button>
+              </div>
+            </div>
+            <div class="publish-overview" aria-label="投稿状态统计">
+              <div class="publish-metric"><span>待上传</span><strong id="publish-count-queued">0</strong></div>
+              <div class="publish-metric"><span>处理中</span><strong id="publish-count-active">0</strong></div>
+              <div class="publish-metric"><span>已发布</span><strong id="publish-count-published">0</strong></div>
+              <div class="publish-metric"><span>失败</span><strong id="publish-count-failed">0</strong></div>
+            </div>
+            <div id="publish-queue-list" class="publish-queue-compact panel-body">
+              <div class="task-empty">正在读取投稿队列</div>
+            </div>
+          </section>
 
           <section id="task-panel" class="task-panel" aria-live="polite">
             <div class="task-header">
@@ -331,6 +360,6 @@
         </div>
       </main>
     </div>
-    <script src="/app.js?v=20260625-1"></script>
+    <script src="/app.js?v=20260627-1"></script>
   </body>
 </html>
