@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bilive Studio · 切片工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260627-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260627-4" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -73,7 +73,7 @@
               <div id="slice-progress-file" class="file-meta">-</div>
               <div id="slice-progress-message" class="file-meta">暂无切片任务</div>
               <div class="progress-actions">
-                <button id="slice-progress-open-source" class="btn-secondary btn-compact" type="button" disabled>定位到审核队列</button>
+                <button id="slice-progress-open-source" class="btn-secondary btn-compact" type="button" disabled>定位到 UP 主队列</button>
               </div>
               <div class="progress-line">
                 <div class="progress-track">
@@ -120,18 +120,18 @@
           </section>
 
           <div class="review-workspace workbench source-workbench">
-            <section class="review-queue panel source-list-panel" aria-label="录播审核队列">
+            <section class="review-queue panel source-list-panel" aria-label="UP 主队列">
               <div class="panel-header">
                 <div class="panel-title">
-                  <strong>审核队列</strong>
-                  <span id="source-recording-count">0 条录播</span>
+                  <strong>UP 主队列</strong>
+                  <span id="source-recording-count">0 位 UP · 0 场录播</span>
                 </div>
               </div>
               <div class="queue-tools">
                 <label class="filter-field">
-                  <span>直播间</span>
+                  <span>UP 主</span>
                   <select id="room-filter">
-                    <option value="">全部 UP</option>
+                    <option value="">全部 UP 主</option>
                   </select>
                 </label>
                 <label class="filter-field">
@@ -360,6 +360,6 @@
         </div>
       </main>
     </div>
-    <script src="/app.js?v=20260627-1"></script>
+    <script src="/app.js?v=20260627-4"></script>
   </body>
 </html>

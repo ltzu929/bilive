@@ -53,8 +53,8 @@ def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
     assert "由 Windows 环境管理" in texts["js"]
     assert 'aria-label="切片工作台"' in texts["html"]
     assert "?????" not in texts["html"]
-    assert 'src="/app.js?v=20260627-1"' in texts["html"]
-    assert 'href="/styles.css?v=20260627-1"' in texts["html"]
+    assert 'src="/app.js?v=20260627-4"' in texts["html"]
+    assert 'href="/styles.css?v=20260627-4"' in texts["html"]
 
     for contract in [
         "activateCurrentView",
@@ -184,6 +184,49 @@ def test_frontend_unified_publish_workbench_contract():
         ".tag-input",
     ]:
         assert css_contract in texts["css"]
+
+def test_frontend_left_queue_is_up_owner_queue_contract():
+    texts = _frontend_texts()
+
+    assert "UP 主队列" in texts["html"]
+    assert "审核队列" not in texts["html"]
+    assert "定位到 UP 主队列" in texts["html"]
+    assert "全部 UP 主" in texts["html"]
+    assert "当前录播未出现在 UP 主队列" in texts["js"]
+    for js_contract in [
+        "sourceReviewCount",
+        "sourceKeepCount",
+        "sourceQueueSummary",
+        "summarizeSourceGroup",
+        "collapsedSourceGroups",
+        "expandSourceGroupForTask",
+        "aria-expanded",
+    ]:
+        assert js_contract in texts["js"]
+
+    for css_contract in [
+        ".up-source-main",
+        ".up-source-meta",
+        ".up-source-count",
+        ".up-source-row",
+        "width: calc(100% - 38px);",
+        "box-sizing: border-box;",
+        ".up-source-group.collapsed",
+    ]:
+        assert css_contract in texts["css"]
+
+
+def test_frontend_review_workspace_expands_instead_of_first_screen_clamp():
+    text = FRONTEND_CSS.read_text(encoding="utf-8")
+
+    assert "Desktop review workbench should expand" in text
+    assert "height: 540px;" not in text
+    assert "height: 132px;" not in text
+    assert "max-height: 330px;" not in text
+    assert "grid-template-columns: 280px minmax(560px, 1fr) 320px;" in text
+    assert "min-height: 680px;" in text
+    assert "height: 108px;" in text
+
 
 def test_source_recording_refresh_ignores_stale_responses():
     text = FRONTEND_JS.read_text(encoding="utf-8")

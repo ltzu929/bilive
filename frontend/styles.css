@@ -474,7 +474,7 @@ button:disabled,
   min-width: 0;
   min-height: 154px;
   padding: 18px 20px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1953,7 +1953,10 @@ button:disabled,
 
 /* Unified review and publish workbench */
 .source-group {
-  margin-bottom: 10px;
+  margin: 0 0 10px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 12px;
 }
 
 .source-group:last-child {
@@ -1964,25 +1967,92 @@ button:disabled,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px 8px 6px;
+  width: 100%;
+  min-height: 52px;
+  gap: 10px;
+  padding: 10px 9px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
   color: var(--text-soft);
+  text-align: left;
+  box-shadow: none;
+}
+
+.source-group-header:hover:not(:disabled) {
+  transform: none;
+  background: #f7f9fc;
+  box-shadow: none;
+}
+
+.up-source-main {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-areas:
+    "chevron title"
+    ". meta";
+  align-items: center;
+  min-width: 0;
+  gap: 3px 7px;
+}
+
+.up-source-chevron {
+  grid-area: chevron;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
 }
 
 .source-group-header strong {
+  grid-area: title;
   min-width: 0;
   overflow: hidden;
-  font-size: 11px;
+  color: var(--text);
+  font-size: 12px;
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.source-group-header span {
-  flex: 0 0 auto;
+.up-source-meta {
+  grid-area: meta;
+}
+
+.up-source-meta,
+.up-source-count {
+  overflow: hidden;
   color: var(--muted);
   font-size: 10px;
   font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.up-source-count {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f0f4f9;
+}
+
+.up-source-row {
+  width: calc(100% - 38px);
+  min-height: 78px;
+  box-sizing: border-box;
+  margin: 0 6px 5px 32px;
+  padding: 11px 10px;
+  border-left: 2px solid #dbe7ff;
+  border-radius: 10px;
+}
+
+.up-source-row.active {
+  border-left-color: var(--primary);
+}
+
+.up-source-group.collapsed {
+  border-color: #eef2f7;
+  background: #fbfcfe;
 }
 
 .tag-input input {
@@ -2132,9 +2202,9 @@ button:disabled,
 
   .workbench,
   .review-workspace {
-    grid-template-columns: 280px minmax(500px, 1fr) 320px;
+    grid-template-columns: 280px minmax(560px, 1fr) 320px;
     gap: 12px;
-    min-height: 520px;
+    min-height: 660px;
   }
 
   .panel-header {
@@ -2151,8 +2221,8 @@ button:disabled,
   }
 
   .preview-video {
-    min-height: 230px;
-    max-height: 330px;
+    min-height: 330px;
+    max-height: none;
   }
 
   .density-card {
@@ -2165,7 +2235,7 @@ button:disabled,
   }
 
   .density-chart {
-    height: 76px;
+    height: 108px;
   }
 
   .metadata-grid {
@@ -2241,27 +2311,24 @@ button:disabled,
     max-height: 180px;
   }
 }
-/* Fixed first-screen workbench heights */
+/* Desktop review workbench should expand; do not compress it to fit later panels. */
 @media (min-width: 1200px) {
   .progress-panel,
   .overview-card {
-    height: 132px;
-    min-height: 0;
+    min-height: 150px;
   }
 
   .workbench,
   .review-workspace {
-    height: 540px;
-    min-height: 0;
+    min-height: 680px;
   }
 
   .publish-panel {
-    height: 190px;
-    min-height: 0;
+    min-height: 190px;
   }
 
   .publish-queue-compact {
-    max-height: 84px;
+    max-height: 160px;
   }
 
   .feedback-body {
@@ -2291,12 +2358,10 @@ button:disabled,
     font-size: 9px;
   }
 }
-/* Clamp workbench panels into the fixed viewport row */
+/* Keep review panels in the same row while letting the row grow to its content. */
 @media (min-width: 1200px) {
   .review-workspace > .panel,
   .workbench > .panel {
-    height: 100%;
-    min-height: 0;
     align-self: stretch;
   }
 }

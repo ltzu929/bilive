@@ -44,6 +44,7 @@ const state = {
   selectedId: "",
   decision: "review",
   currentSliceProgress: null,
+  collapsedSourceGroups: new Set(),
 };
 
 const elements = {
@@ -505,19 +506,68 @@ function sourceSummaryLabel(counts = {}) {
   ].join(" / ");
 }
 
+function sourceReviewCount(counts = {}) {
+  return Number(counts.review || 0) + Number(counts.judge_failed || 0);
+}
+
+function sourceKeepCount(counts = {}) {
+  return Number(counts.keep || 0) + Number(counts.manual_keep || 0);
+}
+
+function sourceDateLabel(item) {
+  const name = item.source_name || item.source_rel_path || "";
+  const match = name.match(/(\d{8})-(\d{2})-(\d{2})-(\d{2})/);
+  if (!match) return item.source_name || item.source_rel_path || "-";
+  const [, yyyymmdd, hour, minute] = match;
+  return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)} ${hour}:${minute} 直播`;
+}
+
+function sourceQueueSummary(item) {
+  const counts = item.summary_counts || {};
+  const candidates = Number(item.segment_count || 0);
+  return [
+    `${candidates} 个候选`,
+    `待确认 ${sourceReviewCount(counts)}`,
+    `保留 ${sourceKeepCount(counts)}`,
+    `失败 ${Number(counts.judge_failed || 0)}`,
+  ].join(" · ");
+}
+
+function summarizeSourceGroup(sources) {
+  return sources.reduce(
+    (summary, item) => {
+      const counts = item.summary_counts || {};
+      summary.sources += 1;
+      summary.candidates += Number(item.segment_count || 0);
+      summary.review += sourceReviewCount(counts);
+      summary.keep += sourceKeepCount(counts);
+      summary.failed += Number(counts.judge_failed || 0);
+      return summary;
+    },
+    { sources: 0, candidates: 0, review: 0, keep: 0, failed: 0 },
+  );
+}
+
+function sourceGroupForTask(taskId) {
+  return state.sourceRecordings.find((item) => item.task_id === taskId)?.room_id || "";
+}
+
+function expandSourceGroupForTask(taskId) {
+  const roomId = sourceGroupForTask(taskId);
+  if (roomId) state.collapsedSourceGroups.delete(roomId);
+}
+
 function updateOverviewStats() {
   const sources = Array.isArray(state.sourceRecordings) ? state.sourceRecordings : [];
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
   const reviewCount = sources.reduce(
     (total, item) => total
-      + Number(item.summary_counts?.review || 0)
-      + Number(item.summary_counts?.judge_failed || 0),
+      + sourceReviewCount(item.summary_counts),
     0,
   );
   const keepCount = sources.reduce(
     (total, item) => total
-      + Number(item.summary_counts?.keep || 0)
-      + Number(item.summary_counts?.manual_keep || 0),
+      + sourceKeepCount(item.summary_counts),
     0,
   );
 
@@ -603,7 +653,7 @@ async function refreshSourceRecordings() {
 function renderSourceRow(item) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = `source-row${item.task_id === state.selectedSourceId ? " active" : ""}`;
+  button.className = `source-row up-source-row${item.task_id === state.selectedSourceId ? " active" : ""}`;
   button.dataset.taskId = item.task_id;
 
   const header = document.createElement("span");
@@ -611,7 +661,7 @@ function renderSourceRow(item) {
 
   const name = document.createElement("span");
   name.className = "source-name";
-  name.textContent = item.source_name || item.source_rel_path || "-";
+  name.textContent = sourceDateLabel(item);
 
   const status = sourceStatusPresentation(item.status);
   const statusBadge = document.createElement("span");
@@ -621,11 +671,11 @@ function renderSourceRow(item) {
 
   const meta = document.createElement("span");
   meta.className = "source-meta";
-  meta.textContent = `${item.room_name || item.room_id || "-"} / ${formatMegabytes(item.source_size_mb)}`;
+  meta.textContent = sourceQueueSummary(item);
 
   const summary = document.createElement("span");
   summary.className = "source-summary-line";
-  summary.textContent = sourceSummaryLabel(item.summary_counts);
+  summary.textContent = `${item.source_name || item.source_rel_path || "-"} / ${formatMegabytes(item.source_size_mb)}`;
 
   button.append(header, meta, summary);
   button.addEventListener("click", () => selectSourceRecording(item.task_id));
@@ -648,24 +698,55 @@ function groupSourceRecordingsByRoom(items) {
     }
     byRoom.get(roomId).sources.push(item);
   }
-  return groups;
+  return groups.map((group) => ({
+    ...group,
+    summary: summarizeSourceGroup(group.sources),
+    collapsed: state.collapsedSourceGroups.has(group.roomId),
+  }));
 }
 
 function renderSourceGroup(group) {
   const section = document.createElement("section");
-  section.className = "source-group";
+  section.className = `source-group up-source-group${group.collapsed ? " collapsed" : ""}`;
 
-  const header = document.createElement("div");
-  header.className = "source-group-header";
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "source-group-header up-source-header";
+  header.setAttribute("aria-expanded", group.collapsed ? "false" : "true");
+
+  const main = document.createElement("span");
+  main.className = "up-source-main";
+
+  const chevron = document.createElement("span");
+  chevron.className = "up-source-chevron";
+  chevron.textContent = group.collapsed ? "›" : "⌄";
+
   const title = document.createElement("strong");
   title.textContent = group.roomName || group.roomId || "-";
+
+  const meta = document.createElement("span");
+  meta.className = "up-source-meta";
+  meta.textContent = `待确认 ${group.summary.review} · 失败 ${group.summary.failed} · 已保留 ${group.summary.keep}`;
+  main.append(chevron, title, meta);
+
   const count = document.createElement("span");
-  count.textContent = `${group.sources.length} 场`;
-  header.append(title, count);
+  count.className = "up-source-count";
+  count.textContent = `${group.summary.candidates} 候选 / ${group.summary.sources} 场`;
+  header.append(main, count);
+  header.addEventListener("click", () => {
+    if (state.collapsedSourceGroups.has(group.roomId)) {
+      state.collapsedSourceGroups.delete(group.roomId);
+    } else {
+      state.collapsedSourceGroups.add(group.roomId);
+    }
+    renderSourceRecordings();
+  });
   section.appendChild(header);
 
-  for (const item of group.sources) {
-    section.appendChild(renderSourceRow(item));
+  if (!group.collapsed) {
+    for (const item of group.sources) {
+      section.appendChild(renderSourceRow(item));
+    }
   }
   return section;
 }
@@ -673,7 +754,7 @@ function renderSourceGroup(group) {
 function renderSourceRecordings() {
   if (!elements.sourceRecordingList || !elements.sourceRecordingCount) return;
   const items = sortedSourceRecordings();
-  elements.sourceRecordingCount.textContent = `${items.length} 场录播`;
+  elements.sourceRecordingCount.textContent = `${groupSourceRecordingsByRoom(items).length} 位 UP · ${items.length} 场录播`;
   elements.sourceRecordingList.innerHTML = "";
   updateOverviewStats();
 
@@ -690,6 +771,7 @@ function renderSourceRecordings() {
   }
 }
 function selectSourceRecording(taskId) {
+  expandSourceGroupForTask(taskId);
   state.selectedSourceId = taskId;
   state.selectedSegmentId = "";
   renderSourceRecordings();
@@ -697,6 +779,8 @@ function selectSourceRecording(taskId) {
 }
 
 function scrollSourceRecordingIntoView(taskId) {
+  expandSourceGroupForTask(taskId);
+  renderSourceRecordings();
   const rows = elements.sourceRecordingList?.querySelectorAll("[data-task-id]") || [];
   for (const row of rows) {
     if (row.dataset.taskId !== taskId) continue;
@@ -724,7 +808,7 @@ async function gotoCurrentSourceRecording() {
     item.task_id === taskId || item.source_rel_path === progress.source_rel_path
   ));
   if (!target) {
-    showError("当前录播未出现在审核队列");
+    showError("当前录播未出现在 UP 主队列");
     return;
   }
   await selectSourceRecording(target.task_id);
