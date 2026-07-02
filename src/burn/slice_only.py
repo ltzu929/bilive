@@ -105,6 +105,27 @@ def _format_score(value):
         return "-"
 
 
+def _mimo_empty_result_details(results):
+    details = []
+    reason = str(getattr(results, "empty_reason", "") or "").strip()
+    if reason:
+        details.append(("Empty reason", reason))
+    summary = str(getattr(results, "raw_response_summary", "") or "").strip()
+    if summary and summary != reason:
+        details.append(("MiMo response", summary))
+    return details
+
+
+def _mimo_empty_log_suffix(results):
+    reason = str(getattr(results, "empty_reason", "") or "").strip()
+    if reason:
+        return f": reason={reason}"
+    summary = str(getattr(results, "raw_response_summary", "") or "").strip()
+    if summary:
+        return f": response={summary}"
+    return ""
+
+
 def _log_mimo_clip_decision(clip_index, total_clips, result, output_path=None):
     trim = result.suggested_trim
     trim_range = (
@@ -520,10 +541,12 @@ def slice_only(video_path, **_slice_options):
                 diagnostics=diagnostics,
             )
             precomputed_mimo = mimo_results_by_index.get(index)
+            empty_result_source = None
             if precomputed_mimo is not None:
                 if precomputed_mimo.get("error") is not None:
                     raise precomputed_mimo["error"]
                 danmaku_text = precomputed_mimo.get("danmaku_text", danmaku_text)
+                empty_result_source = precomputed_mimo["results"]
                 results = analyze_candidate_clip_results(
                     precomputed_mimo["results"],
                     slice_path,
@@ -542,11 +565,13 @@ def slice_only(video_path, **_slice_options):
                     candidate_duration=generated_slice.duration,
                     analyzer=analyze_candidate_clips,
                 )
+                empty_result_source = results
             result_message = (
                 f"MiMo 返回 {len(results)} 个可处理片段"
                 if results
                 else "MiMo 未返回可投稿片段"
             )
+            empty_details = [] if results else _mimo_empty_result_details(empty_result_source)
             diagnostics = upsert_diagnostic(
                 diagnostics,
                 diagnostic_item(
@@ -554,7 +579,11 @@ def slice_only(video_path, **_slice_options):
                     "MiMo 判断",
                     "ok" if results else "warning",
                     result_message,
-                    [*mimo_details, ("返回片段", str(len(results)))],
+                    [
+                        *mimo_details,
+                        ("返回片段", str(len(results))),
+                        *empty_details,
+                    ],
                 ),
             )
             progress.update(
@@ -572,7 +601,10 @@ def slice_only(video_path, **_slice_options):
             )
             if not results:
                 empty_candidate_count += 1
-                scan_log.info(f"MiMo found no postable chat clips in {slice_path}")
+                scan_log.info(
+                    f"MiMo found no postable chat clips in {slice_path}"
+                    f"{_mimo_empty_log_suffix(empty_result_source)}"
+                )
                 continue
             context_range = _format_seconds_range(
                 getattr(generated_slice, "context_start", None),

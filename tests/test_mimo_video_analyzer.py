@@ -506,6 +506,27 @@ def test_mimo_multi_clip_response_drops_empty_clip_list():
     assert results == []
 
 
+def test_mimo_empty_clip_response_preserves_reason():
+    from src.autoslice.mllm_sdk.mimo_video import _analysis_list_from_mimo_dict
+
+    results = _analysis_list_from_mimo_dict(
+        {
+            "clips": [],
+            "empty_reason": "missing standalone context",
+            "observed_issue": "mostly greetings and gift thanks",
+        },
+        artist="主播",
+        model="mimo-v2.5",
+    )
+
+    assert results == []
+    assert results.empty_reason == "missing standalone context"
+    assert results.raw_response_summary == (
+        "empty_reason=missing standalone context; "
+        "observed_issue=mostly greetings and gift thanks"
+    )
+
+
 def test_mimo_prompt_describes_chat_slice_editor_role():
     from src.autoslice.mllm_sdk.mimo_video import _build_prompt
 
@@ -519,6 +540,7 @@ def test_mimo_prompt_describes_chat_slice_editor_role():
     assert "严格主编" in prompt
     assert "弹幕峰值只是候选来源" in prompt
     assert "clips" in prompt
+    assert "empty_reason" in prompt
     assert "B 站口语标题" in prompt
 
 
@@ -568,3 +590,49 @@ def test_judge_candidate_clips_with_mimo_returns_multiple(monkeypatch):
     assert len(results) == 1
     assert results[0].title == "主播讲了一个离谱故事"
     assert results[0].token_usage == {"total_tokens": 100}
+
+
+def test_judge_candidate_clips_with_mimo_preserves_empty_reason(monkeypatch):
+    from src.autoslice.mllm_sdk import mimo_video
+    from src.autoslice.mllm_sdk.mimo_video import EncodedMimoVideo
+
+    class Message:
+        content = (
+            '{"clips":[],"empty_reason":"missing standalone context",'
+            '"observed_issue":"mostly greetings"}'
+        )
+
+    class Choice:
+        message = Message()
+
+    class Completion:
+        choices = [Choice()]
+        usage = {"total_tokens": 60}
+        model = "mimo-v2.5"
+
+    class Completions:
+        def create(self, **kwargs):
+            return Completion()
+
+    class Chat:
+        completions = Completions()
+
+    class Client:
+        chat = Chat()
+
+    monkeypatch.setenv("MIMO_API_KEY", "key")
+
+    results = mimo_video.judge_candidate_clips_with_mimo(
+        video_path="candidate.mp4",
+        artist="主播",
+        danmaku_text="弹幕",
+        candidate_duration=240.0,
+        client_factory=lambda **kwargs: Client(),
+        encoder=lambda *args, **kwargs: EncodedMimoVideo("data:video/mp4;base64,AAAA", 4),
+    )
+
+    assert results == []
+    assert results.empty_reason == "missing standalone context"
+    assert results.raw_response_summary == (
+        "empty_reason=missing standalone context; observed_issue=mostly greetings"
+    )

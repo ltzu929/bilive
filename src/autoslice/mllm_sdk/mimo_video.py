@@ -32,6 +32,19 @@ class MimoVideoTooLarge(RuntimeError):
     pass
 
 
+class MimoClipResults(list):
+    def __init__(
+        self,
+        items=(),
+        *,
+        empty_reason: str = "",
+        raw_response_summary: str = "",
+    ):
+        super().__init__(items)
+        self.empty_reason = empty_reason
+        self.raw_response_summary = raw_response_summary
+
+
 @dataclass
 class EncodedMimoVideo:
     url: str
@@ -248,6 +261,32 @@ def judge_candidate_clips_with_mimo(
     return results
 
 
+def _empty_reason_from_response(data: dict[str, Any]) -> str:
+    for key in ("empty_reason", "reason", "observed_issue", "summary"):
+        value = _compact_response_value(data.get(key))
+        if value:
+            return value
+    return "MiMo returned empty clips"
+
+
+def _summarize_empty_response(data: dict[str, Any]) -> str:
+    parts = []
+    for key in ("empty_reason", "reason", "observed_issue", "summary"):
+        value = _compact_response_value(data.get(key))
+        if value:
+            parts.append(f"{key}={value}")
+    return "; ".join(parts)
+
+
+def _compact_response_value(value: Any, *, limit: int = 240) -> str:
+    if not isinstance(value, str):
+        return ""
+    compact = " ".join(value.split())
+    if len(compact) > limit:
+        return compact[: limit - 3] + "..."
+    return compact
+
+
 def judge_candidate_with_mimo(
     *,
     video_path: str,
@@ -308,8 +347,9 @@ def _build_prompt(*, artist: str, danmaku_text: str, candidate_duration: float) 
         "- 有清楚开头、发展和落点。\n"
         "- 至少具备一种观看价值: 完整梗或故事、明确观点、强情绪反应、弹幕互动。\n"
         "- 标题采用 B 站口语标题，轻微整活但不夸张，不能写泛泛的直播精彩片段。\n\n"
-        "返回 JSON object，必须只有一个顶层字段 clips。clips 是数组。"
+        "返回 JSON object，顶层必须包含 clips。clips 是数组。"
         "如果没有达标片段，返回 {\"clips\": []}。每个 clips 元素必须包含:"
+        "If clips is empty, include top-level empty_reason with a brief rejection reason.\n"
         " decision, clip_type, topic_summary, why_viewer_would_watch, reason, "
         "title, description, tags, quality_score, completeness_score, confidence, "
         "trim_start, trim_end。decision 只能是 keep。trim_start/trim_end 是相对"
@@ -469,10 +509,13 @@ def _analysis_list_from_mimo_dict(
     if clips is None:
         single = _analysis_from_mimo_dict(data, artist=artist, model=model)
         if single.judge_status == "keep":
-            return [single]
+            return MimoClipResults([single])
         if single.judge_status == "judge_failed":
-            return [single]
-        return []
+            return MimoClipResults([single])
+        return MimoClipResults(
+            empty_reason=single.quality_reason,
+            raw_response_summary=_summarize_empty_response(data),
+        )
     if not isinstance(clips, list):
         return [
             _failed_result(
@@ -481,6 +524,11 @@ def _analysis_list_from_mimo_dict(
                 model=model,
             )
         ]
+    if not clips:
+        return MimoClipResults(
+            empty_reason=_empty_reason_from_response(data),
+            raw_response_summary=_summarize_empty_response(data),
+        )
 
     results: list[AnalysisResult] = []
     for index, clip in enumerate(clips, start=1):

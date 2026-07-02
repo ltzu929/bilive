@@ -329,7 +329,11 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
         ],
     )
     monkeypatch.setattr(slice_module, "extract_danmaku_text", lambda *args, **kwargs: "弹幕")
-    monkeypatch.setattr(slice_module, "analyze_candidate_clips", lambda *args, **kwargs: [])
+    class EmptyMimoResults(list):
+        empty_reason = "missing standalone context"
+        raw_response_summary = "empty_reason=missing standalone context"
+
+    monkeypatch.setattr(slice_module, "analyze_candidate_clips", lambda *args, **kwargs: EmptyMimoResults())
     monkeypatch.setattr(slice_module, "get_video_info", lambda path: ("title", "主播", "date"))
     monkeypatch.setattr(slice_module, "unload_candidate_models", lambda: None)
 
@@ -340,6 +344,8 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
     mimo = next(item for item in result["diagnostics"] if item["id"] == "mimo")
     assert mimo["status"] == "warning"
     assert {"label": "返回片段", "value": "0"} in mimo["details"]
+    assert {"label": "Empty reason", "value": "missing standalone context"} in mimo["details"]
     assert "MiMo found no postable chat clips" in log_text
+    assert "reason=missing standalone context" in log_text
     assert "Slice-only summary: candidates=1, final_clips=0, judge_failed=0" in log_text
     assert "empty_candidates=1" in log_text
