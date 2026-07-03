@@ -9,6 +9,7 @@ from typing import Any
 
 from src.burn.task_history import write_task_history
 from src.config import MIN_VIDEO_SIZE
+from src.dashboard.task_state import resolve_task_id
 
 
 SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
@@ -18,6 +19,7 @@ MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
 def start_slice_scan(
     videos_root: str | Path | None = None,
     slice_options: dict[str, Any] | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     """Queue completed recordings for the PC-side slice worker.
 
@@ -25,7 +27,8 @@ def start_slice_scan(
     it writes .pending marker files only and never starts the slicer locally.
 
     Optional slice_options (burst_ratio, burst_context, burst_top_n) are written
-    into each pending marker for the PC worker to read.
+    into each pending marker for the PC worker to read. Optional task_id queues
+    only the selected source recording instead of scanning every room.
     """
     root = Path(videos_root) if videos_root is not None else _default_videos_root()
     root = root.expanduser().resolve()
@@ -41,15 +44,23 @@ def start_slice_scan(
         }
 
     existing_pending = load_pending_queue_state(root)["pending_tasks"]
-    for room_dir in sorted(root.iterdir(), key=lambda item: item.name):
-        if not room_dir.is_dir() or not room_dir.name.isdigit():
-            continue
-        for video_path in sorted(room_dir.glob("*.mp4"), key=lambda item: item.name):
-            if not _is_queue_candidate(video_path):
-                skipped += 1
-                continue
+    if task_id:
+        video_path = resolve_task_id(root, task_id)
+        if _is_queue_candidate(video_path):
             pending_path = _write_pending_marker(video_path, root, slice_options=slice_options)
             queued_paths.append(str(pending_path))
+        else:
+            skipped += 1
+    else:
+        for room_dir in sorted(root.iterdir(), key=lambda item: item.name):
+            if not room_dir.is_dir() or not room_dir.name.isdigit():
+                continue
+            for video_path in sorted(room_dir.glob("*.mp4"), key=lambda item: item.name):
+                if not _is_queue_candidate(video_path):
+                    skipped += 1
+                    continue
+                pending_path = _write_pending_marker(video_path, root, slice_options=slice_options)
+                queued_paths.append(str(pending_path))
 
     return {
         "status": "queued" if queued_paths or existing_pending else "empty",
@@ -59,7 +70,6 @@ def start_slice_scan(
         "videos_root": str(root),
         "pending_paths": queued_paths,
     }
-
 
 def load_pending_queue_state(videos_root: str | Path) -> dict[str, Any]:
     root = Path(videos_root).expanduser().resolve()

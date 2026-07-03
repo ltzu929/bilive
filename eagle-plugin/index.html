@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bilive 原始录播同步</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f8fafc;
+      color: #111827;
+    }
+
+    body {
+      margin: 0;
+      padding: 18px;
+    }
+
+    main {
+      display: grid;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: #374151;
+    }
+
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 9px 10px;
+      font: inherit;
+      background: #ffffff;
+      color: #111827;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font: inherit;
+      font-weight: 700;
+      background: #2563eb;
+      color: #ffffff;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    #summary {
+      min-height: 20px;
+      font-size: 13px;
+      color: #1f2937;
+    }
+
+    #log {
+      min-height: 180px;
+      max-height: 360px;
+      overflow: auto;
+      white-space: pre-wrap;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 10px;
+      background: #ffffff;
+      color: #374151;
+      font: 12px/1.5 Consolas, "Liberation Mono", monospace;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>bilive 原始录播同步</h1>
+    <label>
+      bilive Dashboard 地址
+      <input id="base-url" value="http://192.168.31.157:2234" spellcheck="false">
+    </label>
+    <button id="sync-button" type="button">同步原始录播</button>
+    <div id="summary">等待同步</div>
+    <pre id="log"></pre>
+  </main>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

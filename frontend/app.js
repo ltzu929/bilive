@@ -32,6 +32,10 @@ if (siderToggle) {
 }
 
 let sourceRecordingRequestId = 0;
+// Guards refreshSourceDetail so a late-arriving response (e.g. from a 2s
+// auto-refresh that raced with a user click) cannot overwrite a newer detail
+// or reset the user's segment selection to the first segment.
+let sourceDetailRequestId = 0;
 
 const state = {
   slices: [],
@@ -45,12 +49,16 @@ const state = {
   decision: "review",
   currentSliceProgress: null,
   collapsedSourceGroups: new Set(),
+  draftRange: null,
+  rangeDrag: null,
+  failureInboxExpanded: false,
 };
 
 const elements = {
   roomFilter: document.querySelector("#room-filter"),
   statusFilter: document.querySelector("#status-filter"),
   startSliceButton: document.querySelector("#start-slice-button"),
+  startSelectedSliceButton: document.querySelector("#start-selected-slice-button"),
   stopSliceButton: document.querySelector("#stop-slice-button"),
   refreshButton: document.querySelector("#refresh-button"),
   workerBadge: document.querySelector("#worker-badge"),
@@ -110,10 +118,14 @@ const elements = {
   overviewTaskTotal: document.querySelector("#overview-task-total"),
   overviewReviewTotal: document.querySelector("#overview-review-total"),
   overviewKeepTotal: document.querySelector("#overview-keep-total"),
+  failureInboxList: document.querySelector("#failure-inbox-list"),
+  failureInboxCount: document.querySelector("#failure-inbox-count"),
   publishQueueList: document.querySelector("#publish-queue-list"),
   publishQueueCount: document.querySelector("#publish-queue-count"),
   publishRefreshButton: document.querySelector("#publish-refresh-button"),
   publishWakeButton: document.querySelector("#publish-wake-button"),
+  rangeDraftStatus: document.querySelector("#range-draft-status"),
+  segmentSaveRenderButton: document.querySelector("#segment-save-render-button"),
 };
 
 function mediaUrl(item) {
@@ -307,6 +319,8 @@ function renderSliceProgress(progress) {
   );
   const status = progress.stale ? "stale" : (progress.status || "idle");
   const running = status === "running";
+  const queued = status === "queued";
+  const busy = running || queued;
   const stoppable = status === "running" || status === "stale";
   elements.progressPanel.dataset.status = status;
   elements.progressTitle.textContent = progress.phase_label || "空闲";
@@ -321,9 +335,12 @@ function renderSliceProgress(progress) {
   if (elements.progressOpenSourceButton) {
     elements.progressOpenSourceButton.disabled = !progress.source_task_id;
   }
-  elements.startSliceButton.disabled = running;
-  elements.startSliceButton.textContent = running ? "切片中" : "启动切片";
+  // Disable both start buttons while a slice is running OR queued, so neither
+  // can re-submit a source that is already pending in the worker queue.
+  elements.startSliceButton.disabled = busy;
+  elements.startSliceButton.textContent = busy ? "切片中" : "启动切片";
   if (elements.stopSliceButton) elements.stopSliceButton.disabled = !stoppable;
+  updateSelectedSliceButton();
   renderTaskState(status);
 }
 
@@ -415,6 +432,7 @@ function renderTaskList(tasks) {
   elements.taskCount.textContent = `${tasks.length} items`;
   elements.taskList.innerHTML = "";
   updateOverviewStats();
+  renderFailureInbox();
 
   if (!tasks.length) {
     const empty = document.createElement("div");
@@ -577,6 +595,182 @@ function updateOverviewStats() {
   if (elements.overviewKeepTotal) elements.overviewKeepTotal.textContent = String(keepCount);
 }
 
+function failureSeverity(item) {
+  const values = {
+    task_failed: 100,
+    worker_failed: 90,
+    render_failed: 70,
+    judge_failed: 50,
+    upload_failed: 20,
+  };
+  return values[item.kind] || 0;
+}
+
+function buildFailureInboxItems() {
+  const items = [];
+  for (const task of state.tasks || []) {
+    if (task.status !== "failed") continue;
+    items.push({
+      kind: "task_failed",
+      typeLabel: "任务失败",
+      title: task.source_name || task.source_rel_path || "-",
+      message: task.message || "整场切片任务失败，需要重新排队或标记完成。",
+      actionLabel: "重新排队",
+      sourceTaskId: task.task_id,
+      roomId: task.room_id || "",
+      task,
+    });
+  }
+
+  for (const source of state.sourceRecordings || []) {
+    const failed = Number(source.summary_counts?.judge_failed || 0);
+    if (failed <= 0) continue;
+    items.push({
+      kind: "judge_failed",
+      typeLabel: "判断失败",
+      title: sourceDateLabel(source),
+      message: `${failed} 个候选片段需要定位后重新分析或调整边界。`,
+      actionLabel: "定位精修",
+      sourceTaskId: source.task_id,
+      roomId: source.room_id || "",
+      segmentStatus: "judge_failed",
+    });
+  }
+
+  for (const upload of uploadDashboardState.items || []) {
+    if (upload.status !== "failed") continue;
+    items.push({
+      kind: "upload_failed",
+      typeLabel: "投稿失败",
+      title: upload.name || upload.video_path || "-",
+      message: upload.last_error || "投稿队列失败，需要进入上传中心处理。",
+      actionLabel: "查看投稿",
+      upload,
+    });
+  }
+
+  return items.sort((left, right) => (
+    failureSeverity(right) - failureSeverity(left)
+    || String(left.title).localeCompare(String(right.title), "zh-CN")
+  ));
+}
+
+function renderFailureInbox() {
+  if (!elements.failureInboxList || !elements.failureInboxCount) return;
+  const items = buildFailureInboxItems();
+  elements.failureInboxCount.textContent = `${items.length} 个待处理问题`;
+  elements.failureInboxList.innerHTML = "";
+  if (!items.length) {
+    elements.failureInboxList.innerHTML = '<div class="task-empty">当前没有需要处理的失败项</div>';
+    return;
+  }
+
+  // Avoid silently dropping low-severity failures: cap the collapsed view at 6
+  // rows but surface a "+N 更多" affordance so the operator can reach the rest.
+  const COLLAPSED_LIMIT = 6;
+  const overLimit = items.length > COLLAPSED_LIMIT;
+  const visible = overLimit && !state.failureInboxExpanded
+    ? items.slice(0, COLLAPSED_LIMIT)
+    : items;
+
+  for (const item of visible) {
+    const row = document.createElement("article");
+    row.className = "failure-inbox-item";
+    row.tabIndex = 0;
+    row.dataset.failureKind = item.kind;
+
+    const main = document.createElement("div");
+    main.className = "failure-inbox-main";
+
+    const type = document.createElement("span");
+    type.className = "failure-inbox-type";
+    type.textContent = item.typeLabel;
+
+    const title = document.createElement("strong");
+    title.className = "failure-inbox-title";
+    title.textContent = item.title;
+
+    const message = document.createElement("span");
+    message.className = "failure-inbox-message";
+    message.textContent = item.message;
+    main.append(type, title, message);
+
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "failure-action-primary";
+    action.textContent = item.actionLabel;
+    action.addEventListener("click", (event) => {
+      event.stopPropagation();
+      executeFailureInboxAction(item).catch((error) => showError(error.message));
+    });
+
+    row.addEventListener("click", () => {
+      focusFailureInboxItem(item).catch((error) => showError(error.message));
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      focusFailureInboxItem(item).catch((error) => showError(error.message));
+    });
+
+    row.append(main, action);
+    elements.failureInboxList.appendChild(row);
+  }
+
+  if (overLimit) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "failure-inbox-toggle";
+    toggle.textContent = state.failureInboxExpanded
+      ? "收起"
+      : `+${items.length - COLLAPSED_LIMIT} 更多（共 ${items.length} 条）`;
+    toggle.addEventListener("click", () => {
+      state.failureInboxExpanded = !state.failureInboxExpanded;
+      renderFailureInbox();
+    });
+    elements.failureInboxList.appendChild(toggle);
+  }
+}
+
+async function focusFailureInboxItem(item) {
+  if (item.kind === "upload_failed") {
+    window.history.pushState({}, "", "/uploads");
+    activateCurrentView();
+    await refreshUploadDashboard();
+    return;
+  }
+  if (!item.sourceTaskId) return;
+  if (elements.statusFilter && elements.statusFilter.value !== "all") {
+    elements.statusFilter.value = "all";
+  }
+  if (elements.roomFilter && item.roomId && elements.roomFilter.value !== item.roomId) {
+    elements.roomFilter.value = item.roomId;
+    await refreshSourceRecordings();
+  }
+  await selectSourceRecording(item.sourceTaskId);
+  scrollSourceRecordingIntoView(item.sourceTaskId);
+  if (item.segmentStatus) {
+    const segment = (state.sourceDetail?.segments || []).find(
+      (candidate) => candidate.judge_status === item.segmentStatus,
+    );
+    if (segment) {
+      selectSegment(segment.segment_id);
+      if (elements.sourcePreviewVideo) {
+        elements.sourcePreviewVideo.currentTime = Number(segment.start_seconds || 0);
+        elements.sourcePreviewVideo.pause();
+      }
+    }
+  }
+}
+
+async function executeFailureInboxAction(item) {
+  if (item.kind === "task_failed" && item.task) {
+    await runTaskAction(item.task, "requeue");
+    return;
+  }
+  await focusFailureInboxItem(item);
+}
+
 function sourceReviewPriority(item) {
   const counts = item.summary_counts || {};
   if (Number(counts.judge_failed || 0) > 0 || Number(counts.review || 0) > 0) return 3;
@@ -629,6 +823,21 @@ function ensureVisibleSourceSelection() {
     return true;
   }
   return false;
+}
+
+function updateSelectedSliceButton() {
+  if (!elements.startSelectedSliceButton) return;
+  const hasSelection = Boolean(state.selectedSourceId);
+  const status = state.currentSliceProgress?.status;
+  const busy = status === "running" || status === "queued";
+  // Disable while a slice is running or queued so the "切当前录播" button
+  // cannot be re-clicked (and re-submit the same source) before the worker
+  // finishes. Called from renderSliceProgress and from startSlicing's finally.
+  elements.startSelectedSliceButton.disabled = busy || !hasSelection;
+  elements.startSelectedSliceButton.textContent = busy ? "切片中" : "切当前录播";
+  elements.startSelectedSliceButton.title = hasSelection
+    ? "只提交当前选中的录播"
+    : "请先在 UP 主队列选择一场录播";
 }
 
 async function refreshSourceRecordings() {
@@ -760,6 +969,8 @@ function renderSourceRecordings() {
   elements.sourceRecordingCount.textContent = `${groupSourceRecordingsByRoom(items).length} 位 UP · ${items.length} 场录播`;
   elements.sourceRecordingList.innerHTML = "";
   updateOverviewStats();
+  updateSelectedSliceButton();
+  renderFailureInbox();
 
   if (!items.length) {
     const empty = document.createElement("div");
@@ -777,6 +988,7 @@ function selectSourceRecording(taskId) {
   expandSourceGroupForTask(taskId);
   state.selectedSourceId = taskId;
   state.selectedSegmentId = "";
+  state.draftRange = null;
   renderSourceRecordings();
   return refreshSourceDetail(taskId);
 }
@@ -819,7 +1031,10 @@ async function gotoCurrentSourceRecording() {
 }
 async function refreshSourceDetail(taskId) {
   if (!taskId) return;
-  state.sourceDetail = await request(`/api/source-recordings/${encodeURIComponent(taskId)}`);
+  const requestId = ++sourceDetailRequestId;
+  const detail = await request(`/api/source-recordings/${encodeURIComponent(taskId)}`);
+  if (requestId !== sourceDetailRequestId) return;
+  state.sourceDetail = detail;
   if (!state.sourceDetail.segments?.some((segment) => segment.segment_id === state.selectedSegmentId)) {
     state.selectedSegmentId = state.sourceDetail.segments?.[0]?.segment_id || "";
   }
@@ -832,8 +1047,8 @@ function renderSourceDetail() {
     if (elements.sourcePreviewVideo) elements.sourcePreviewVideo.removeAttribute("src");
     if (elements.sourceRecording) elements.sourceRecording.textContent = "-";
     if (elements.sourceFileSize) elements.sourceFileSize.textContent = "-";
-    renderDensityChart({ density_points: [], segments: [] });
     renderSegmentPanel();
+    renderDensityChart({ density_points: [], segments: [] });
     return;
   }
 
@@ -845,8 +1060,8 @@ function renderSourceDetail() {
   if (elements.sourceFileSize) elements.sourceFileSize.textContent = formatMegabytes(detail.source_size_mb);
   if (elements.sourceStatus) elements.sourceStatus.textContent = detail.message || detail.status || "-";
   if (elements.sourceSummary) elements.sourceSummary.textContent = sourceSummaryLabel(detail.summary_counts);
-  renderDensityChart(detail);
   renderSegmentPanel();
+  renderDensityChart(detail);
 }
 
 function renderDensityChart(detail) {
@@ -899,12 +1114,205 @@ function renderDensityChart(detail) {
     });
     elements.densitySegmentLayer.appendChild(rect);
   }
+  renderEditableRangeOverlay(maxEnd);
 }
 
 function selectSegment(segmentId) {
   state.selectedSegmentId = segmentId;
-  renderDensityChart(state.sourceDetail);
+  state.draftRange = null;
   renderSegmentPanel();
+  renderDensityChart(state.sourceDetail);
+}
+
+function ensureDraftRange(segment) {
+  if (!segment) {
+    state.draftRange = null;
+    return null;
+  }
+  if (!state.draftRange || state.draftRange.segmentId !== segment.segment_id) {
+    state.draftRange = {
+      segmentId: segment.segment_id,
+      start: Number(segment.start_seconds || 0),
+      end: Number(segment.end_seconds || 0),
+      dirty: false,
+    };
+  }
+  return state.draftRange;
+}
+
+function selectedRangeDraft() {
+  return ensureDraftRange(selectedSegment());
+}
+
+function updateRangeDraftStatus() {
+  const draft = state.draftRange;
+  if (!elements.rangeDraftStatus) return;
+  const dirty = Boolean(draft?.dirty);
+  elements.rangeDraftStatus.classList.toggle("range-draft-dirty", dirty);
+  elements.rangeDraftStatus.textContent = dirty
+    ? "区间有未保存修改。确认后请保存区间，或保存并重渲染。"
+    : "区间未修改";
+}
+
+function updateRangeDraftControls({ seek = false, boundary = "start" } = {}) {
+  const draft = state.draftRange;
+  if (!draft) {
+    if (elements.rangeDraftStatus) updateRangeDraftStatus();
+    return;
+  }
+  if (elements.manualStart) elements.manualStart.value = Number(draft.start || 0).toFixed(1);
+  if (elements.manualEnd) elements.manualEnd.value = Number(draft.end || 0).toFixed(1);
+  if (elements.selectedSegmentRange) {
+    elements.selectedSegmentRange.textContent = `${Number(draft.start || 0).toFixed(1)}s - ${Number(draft.end || 0).toFixed(1)}s`;
+  }
+  updateRangeDraftStatus();
+  if (seek && elements.sourcePreviewVideo) {
+    elements.sourcePreviewVideo.currentTime = boundary === "end" ? draft.end : draft.start;
+    elements.sourcePreviewVideo.pause();
+  }
+}
+
+function markRangeDraftDirty() {
+  const segment = selectedSegment();
+  const draft = selectedRangeDraft();
+  if (!segment || !draft) return;
+  const originalStart = Number(segment.start_seconds || 0);
+  const originalEnd = Number(segment.end_seconds || 0);
+  draft.dirty = Math.abs(draft.start - originalStart) > 0.05
+    || Math.abs(draft.end - originalEnd) > 0.05;
+}
+
+function setDraftRangeBoundary(boundary, value, options = {}) {
+  const draft = selectedRangeDraft();
+  if (!draft) return;
+  // If the selection changed under an in-flight drag (e.g. a 2s auto-refresh
+  // swapped to another source recording), abort instead of writing the old
+  // segment's captured maxEnd onto the new segment's draft.
+  if (state.rangeDrag && draft.segmentId !== state.rangeDrag.segmentId) {
+    return;
+  }
+  const number = Math.max(0, Number(value || 0));
+  if (boundary === "start") {
+    draft.start = Math.min(number, Math.max(0, draft.end - 0.1));
+  } else {
+    draft.end = Math.max(number, draft.start + 0.1);
+  }
+  markRangeDraftDirty();
+  updateRangeDraftControls({ seek: Boolean(options.seek), boundary });
+  if (state.rangeDrag) {
+    // During a drag, update the overlay in place so we don't destroy the
+    // handle element the pointer is dragging (which would drop the
+    // .dragging fill and detach the pointerup target).
+    updateRangeOverlayInPlace();
+  } else {
+    renderDensityChart(state.sourceDetail);
+  }
+}
+
+function markRangeDraftFromInputs(event) {
+  const draft = selectedRangeDraft();
+  if (!draft) return;
+  const start = Number(elements.manualStart?.value || 0);
+  const end = Number(elements.manualEnd?.value || 0);
+  draft.start = Math.max(0, Math.min(start, Math.max(0, end - 0.1)));
+  draft.end = Math.max(end, draft.start + 0.1);
+  markRangeDraftDirty();
+  updateRangeDraftControls({
+    seek: Boolean(event?.target),
+    boundary: event?.target === elements.manualEnd ? "end" : "start",
+  });
+  renderDensityChart(state.sourceDetail);
+}
+
+function startRangeDrag(event, boundary, maxEnd) {
+  event.preventDefault();
+  const handle = event.currentTarget;
+  const draft = selectedRangeDraft();
+  if (!draft) return;
+  // Capture the segment id and maxEnd at pointerdown; if the selection changes
+  // before pointerup, setDraftRangeBoundary will refuse to keep writing.
+  state.rangeDrag = {
+    segmentId: draft.segmentId,
+    boundary,
+    maxEnd,
+    handle,
+  };
+  handle.classList.add("dragging");
+  const move = (pointerEvent) => {
+    if (!state.rangeDrag) return;
+    const box = elements.densityChart.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (pointerEvent.clientX - box.left) / Math.max(box.width, 1)));
+    setDraftRangeBoundary(boundary, ratio * state.rangeDrag.maxEnd, { seek: true });
+  };
+  const stop = () => {
+    if (state.rangeDrag?.handle) {
+      state.rangeDrag.handle.classList.remove("dragging");
+    }
+    state.rangeDrag = null;
+    document.removeEventListener("pointermove", move);
+    document.removeEventListener("pointerup", stop);
+    // Re-render once after the drag so the overlay binds fresh listeners and
+    // reflects the final draft against the (possibly refreshed) chart.
+    renderDensityChart(state.sourceDetail);
+  };
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", stop);
+}
+
+function updateRangeOverlayInPlace() {
+  const draft = state.draftRange;
+  const layer = elements.densitySegmentLayer?.querySelector(".editable-range-layer");
+  if (!draft || !layer) return;
+  const maxEnd = state.rangeDrag?.maxEnd;
+  if (!maxEnd) return;
+  const startX = (draft.start / maxEnd) * 100;
+  const endX = (draft.end / maxEnd) * 100;
+  const rect = layer.querySelector(".selected-range-overlay");
+  if (rect) {
+    rect.setAttribute("x", Math.min(startX, endX).toFixed(2));
+    rect.setAttribute("width", Math.max(Math.abs(endX - startX), 0.5).toFixed(2));
+  }
+  const handles = layer.querySelectorAll(".range-handle");
+  handles.forEach((handle) => {
+    const boundary = handle.dataset.boundary;
+    const x = boundary === "start" ? startX : endX;
+    handle.setAttribute("x", (x - 0.45).toFixed(2));
+  });
+}
+
+function renderEditableRangeOverlay(maxEnd) {
+  const draft = selectedRangeDraft();
+  if (!draft || !elements.densitySegmentLayer) return;
+  // If a drag is in progress, keep the existing overlay (with its live
+  // pointer listeners) rather than rebuilding it under the pointer.
+  if (state.rangeDrag) return;
+  const startX = (draft.start / maxEnd) * 100;
+  const endX = (draft.end / maxEnd) * 100;
+  const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  group.classList.add("editable-range-layer");
+
+  const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("x", Math.min(startX, endX).toFixed(2));
+  rect.setAttribute("y", "1.5");
+  rect.setAttribute("width", Math.max(Math.abs(endX - startX), 0.5).toFixed(2));
+  rect.setAttribute("height", "37");
+  rect.setAttribute("rx", "0");
+  rect.classList.add("selected-range-overlay");
+  group.appendChild(rect);
+
+  for (const [boundary, x] of [["start", startX], ["end", endX]]) {
+    const handle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    handle.setAttribute("x", (x - 0.45).toFixed(2));
+    handle.setAttribute("y", "0.5");
+    handle.setAttribute("width", "0.9");
+    handle.setAttribute("height", "39");
+    handle.setAttribute("rx", "0.45");
+    handle.classList.add("range-handle");
+    handle.dataset.boundary = boundary;
+    handle.addEventListener("pointerdown", (event) => startRangeDrag(event, boundary, maxEnd));
+    group.appendChild(handle);
+  }
+  elements.densitySegmentLayer.appendChild(group);
 }
 
 function renderSegmentPanel() {
@@ -922,11 +1330,13 @@ function renderSegmentPanel() {
     elements.segmentDropButton,
     elements.segmentRetryButton,
     elements.segmentRenderButton,
+    elements.segmentSaveRenderButton,
   ]) {
     if (element) element.disabled = !hasSegment;
   }
 
   if (!segment) {
+    state.draftRange = null;
     if (elements.segmentStatus) {
       elements.segmentStatus.className = "panel-meta status-pill segment-status-review";
       elements.segmentStatus.textContent = "-";
@@ -941,22 +1351,34 @@ function renderSegmentPanel() {
     if (elements.danmakuCount) elements.danmakuCount.textContent = "-";
     if (elements.qualityScore) elements.qualityScore.textContent = "-";
     if (elements.burstRatio) elements.burstRatio.textContent = "-";
+    updateRangeDraftStatus();
     return;
   }
 
+  const draft = ensureDraftRange(segment);
   if (elements.segmentStatus) {
     const status = segment.judge_status || "review";
     const normalizedStatus = status === "manual_keep" ? "keep" : status.replaceAll("_", "-");
     elements.segmentStatus.className = `panel-meta status-pill segment-status-${normalizedStatus}`;
     elements.segmentStatus.textContent = status;
   }
-  if (elements.selectedSegmentRange) elements.selectedSegmentRange.textContent = segmentRangeLabel(segment);
   if (elements.segmentTitle) elements.segmentTitle.value = segment.title || "";
   if (elements.segmentDescription) elements.segmentDescription.value = segment.description || "";
   if (elements.segmentTags) elements.segmentTags.value = Array.isArray(segment.tags) ? segment.tags.join(", ") : "";
-  if (elements.qualityReason) elements.qualityReason.value = segment.quality_reason || segment.judge_error || "";
-  if (elements.manualStart) elements.manualStart.value = Number(segment.start_seconds || 0);
-  if (elements.manualEnd) elements.manualEnd.value = Number(segment.end_seconds || 0);
+  // Surface upload-queue failures on the segment card. A manual_keep that
+  // could not be inserted into upload_queue leaves upload_status="queue_failed"
+  // and an upload_error reason; without this the operator sees a "kept"
+  // segment that silently never publishes.
+  const queueFailure = segment.upload_status === "queue_failed"
+    ? `入队失败：${segment.upload_error || "未知原因"}`
+    : "";
+  if (elements.qualityReason) {
+    const reason = segment.quality_reason || segment.judge_error || "";
+    elements.qualityReason.value = queueFailure
+      ? `${reason}${reason ? "\n" : ""}${queueFailure}`
+      : reason;
+  }
+  if (draft) updateRangeDraftControls();
   if (elements.danmakuCount) elements.danmakuCount.textContent = segment.danmaku_count != null ? String(segment.danmaku_count) : "-";
   if (elements.qualityScore) {
     elements.qualityScore.textContent = segment.quality_score != null
@@ -1001,10 +1423,19 @@ async function pollActionJob(statusUrl) {
 }
 
 async function saveSegmentRange() {
+  const draft = selectedRangeDraft();
   await runSegmentAction("range", {
-    start_seconds: Number(elements.manualStart?.value || 0),
-    end_seconds: Number(elements.manualEnd?.value || 0),
+    start_seconds: Number(draft?.start ?? elements.manualStart?.value ?? 0),
+    end_seconds: Number(draft?.end ?? elements.manualEnd?.value ?? 0),
   });
+  state.draftRange = null;
+  renderSegmentPanel();
+  renderDensityChart(state.sourceDetail);
+}
+
+async function saveAndRenderCurrentSegment() {
+  await saveSegmentRange();
+  await renderCurrentSegment();
 }
 
 function parseTags(value) {
@@ -1015,12 +1446,13 @@ function parseTags(value) {
 }
 
 async function manualKeepCurrentSegment() {
+  const draft = selectedRangeDraft();
   await runSegmentAction("manual-keep", {
     title: elements.segmentTitle?.value || "",
     description: elements.segmentDescription?.value || "",
     tags: parseTags(elements.segmentTags?.value || ""),
-    start_seconds: Number(elements.manualStart?.value || 0),
-    end_seconds: Number(elements.manualEnd?.value || 0),
+    start_seconds: Number(draft?.start ?? elements.manualStart?.value ?? 0),
+    end_seconds: Number(draft?.end ?? elements.manualEnd?.value ?? 0),
   });
 }
 
@@ -1254,13 +1686,25 @@ async function stopSlicing() {
   }
 }
 
-async function startSlicing() {
+async function startSlicing({ selectedOnly = false } = {}) {
   showError("");
-  elements.startSliceButton.disabled = true;
-  elements.startSliceButton.textContent = "启动中";
+  const button = selectedOnly ? elements.startSelectedSliceButton : elements.startSliceButton;
+  if (selectedOnly && !state.selectedSourceId) {
+    showError("请先选择一场录播");
+    updateSelectedSliceButton();
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "启动中";
+  }
   try {
+    const requestOptions = { method: "POST" };
+    if (selectedOnly) {
+      requestOptions.body = JSON.stringify({ task_id: state.selectedSourceId });
+    }
     const result = await request("/api/slice/start", {
-      method: "POST",
+      ...requestOptions,
     });
     const queued = Number(result.queued || 0);
     const pendingTasks = Number(result.pending_tasks || queued);
@@ -1271,22 +1715,34 @@ async function startSlicing() {
     }
     renderSliceProgress({
       status: pendingTasks > 0 ? "queued" : "idle",
-      phase_label: pendingTasks > 0 ? "已提交切片任务" : "没有可提交录像",
+      phase_label: pendingTasks > 0
+        ? (selectedOnly ? "已提交当前录播" : "已提交切片任务")
+        : "没有可提交录像",
       message: pendingTasks > 0
         ? `待处理 ${pendingTasks} 个任务，本次新增 ${queued} 个。${workerMessage}`
-        : "没有找到新的整场 mp4+xml 录像",
+        : (selectedOnly ? "当前录播不可提交或已处理" : "没有找到新的整场 mp4+xml 录像"),
       current_slice_percent: 0,
     });
     setTimeout(refreshSliceProgress, 1000);
     setTimeout(refreshSliceDiagnostics, 1000);
     setTimeout(refreshTasks, 1000);
     setTimeout(refreshSourceRecordings, 1000);
-    elements.startSliceButton.disabled = false;
-    elements.startSliceButton.textContent = "启动切片";
   } catch (error) {
     showError(error.message);
-    elements.startSliceButton.disabled = false;
-    elements.startSliceButton.textContent = "启动切片";
+  } finally {
+    // Do not unconditionally re-enable the button: the worker may already be
+    // running or the task queued (status set by renderSliceProgress above or
+    // by a concurrent refreshSliceProgress poll). Re-enabling here would let
+    // the same source be submitted again before the worker finishes.
+    const status = state.currentSliceProgress?.status;
+    const busy = status === "running" || status === "queued";
+    if (button) {
+      button.disabled = busy || (selectedOnly && !state.selectedSourceId);
+      button.textContent = busy
+        ? "切片中"
+        : (selectedOnly ? "切当前录播" : "启动切片");
+    }
+    updateSelectedSliceButton();
   }
 }
 
@@ -1501,6 +1957,7 @@ function renderUploadQueue() {
     }
   }
   renderPublishQueue();
+  renderFailureInbox();
 }
 async function wakeUploadWorker() {
   const button = document.querySelector("#upload-wake-button");
@@ -1582,7 +2039,8 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-elements.startSliceButton.addEventListener("click", startSlicing);
+elements.startSliceButton.addEventListener("click", () => startSlicing());
+elements.startSelectedSliceButton?.addEventListener("click", () => startSlicing({ selectedOnly: true }));
 elements.stopSliceButton?.addEventListener("click", stopSlicing);
 elements.progressOpenSourceButton?.addEventListener("click", () => {
   gotoCurrentSourceRecording().catch((error) => showError(error.message));
@@ -1607,6 +2065,8 @@ elements.roomFilter.addEventListener("change", () => {
   refreshSourceRecordings();
 });
 elements.saveButton.addEventListener("click", saveFeedback);
+elements.manualStart?.addEventListener("input", markRangeDraftFromInputs);
+elements.manualEnd?.addEventListener("input", markRangeDraftFromInputs);
 elements.taskToggle?.addEventListener("click", toggleTaskPanel);
 document.querySelector("#upload-refresh-button")?.addEventListener("click", refreshUploadDashboard);
 elements.publishRefreshButton?.addEventListener("click", refreshUploadDashboard);
@@ -1619,6 +2079,7 @@ elements.segmentKeepButton?.addEventListener("click", () => manualKeepCurrentSeg
 elements.segmentDropButton?.addEventListener("click", () => dropCurrentSegment().catch((error) => showError(error.message)));
 elements.segmentRetryButton?.addEventListener("click", () => retryCurrentSegmentJudge().catch((error) => showError(error.message)));
 elements.segmentRenderButton?.addEventListener("click", () => renderCurrentSegment().catch((error) => showError(error.message)));
+elements.segmentSaveRenderButton?.addEventListener("click", () => saveAndRenderCurrentSegment().catch((error) => showError(error.message)));
 for (const button of elements.decisionButtons) {
   button.addEventListener("click", () => {
     state.decision = button.dataset.decision;

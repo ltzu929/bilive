@@ -59,6 +59,7 @@
             </span>
             <button id="refresh-button" class="btn-secondary" type="button">刷新</button>
             <button id="stop-slice-button" class="btn-danger" type="button" disabled>停止</button>
+            <button id="start-selected-slice-button" class="btn-secondary" type="button" disabled>切当前录播</button>
             <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
           </div>
         </header>
@@ -116,6 +117,19 @@
                 <span>已保留</span>
                 <strong id="overview-keep-total">0</strong>
               </div>
+            </div>
+          </section>
+
+          <section id="failure-inbox-panel" class="failure-inbox-panel panel" aria-label="失败收件箱">
+            <div class="panel-header">
+              <div class="panel-title">
+                <strong>失败收件箱</strong>
+                <span id="failure-inbox-count">0 个待处理问题</span>
+              </div>
+              <span class="panel-meta">按阻塞程度排序，点击定位到精修上下文</span>
+            </div>
+            <div id="failure-inbox-list" class="failure-inbox-list panel-body">
+              <div class="task-empty">当前没有需要处理的失败项</div>
             </div>
           </section>
 
@@ -234,10 +248,12 @@
                 <div class="review-note">
                   修改区间后可直接保存并重新渲染，无需重新分析整段录播。
                 </div>
+                <div id="range-draft-status" class="range-draft-status">区间未修改</div>
                 <div class="segment-actions decision-actions">
                   <button id="segment-keep-button" class="btn-keep" type="button">保留片段</button>
                   <button id="segment-drop-button" class="btn-drop" type="button">丢弃片段</button>
                   <button id="save-button" type="button">保存区间</button>
+                  <button id="segment-save-render-button" type="button">保存并重渲染</button>
                   <button id="segment-retry-button" type="button">重新分析</button>
                   <button id="segment-render-button" class="render-button" type="button">重新渲染片段</button>
                 </div>

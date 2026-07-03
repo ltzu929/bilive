@@ -122,6 +122,61 @@ def test_manual_keep_segment_updates_sidecar_and_queues_upload(tmp_path, monkeyp
     assert history["segments"][1]["judge_status"] == "manual_keep"
 
 
+def test_manual_keep_segment_reports_queue_failure(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    metadata = []
+
+    monkeypatch.setattr(source_workbench, "insert_upload_queue", lambda path: False)
+    monkeypatch.setattr(
+        source_workbench,
+        "write_slice_upload_metadata",
+        lambda path, **kwargs: metadata.append((path, kwargs)) or source.with_suffix(".upload.json"),
+    )
+    # Re-check confirms the row is not in the queue, so False is a real failure.
+    monkeypatch.setattr(source_workbench, "get_upload_item", lambda path: None)
+
+    updated = source_workbench.manual_keep_segment(videos, "seg_failed")
+
+    assert updated["judge_status"] == "manual_keep"
+    assert updated["manual_override"] is True
+    assert updated["upload_status"] == "queue_failed"
+    assert updated["upload_error"] == "upload queue insert returned false"
+    assert metadata
+    history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
+    assert history["segments"][1]["upload_status"] == "queue_failed"
+
+
+def test_manual_keep_segment_treats_duplicate_queue_as_idempotent(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    metadata = []
+
+    # insert_upload_queue returns False on a duplicate video_path (the unique
+    # index already has this row). The re-check finds it in the queue, so the
+    # segment should be reported as queued, not queue_failed.
+    monkeypatch.setattr(source_workbench, "insert_upload_queue", lambda path: False)
+    monkeypatch.setattr(
+        source_workbench,
+        "write_slice_upload_metadata",
+        lambda path, **kwargs: metadata.append((path, kwargs)) or source.with_suffix(".upload.json"),
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "get_upload_item",
+        lambda path: {"video_path": str(path), "status": "queued"},
+    )
+
+    updated = source_workbench.manual_keep_segment(videos, "seg_failed")
+
+    assert updated["judge_status"] == "manual_keep"
+    assert updated["upload_status"] == "queued"
+    assert "upload_error" not in updated
+    assert metadata
+    history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
+    assert history["segments"][1]["upload_status"] == "queued"
+
+
 def test_drop_and_range_segment_update_sidecar(tmp_path):
     videos = tmp_path / "Videos"
     source = _create_processed_source(videos)

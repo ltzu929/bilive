@@ -1,3 +1,4 @@
+import base64
 import json
 
 from src.burn.task_history import read_task_history
@@ -26,6 +27,30 @@ def test_start_slice_scan_writes_pending_markers_for_pc_worker(tmp_path):
     assert not (room / "120s_22384516_20260524-12-57-08.mp4.pending").exists()
     assert read_task_history(source)["status"] == "pending"
 
+
+def test_start_slice_scan_queues_only_requested_source_recording(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    selected = room / "22384516_20260524-12-57-08.mp4"
+    other = room / "22384516_20260525-12-57-08.mp4"
+    for source in [selected, other]:
+        source.write_bytes(b"mp4")
+        source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    task_id = base64.urlsafe_b64encode(
+        selected.relative_to(videos).as_posix().encode("utf-8")
+    ).decode("ascii").rstrip("=")
+
+    result = slice_control.start_slice_scan(videos_root=videos, task_id=task_id)
+
+    pending_path = selected.with_suffix(".mp4.pending")
+    marker = json.loads(pending_path.read_text(encoding="utf-8"))
+    assert result["status"] == "queued"
+    assert result["queued"] == 1
+    assert result["pending_tasks"] == 1
+    assert result["pending_paths"] == [str(pending_path)]
+    assert marker["video_rel_path"] == "22384516/22384516_20260524-12-57-08.mp4"
+    assert not other.with_suffix(".mp4.pending").exists()
 
 def test_start_slice_scan_reports_empty_queue_when_nothing_is_ready(tmp_path):
     videos = tmp_path / "Videos"

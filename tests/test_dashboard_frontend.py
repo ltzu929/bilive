@@ -90,6 +90,7 @@ def test_frontend_dashboard_dom_contract():
         "quality-score",
         "burst-ratio",
         "start-slice-button",
+        "start-selected-slice-button",
         "stop-slice-button",
         "slice-progress-open-source",
     ]:
@@ -186,6 +187,65 @@ def test_frontend_unified_publish_workbench_contract():
     ]:
         assert css_contract in texts["css"]
 
+
+def test_frontend_failure_inbox_contract():
+    texts = _frontend_texts()
+
+    for element_id in [
+        "failure-inbox-panel",
+        "failure-inbox-count",
+        "failure-inbox-list",
+    ]:
+        assert f'id="{element_id}"' in texts["html"]
+
+    for js_contract in [
+        "buildFailureInboxItems",
+        "failureSeverity",
+        "renderFailureInbox",
+        "focusFailureInboxItem",
+        "failure-inbox-item",
+        "failure-action-primary",
+    ]:
+        assert js_contract in texts["js"]
+
+    for css_contract in [
+        ".failure-inbox-panel",
+        ".failure-inbox-list",
+        ".failure-inbox-item",
+        ".failure-action-primary",
+    ]:
+        assert css_contract in texts["css"]
+
+
+def test_frontend_editable_density_range_contract():
+    texts = _frontend_texts()
+
+    for element_id in [
+        "range-draft-status",
+        "segment-save-render-button",
+    ]:
+        assert f'id="{element_id}"' in texts["html"]
+
+    for js_contract in [
+        "draftRange",
+        "renderEditableRangeOverlay",
+        "startRangeDrag",
+        "setDraftRangeBoundary",
+        "markRangeDraftFromInputs",
+        "saveAndRenderCurrentSegment",
+        "range-handle",
+    ]:
+        assert js_contract in texts["js"]
+
+    for css_contract in [
+        ".selected-range-overlay",
+        ".range-handle",
+        ".range-draft-status",
+        ".range-draft-dirty",
+    ]:
+        assert css_contract in texts["css"]
+
+
 def test_frontend_left_queue_is_up_owner_queue_contract():
     texts = _frontend_texts()
 
@@ -260,6 +320,10 @@ def test_frontend_source_recording_status_filter_contract():
     assert "scrollIntoView" in texts["js"]
     assert "progressOpenSourceButton.disabled = !progress.source_task_id" in texts["js"]
     assert "button.dataset.taskId = item.task_id" in texts["js"]
+    assert "startSelectedSliceButton" in texts["js"]
+    assert "selectedOnly = false" in texts["js"]
+    assert "task_id: state.selectedSourceId" in texts["js"]
+    assert "startSlicing({ selectedOnly: true })" in texts["js"]
     assert "progressOpenSourceButton?.addEventListener" in texts["js"]
     assert "const stoppable = status === \"running\" || status === \"stale\"" in texts["js"]
     assert "stopSliceButton.disabled = !stoppable" in texts["js"]

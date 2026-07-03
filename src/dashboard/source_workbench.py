@@ -14,7 +14,7 @@ from src.autoslice.danmaku_slice import (
 )
 from src.burn.task_history import read_task_history
 from src.dashboard.task_state import build_task_inventory, resolve_task_id
-from src.db.conn import insert_upload_queue
+from src.db.conn import get_upload_item, insert_upload_queue
 from src.upload.slice_metadata import write_slice_upload_metadata
 
 
@@ -157,14 +157,38 @@ def manual_keep_segment(
             raise FileNotFoundError(f"Candidate not found: {candidate}")
         segment["judge_status"] = "manual_keep"
         segment["manual_override"] = True
-        segment["upload_status"] = "queued"
         write_slice_upload_metadata(
             candidate,
             title=str(segment.get("title") or candidate.stem),
             desc=str(segment.get("description") or ""),
             tag=segment.get("tags") or ["直播切片"],
         )
-        insert_upload_queue(str(candidate))
+        queue_error = ""
+        try:
+            inserted = insert_upload_queue(str(candidate))
+        except Exception as exc:
+            inserted = False
+            queue_error = str(exc)
+        if inserted:
+            segment["upload_status"] = "queued"
+            segment.pop("upload_error", None)
+        else:
+            # insert_upload_queue returns False on a duplicate video_path
+            # (unique-index IntegrityError), which means the segment is
+            # already queued -- treat that as idempotent success rather than
+            # a failure so a re-keep does not surface a false queue_failed.
+            already_queued = False
+            if not queue_error:
+                try:
+                    already_queued = get_upload_item(str(candidate)) is not None
+                except Exception as exc:
+                    queue_error = str(exc)
+            if already_queued:
+                segment["upload_status"] = "queued"
+                segment.pop("upload_error", None)
+            else:
+                segment["upload_status"] = "queue_failed"
+                segment["upload_error"] = queue_error or "upload queue insert returned false"
         return segment
 
     return _mutate_segment(videos_root, segment_id, mutate)

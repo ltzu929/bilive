@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 @pytest.mark.anyio
 async def test_slices_api_lists_candidates(videos_root, write_slice, dashboard_client):
     write_slice()
@@ -541,6 +540,39 @@ async def test_start_slice_api_invokes_slice_starter(tmp_path, dashboard_client)
     assert response.json()["pid"] == 1234
     assert calls == ["start"]
 
+
+
+@pytest.mark.anyio
+async def test_start_slice_api_queues_selected_source_recording_only(
+    videos_root,
+    write_source_recording,
+    dashboard_client,
+):
+    import base64
+
+    selected = write_source_recording(name="22384516_20260524-12-57-08.mp4")
+    other = write_source_recording(name="22384516_20260525-12-57-08.mp4")
+    task_id = base64.urlsafe_b64encode(
+        selected.relative_to(videos_root).as_posix().encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    trigger_calls = []
+
+    async with dashboard_client(
+        videos_root,
+        remote_worker_trigger=lambda pending: trigger_calls.append(pending)
+        or {"status": "accepted", "pid": 1234},
+    ) as client:
+        response = await client.post("/api/slice/start", json={"task_id": task_id})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["queued"] == 1
+    assert body["pending_tasks"] == 1
+    assert body["worker_trigger"] == {"status": "accepted", "pid": 1234}
+    assert trigger_calls == [1]
+    assert selected.with_suffix(".mp4.pending").exists()
+    assert not other.with_suffix(".mp4.pending").exists()
 
 @pytest.mark.anyio
 async def test_start_slice_api_accepts_legacy_zero_arg_starter(tmp_path, dashboard_client):

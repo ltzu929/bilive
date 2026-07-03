@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from src.dashboard.file_store import DashboardFileStore
+from src.dashboard.eagle_index import build_eagle_source_index
 from src.dashboard.remote_worker import (
     remote_worker_status,
     stop_remote_worker,
@@ -381,9 +382,20 @@ def create_app(
             if payload:
                 return slice_starter(payload)
             return slice_starter()
+        slice_options = _validated_slice_options(payload)
+        task_id = None
+        if payload:
+            raw_task_id = payload.get("task_id")
+            if raw_task_id is not None:
+                if not isinstance(raw_task_id, str):
+                    raise HTTPException(status_code=400, detail="task_id must be a string")
+                task_id = raw_task_id.strip()
+                if not task_id:
+                    raise HTTPException(status_code=400, detail="task_id must not be empty")
         return start_slice_scan(
             store.videos_root,
-            slice_options=_validated_slice_options(payload),
+            slice_options=slice_options,
+            task_id=task_id,
         )
 
     def trigger_worker(pending_tasks: int) -> Dict[str, Any]:
@@ -465,6 +477,17 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/eagle/source-recordings")
+    def list_eagle_source_recordings(room_id: str | None = None) -> JSONResponse:
+        room_names = {room.room_id: room.name for room in store.list_rooms()}
+        return JSONResponse(
+            build_eagle_source_index(
+                store.videos_root,
+                room_names=room_names,
+                room_id=room_id,
+            ),
+        )
 
     @app.post("/api/segments/{segment_id}/manual-keep")
     async def segment_manual_keep(
@@ -554,6 +577,10 @@ def create_app(
     async def start_slice(payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         try:
             result = start_slicing(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

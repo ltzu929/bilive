@@ -39,6 +39,13 @@ MiMo 输入候选视频、窗口弹幕、主播名和候选时长。视频以临
 - 底部“投稿流水线”复用上传队列状态，显示待上传、处理中、已发布和失败计数。它只读取 `/api/upload-dashboard`，不会执行切片、ASR、LLM 或投稿。
 
 自动流程仍然 fail-closed：只有满足自动入队条件的 MiMo keep 片段才会进入上传队列；人工复核保留的片段必须显式确认后才投稿。
+
+## Eagle 原始录播索引
+
+`eagle-plugin/` 是 Eagle 轻量索引插件草案，用于把当前仍存在的原始录播同步为 Eagle 书签卡片。它只调用 `/api/eagle/source-recordings` 读取录播索引，再在 Eagle 中创建、更新或移入废纸篓对应卡片；原始 `.mp4` 文件仍保留在 `Videos/`，不会复制进 Eagle。
+
+同步是手动增量镜像：bilive 当前清单里有的新录播会新增卡片，仍存在的录播会更新标签和备注，已经删除的原始录播会在下次同步时把对应 Eagle 卡片移入废纸篓。插件只管理带 `bilive` 和 `原始录播` 标签且含有 bilive 机器可读备注的条目。
+
 ## Windows 安装
 
 在项目目录执行：
@@ -133,6 +140,7 @@ blrec 通过环境变量 `BLREC_API_KEY` 读取密钥，密钥不会出现在进
 
 ```powershell
 .\.venv-win\Scripts\python.exe -m pytest -q
+node --test eagle-plugin\tests\sync.test.mjs
 .\.venv-win\Scripts\python.exe -m compileall src tests
 .\.venv-win\Scripts\python.exe -m pip check
 ```

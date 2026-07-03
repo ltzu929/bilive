@@ -1,0 +1,22 @@
+{
+  "id": "bilive-source-recording-index",
+  "version": "0.1.0",
+  "platform": "all",
+  "arch": "all",
+  "name": "bilive Source Recordings",
+  "description": "Mirror current bilive source recordings into Eagle as lightweight bookmark cards.",
+  "keywords": ["bilive", "recording", "source"],
+  "author": "bilive",
+  "devTools": true,
+  "main": {
+    "url": "index.html",
+    "width": 520,
+    "height": 560,
+    "minWidth": 420,
+    "minHeight": 420,
+    "resizable": true,
+    "frame": true,
+    "devTools": true,
+    "backgroundColor": "#f8fafc"
+  }
+}

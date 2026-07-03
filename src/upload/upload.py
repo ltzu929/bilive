@@ -221,24 +221,64 @@ class BilibiliRuntimeClient:
         video_path: str,
         metadata: dict[str, Any],
     ) -> str:
-        from src.upload.bilitool.bilitool.controller.upload_controller import (
-            UploadController,
-        )
+        previous_config_path = os.environ.get("BILITOOL_CONFIG_PATH")
+        config_path = Path(previous_config_path or self._bilitool_config_path())
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        os.environ["BILITOOL_CONFIG_PATH"] = str(config_path)
+        try:
+            from src.upload.bilitool.bilitool.controller import upload_controller
+            from src.upload.bilitool.bilitool.model import model as bilitool_model
+            from src.upload.bilitool.bilitool.upload import bili_upload
 
-        controller = UploadController()
-        controller.bili_uploader.session = self.session
-        headers = dict(self.session.headers)
-        headers["Cookie"] = "; ".join(
-            f"{key}={value}" for key, value in self.cookies.items()
-        )
-        controller.bili_uploader.headers = headers
-        remote_filename = controller.upload_video(
-            video_path,
-            cdn=self.upload_line,
-        )
+            base_model = bilitool_model.Model
+
+            class RuntimeModel(base_model):
+                def __init__(self, path=None) -> None:
+                    super().__init__(path or config_path)
+
+            previous_models = (
+                bilitool_model.Model,
+                bili_upload.Model,
+                upload_controller.Model,
+            )
+            bilitool_model.Model = RuntimeModel
+            bili_upload.Model = RuntimeModel
+            upload_controller.Model = RuntimeModel
+            try:
+                controller = upload_controller.UploadController()
+                controller.bili_uploader.session = self.session
+                headers = dict(self.session.headers)
+                headers["Cookie"] = "; ".join(
+                    f"{key}={value}" for key, value in self.cookies.items()
+                )
+                controller.bili_uploader.headers = headers
+                remote_filename = controller.upload_video(
+                    video_path,
+                    cdn=self.upload_line,
+                )
+            finally:
+                (
+                    bilitool_model.Model,
+                    bili_upload.Model,
+                    upload_controller.Model,
+                ) = previous_models
+        finally:
+            if previous_config_path is None:
+                os.environ.pop("BILITOOL_CONFIG_PATH", None)
+            else:
+                os.environ["BILITOOL_CONFIG_PATH"] = previous_config_path
         if not remote_filename:
             raise RuntimeError("UPOS upload did not return a remote filename")
         return str(remote_filename)
+
+    def _bilitool_config_path(self) -> Path:
+        project_root = Path(
+            os.environ.get("BILIVE_DIR", Path(__file__).resolve().parents[2])
+        )
+        runtime_dir = Path(os.environ.get("BILIVE_LOG_DIR", project_root / "logs"))
+        runtime_dir = runtime_dir / "runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        return runtime_dir / "bilitool-config.json"
 
     def submit_uploaded_video(
         self,

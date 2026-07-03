@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 import toml
@@ -12,6 +13,7 @@ from src.db.conn import (
 )
 from src.upload.slice_metadata import write_slice_upload_metadata
 from src.upload.upload import (
+    BilibiliRuntimeClient,
     UploadAlreadyRunning,
     UploadProcessLock,
     UploadSettings,
@@ -268,6 +270,61 @@ def test_auth_error_during_publish_preserves_remote_filename(tmp_path):
     assert row["next_attempt_at"] == 130
     assert len(client.upload_calls) == 1
 
+
+def test_runtime_client_uses_runtime_bilitool_config(tmp_path, monkeypatch):
+    from src.upload.bilitool.bilitool.model import model as bilitool_model
+    from src.upload.bilitool.bilitool.upload.bili_upload import BiliUploader
+
+    monkeypatch.delenv("BILITOOL_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("BILIVE_LOG_DIR", str(tmp_path / "logs"))
+    package_config = Path(bilitool_model.__file__).with_name("config.json")
+    package_before = package_config.read_text(encoding="utf-8")
+    expected_config = tmp_path / "logs" / "runtime" / "bilitool-config.json"
+    seen_config_paths = []
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"video")
+
+    def fake_preupload(self, *, filename, filesize, cdn, probe_version):
+        seen_config_paths.append(os.environ.get("BILITOOL_CONFIG_PATH"))
+        return {
+            "upos_uri": "upos://bucket/remote-file.m4s",
+            "auth": "auth-token",
+            "biz_id": 1,
+            "chunk_size": 1024,
+        }
+
+    monkeypatch.setattr(BiliUploader, "preupload", fake_preupload)
+    monkeypatch.setattr(
+        BiliUploader,
+        "get_upload_video_id",
+        lambda self, *, upos_uri, auth, upos_url: {
+            "upload_id": "upload-id",
+            "key": "/remote-file.m4s",
+        },
+    )
+    monkeypatch.setattr(
+        BiliUploader,
+        "upload_video_in_chunks",
+        lambda self, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        BiliUploader,
+        "finish_upload",
+        lambda self, **kwargs: None,
+    )
+    client = BilibiliRuntimeClient(
+        cookies={"SESSDATA": "session-value", "bili_jct": "csrf-value"},
+        upload_line="qn",
+    )
+
+    remote_filename = client.upload_file(str(video_path), {})
+
+    assert remote_filename == "remote-file"
+    assert seen_config_paths == [str(expected_config)]
+    assert os.environ.get("BILITOOL_CONFIG_PATH") is None
+    runtime_config = json.loads(expected_config.read_text(encoding="utf-8"))
+    assert runtime_config["upload"]["title"] == "clip"
+    assert package_config.read_text(encoding="utf-8") == package_before
 
 def test_process_lock_rejects_second_consumer(tmp_path):
     lock_path = tmp_path / "upload.lock"
