@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+
+logger = logging.getLogger("bilive.db")
 
 
 DATA_BASE_FILE = os.environ.get(
@@ -117,7 +121,7 @@ def create_table(db_path: str | Path | None = None) -> bool:
         migrate_upload_queue(db_path)
         return True
     except sqlite3.Error:
-        print("Create table failed.")
+        logger.exception("migrate_upload_queue failed for %s", db_path)
         return False
 
 
@@ -179,7 +183,7 @@ def insert_upload_queue(
             )
         return True
     except sqlite3.IntegrityError:
-        print("Insert Upload Queue failed, the video path already exists.")
+        logger.warning("insert_upload_queue skipped duplicate video_path=%s", video_path)
         return False
 
 
@@ -468,7 +472,7 @@ def delete_upload_queue(
             )
         return True
     except sqlite3.Error:
-        print("Delete Upload Queue failed.")
+        logger.exception("delete_upload_queue failed for video_path=%s", video_path)
         return False
 
 
@@ -490,7 +494,7 @@ def update_upload_queue_lock(
             )
         return True
     except sqlite3.Error:
-        print("Update Upload Queue failed.")
+        logger.exception("update_upload_queue_lock failed for video_path=%s", video_path)
         return False
 
 

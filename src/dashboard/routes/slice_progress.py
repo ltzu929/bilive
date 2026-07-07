@@ -38,3 +38,12 @@ async def get_slice_diagnostics(ctx: DashboardContext = Depends(get_context)) ->
     progress = load_progress_state()
     queue_state = load_pending_queue_state(ctx.store.videos_root)
     return build_slice_diagnostics(progress, queue_state)
+
+
+@router.get("/api/slice-dashboard")
+async def get_slice_dashboard(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
+    # Resolved through the app module so tests can monkeypatch
+    # src.dashboard.app.read_slice_dashboard by dotted path.
+    from src.dashboard import app as dashboard_app
+
+    return dashboard_app.read_slice_dashboard(ctx.store.videos_root)

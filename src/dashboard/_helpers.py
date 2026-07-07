@@ -368,3 +368,96 @@ def build_queue_diagnostic_items(queue_state: Dict[str, Any]) -> list[Dict[str, 
             ],
         }
     ]
+
+
+# ── slice-dashboard aggregation (read-only, file-system backed) ────────────
+
+# Statuses surfaced by build_task_inventory. ``running`` is folded into the
+# ``processing`` bucket so the dashboard shows one "in flight" count.
+_SLICE_DASHBOARD_BUCKETS = (
+    "recording",
+    "ready",
+    "pending",
+    "processing",
+    "done",
+    "failed",
+    "skipped",
+    "stale",
+)
+# Items in these statuses are the operationally interesting ones to surface;
+# the rest (recording/ready/done/skipped) are summarized only by their counts.
+_SLICE_DASHBOARD_ITEM_STATUSES = ("failed", "processing", "pending", "stale")
+_SLICE_DASHBOARD_MAX_ITEMS = 20
+
+
+def read_slice_dashboard(videos_root: str | Path) -> Dict[str, Any]:
+    """Cross-task slice status overview, mirroring read_upload_dashboard's shape.
+
+    Read-only and file-system backed (no SQLite, no migrations): buckets every
+    source recording by its task status and surfaces the most operationally
+    interesting recent items (failures first). Falls back to ``unavailable``
+    when the Videos directory is missing so the Pi dashboard stays healthy
+    even when the SMB mount is down.
+    """
+    root = Path(videos_root).expanduser()
+    if not root.is_dir():
+        return {
+            "status_counts": {bucket: 0 for bucket in _SLICE_DASHBOARD_BUCKETS},
+            "total": 0,
+            "items": [],
+            "queue": {"pending_tasks": 0, "pending_sources": []},
+            "directory": f"unavailable: missing {root}",
+        }
+
+    from src.dashboard.slice_control import load_pending_queue_state
+    from src.dashboard.task_state import build_task_inventory
+
+    try:
+        tasks = build_task_inventory(root)
+    except OSError as exc:
+        return {
+            "status_counts": {bucket: 0 for bucket in _SLICE_DASHBOARD_BUCKETS},
+            "total": 0,
+            "items": [],
+            "queue": {"pending_tasks": 0, "pending_sources": []},
+            "directory": f"unavailable: {exc}",
+        }
+
+    counts = {bucket: 0 for bucket in _SLICE_DASHBOARD_BUCKETS}
+    items: list[Dict[str, Any]] = []
+    for task in tasks:
+        status = str(task.get("status") or "ready")
+        bucket = "processing" if status == "running" else status
+        if bucket in counts:
+            counts[bucket] += 1
+        if status in _SLICE_DASHBOARD_ITEM_STATUSES:
+            items.append({
+                "task_id": task.get("task_id"),
+                "room_id": task.get("room_id"),
+                "source_name": task.get("source_name"),
+                "status": status,
+                "message": str(task.get("message") or ""),
+                "failure": task.get("failure"),
+                "updated_at": float(task.get("updated_at") or 0),
+            })
+
+    # Failures first (most actionable), then by most recently updated.
+    items.sort(
+        key=lambda item: (
+            0 if item["status"] == "failed" else 1,
+            -item["updated_at"],
+        )
+    )
+    items = items[:_SLICE_DASHBOARD_MAX_ITEMS]
+
+    queue_state = load_pending_queue_state(root)
+    return {
+        "status_counts": counts,
+        "total": len(tasks),
+        "items": items,
+        "queue": {
+            "pending_tasks": int(queue_state.get("pending_tasks") or 0),
+            "pending_sources": list(queue_state.get("pending_sources") or []),
+        },
+        "directory": "ready",
+    }

@@ -3,9 +3,13 @@
 #
 # 路径优先级: 环境变量 > 配置文件 > 默认值
 
+import logging
 import os
 from pathlib import Path
 import toml
+
+
+logger = logging.getLogger("bilive.config")
 
 
 def load_config_from_toml(file_path):
@@ -15,11 +19,11 @@ def load_config_from_toml(file_path):
             config = toml.load(file)
             return config
     except FileNotFoundError:
-        print(f"cannot find {file_path}", flush=True)
+        logger.error("cannot find config file: %s", file_path)
     except toml.TomlDecodeError as e:
-        print(f"cannot parse {file_path} as a valid toml file, error: {e}", flush=True)
-    except Exception as e:
-        print(f"unknown error when loading config file, error: {e}", flush=True)
+        logger.error("cannot parse %s as a valid toml file, error: %s", file_path, e)
+    except Exception:
+        logger.exception("unknown error when loading config file: %s", file_path)
     return None
 
 

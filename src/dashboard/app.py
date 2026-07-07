@@ -26,6 +26,7 @@ from src.dashboard._helpers import (
     media_response,
     process_feedback_directory,
     read_dashboard_settings,
+    read_slice_dashboard,
     read_upload_dashboard,
     upload_path_parts,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "upload_path_parts",
     "read_dashboard_settings",
     "read_upload_dashboard",
+    "read_slice_dashboard",
     "process_feedback_directory",
     "api",
 ]
