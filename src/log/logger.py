@@ -8,6 +8,63 @@ from functools import partial
 from src.config import LOG_DIR
 
 
+# Process-wide guard so importing this module (and callers that wire logging
+# at startup) never installs duplicate handlers across reloads/test runs.
+_default_logging_configured = False
+
+
+def configure_default_logging(*, console: bool = True) -> None:
+    """Install a single file+console handler on the ``bilive`` logger namespace.
+
+    Idempotent: safe to call from every entry point (worker server, dashboard
+    module load, tests). The ``bilive.*`` loggers (bilive.db, bilive.config,
+    bilive.scan, ...) propagate to this one handler instead of relying on each
+    process happening to call ``logging.basicConfig`` — the Pi dashboard, which
+    uvicorn launches without any Python logging setup, otherwise drops
+    sub-WARNING db/config diagnostics to stderr-only lastResort.
+    """
+    global _default_logging_configured
+    root_logger = logging.getLogger("bilive")
+    if _default_logging_configured and root_logger.handlers:
+        return
+    # Clear any stale handlers so a reconfigure (e.g. test reload) is clean.
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+        handler.close()
+
+    formatter = logging.Formatter(
+        "[%(levelname)s] - [%(asctime)s %(name)s] - %(message)s"
+    )
+    log_folder = f"{LOG_DIR}/runtime"
+    try:
+        os.makedirs(log_folder, exist_ok=True)
+    except OSError:
+        # If LOG_DIR is not writable (e.g. read-only test cwd), fall back to
+        # console-only so logging never breaks the process.
+        log_folder = None
+    if log_folder:
+        now = time.strftime("%Y%m%d", time.localtime(time.time()))
+        try:
+            file_handler = logging.FileHandler(
+                f"{log_folder}/bilive-{now}.log", encoding="UTF-8"
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except OSError:
+            pass
+    if console:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+    root_logger.setLevel(logging.DEBUG)
+    # Stop propagation so we don't double-log through the root/basicConfig chain.
+    root_logger.propagate = False
+    _default_logging_configured = True
+
+
 class Logger:
     def __init__(self, log_file_prefix: Optional[str] = None):
         self.log_file_prefix = log_file_prefix

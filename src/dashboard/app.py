@@ -41,6 +41,15 @@ from src.dashboard.routes import (
     status as status_routes,
     tasks as tasks_routes,
 )
+from src.log.logger import configure_default_logging
+
+
+# The dashboard is launched by ``uvicorn src.dashboard.app:api`` with no Python
+# entry point of its own, so there is nowhere else to wire logging. Configure
+# the ``bilive`` namespace here (idempotent) so db/config diagnostics emitted
+# from within the dashboard process land in logs/runtime instead of being
+# dropped to stderr-only lastResort.
+configure_default_logging()
 
 
 # Re-exports kept here for back-compat (tests monkeypatch these dotted paths
