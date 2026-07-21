@@ -102,6 +102,7 @@ def slice_video_by_danmaku(
     burst_context=60,
     burst_merge_gap=5,
     burst_top_n=3,
+    burst_lag_seconds=0.0,
     progress_callback=None,
 ):
     """Slice a recording by burst detection from Bilibili XML danmaku.
@@ -123,6 +124,7 @@ def slice_video_by_danmaku(
         context=burst_context,
         merge_gap=burst_merge_gap,
         top_n=burst_top_n,
+        lag_seconds=burst_lag_seconds,
         return_metadata=return_metadata,
         progress_callback=progress_callback,
     )
@@ -138,6 +140,7 @@ def _slice_by_burst(
     context=60,
     merge_gap=5,
     top_n=3,
+    lag_seconds=0.0,
     return_metadata=False,
     progress_callback=None,
 ):
@@ -157,6 +160,7 @@ def _slice_by_burst(
         context=context,
         merge_gap=merge_gap,
         top_n=top_n,
+        lag_seconds=lag_seconds,
         diagnostics_callback=lambda summary: _emit_detection_progress(
             progress_callback,
             summary,
@@ -261,17 +265,33 @@ def _emit_detection_progress(progress_callback, summary):
     progress_callback({"event": "detect_complete", **summary})
 
 
+def _format_timeline_mark(seconds: float) -> str:
+    """Format seconds as [mm:ss] for danmaku timeline lines."""
+    total = max(0, int(seconds))
+    return f"[{total // 60:02d}:{total % 60:02d}]"
+
+
 def extract_danmaku_text(
     xml_path: str,
     start: float,
     end: float,
     max_chars: int = 500,
+    with_timestamps: bool = False,
 ) -> str:
-    """Extract danmaku messages within a time window from a Bilibili XML file."""
+    """Extract danmaku messages within a time window from a Bilibili XML file.
+
+    When ``with_timestamps`` is False (default), messages are joined by spaces
+    and, if too long, truncated to the last ``max_chars`` characters.
+
+    When ``with_timestamps`` is True, each message becomes a ``[mm:ss] text``
+    line so the LLM sees the full chronological timeline. If the timeline
+    exceeds ``max_chars``, lines are dropped from the middle (keeping the head
+    and tail) so both the opening and the climax stay visible.
+    """
     if not os.path.exists(xml_path):
         return ""
 
-    messages = []
+    messages: list[tuple[float, str]] = []
     try:
         for _, elem in ElementTree.iterparse(xml_path, events=("end",)):
             if elem.tag != "d":
@@ -286,13 +306,55 @@ def extract_danmaku_text(
             if start <= timestamp <= end:
                 text = (elem.text or "").strip()
                 if text:
-                    messages.append(text)
+                    messages.append((timestamp, text))
             elem.clear()
     except Exception:
         return ""
 
-    result = " ".join(messages)
-    if len(result) > max_chars:
-        result = result[-max_chars:]
+    if not with_timestamps:
+        result = " ".join(text for _, text in messages)
+        if len(result) > max_chars:
+            result = result[-max_chars:]
+        return result
 
-    return result
+    messages.sort(key=lambda item: item[0])
+    lines = [f"{_format_timeline_mark(ts)} {text}" for ts, text in messages]
+    return _truncate_timeline_middle(lines, max_chars)
+
+
+def _truncate_timeline_middle(lines: list[str], max_chars: int) -> str:
+    """Join timeline lines, dropping from the middle when over max_chars."""
+    full = "\n".join(lines)
+    if len(full) <= max_chars or len(lines) <= 2:
+        return full
+
+    marker = "\n…(中间省略)…\n"
+    budget = max_chars - len(marker)
+    if budget <= 0:
+        return full[:max_chars]
+
+    head_budget = budget // 2
+    tail_budget = budget - head_budget
+
+    head_lines: list[str] = []
+    head_len = 0
+    for line in lines:
+        add = len(line) + (1 if head_lines else 0)
+        if head_len + add > head_budget:
+            break
+        head_lines.append(line)
+        head_len += add
+
+    tail_lines: list[str] = []
+    tail_len = 0
+    for line in reversed(lines):
+        add = len(line) + (1 if tail_lines else 0)
+        if tail_len + add > tail_budget:
+            break
+        tail_lines.insert(0, line)
+        tail_len += add
+
+    if not head_lines and not tail_lines:
+        return full[:max_chars]
+
+    return "\n".join(head_lines) + marker + "\n".join(tail_lines)

@@ -32,6 +32,7 @@ from src.dashboard._helpers import (
 )
 from src.dashboard.file_store import DashboardFileStore
 from src.dashboard.routes import (
+    analytics as analytics_routes,
     feedback as feedback_routes,
     media as media_routes,
     recordings as recordings_routes,
@@ -126,6 +127,7 @@ def create_app(
     app.include_router(slice_control_routes.router)
     app.include_router(feedback_routes.router)
     app.include_router(media_routes.router)
+    app.include_router(analytics_routes.router)
 
     if static_dir:
         static_path = Path(static_dir)

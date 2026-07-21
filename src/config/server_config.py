@@ -32,6 +32,7 @@ multi_modal = slice_config.get("multi_modal", {})
 mimo = slice_config.get("mimo", {})
 analysis = slice_config.get("analysis", {})
 edit = slice_config.get("edit", {})
+subtitle = slice_config.get("subtitle", {})
 
 TITLE = video.get("title", "{artist}直播-{date}")
 DESC = video.get("description", "直播录制切片")
@@ -64,6 +65,12 @@ BURST_WINDOW = int(burst.get("burst_window", 10))
 BURST_CONTEXT = int(burst.get("burst_context", 60))
 BURST_MERGE_GAP = int(burst.get("burst_merge_gap", 5))
 BURST_TOP_N = int(burst.get("burst_top_n", 3))
+BURST_LAG_SECONDS = float(
+    os.environ.get("BILIVE_BURST_LAG_SECONDS", burst.get("burst_lag_seconds", 0.0))
+)
+DANMAKU_TIMELINE = str(
+    os.environ.get("BILIVE_DANMAKU_TIMELINE", burst.get("danmaku_timeline", ""))
+).strip().lower() in {"1", "true", "yes", "on"}
 
 LLM_JUDGE_PROVIDER = str(judge.get("provider", "openai-compatible"))
 LOCAL_LLM_COMMAND = list(judge.get("local_command", []))
@@ -114,9 +121,65 @@ OMNI_ENABLE_DEEP_ANALYSIS = bool(
     analysis.get("write_analysis_json", True)
 )
 
+# 将 MiMo 返回的 trim 端点吸附到附近的 ASR 句子边界（默认关闭）。
+# 开启时会先对整个候选跑一遍 ASR，用句子边界吸附 trim 并复用该转录。
+SNAP_TRIM_TO_SEGMENTS = str(
+    os.environ.get("BILIVE_SNAP_TRIM", analysis.get("snap_trim_to_segments", ""))
+).strip().lower() in {"1", "true", "yes", "on"}
+SNAP_TRIM_TOLERANCE = float(
+    os.environ.get(
+        "BILIVE_SNAP_TRIM_TOLERANCE", analysis.get("snap_trim_tolerance", 2.0)
+    )
+)
+
 EDIT_ENABLE_INSTRUCTION = bool(edit.get("enable_edit_instruction", True))
 EDIT_ENABLE_PROMPT_PACKAGE = bool(edit.get("enable_prompt_package", False))
 EDIT_MAX_SUBTITLE_EVIDENCE = int(edit.get("max_subtitle_evidence", 6))
 EDIT_DEFAULT_HIGHLIGHT_WINDOW = float(
     edit.get("default_highlight_window", 12)
 )
+
+
+# 硬烧字幕外观参数（全局默认，可被单切片 task.json 覆盖）。
+def _subtitle_opt_int(key: str):
+    value = subtitle.get(key)
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _subtitle_opt_float(key: str):
+    value = subtitle.get(key)
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _subtitle_opt_str(key: str):
+    value = subtitle.get(key)
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+SUBTITLE_FONT_SIZE = int(subtitle.get("font_size", 20))
+SUBTITLE_MARGIN_V = int(subtitle.get("margin_v", 60))
+SUBTITLE_ALIGNMENT = _subtitle_opt_int("alignment")
+SUBTITLE_OUTLINE = _subtitle_opt_float("outline")
+SUBTITLE_PRIMARY_COLOUR = _subtitle_opt_str("primary_colour")
+SUBTITLE_OUTLINE_COLOUR = _subtitle_opt_str("outline_colour")
+
+
+def default_subtitle_style():
+    """Build the global default SubtitleStyle from configuration."""
+    from src.burn.subtitle_burn import SubtitleStyle
+
+    return SubtitleStyle(
+        font_size=SUBTITLE_FONT_SIZE,
+        margin_v=SUBTITLE_MARGIN_V,
+        alignment=SUBTITLE_ALIGNMENT,
+        outline=SUBTITLE_OUTLINE,
+        primary_colour=SUBTITLE_PRIMARY_COLOUR,
+        outline_colour=SUBTITLE_OUTLINE_COLOUR,
+    )

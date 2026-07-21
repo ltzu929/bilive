@@ -76,6 +76,7 @@ def detect_bursts(
     context: int = 60,
     merge_gap: int = 5,
     top_n: int = 3,
+    lag_seconds: float = 0.0,
     diagnostics_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> List[BurstEvent]:
     """弹幕突增检测主函数
@@ -88,6 +89,9 @@ def detect_bursts(
         context: 峰值前后各取的秒数，切片总长 = 2 × context
         merge_gap: 相邻突增事件合并间隔（秒）
         top_n: 最多选几个突增事件
+        lag_seconds: 弹幕相对真实爆点的滞后补偿（秒）。弹幕密度峰值通常
+            比真实爆点晚数秒，切窗锚点前移 lag_seconds 以对齐真实爆点。
+            默认 0.0 表示不补偿。
 
     Returns:
         按 peak_density 降序排列的 BurstEvent 列表
@@ -197,15 +201,18 @@ def detect_bursts(
         peak_local_density = local_densities[peak_idx] if peak_idx < len(local_densities) else 0.0
         ratio = peak_local_density / baseline if baseline > 0 else 0.0
 
-        # 切片范围：峰值前后各 context 秒
-        slice_start = max(0.0, peak_time - context)
-        slice_end = min(video_duration, peak_time + context)
+        # 弹幕密度峰值滞后于真实爆点，切窗锚点前移 lag_seconds 对齐真实爆点
+        anchor = max(0.0, peak_time - lag_seconds)
+
+        # 切片范围：爆点锚点前后各 context 秒
+        slice_start = max(0.0, anchor - context)
+        slice_end = min(video_duration, anchor + context)
 
         # 如果靠边缘，向非边缘方向补齐
-        if peak_time < context:
+        if anchor < context:
             slice_start = 0.0
             slice_end = min(video_duration, 2 * context)
-        if peak_time + context > video_duration:
+        if anchor + context > video_duration:
             slice_end = video_duration
             slice_start = max(0.0, video_duration - 2 * context)
 

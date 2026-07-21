@@ -7,11 +7,31 @@ from src.autoslice.analysis_result import (
 )
 from src.burn.subtitle_burn import (
     BurnSubtitleResult,
+    SubtitleStyle,
     burn_subtitles_from_analysis,
     format_srt_timestamp,
     segments_to_srt,
     transcript_to_segments,
 )
+
+
+def test_subtitle_style_default_is_byte_equivalent_to_legacy():
+    assert SubtitleStyle().to_force_style() == "Fontsize=20,MarginV=60"
+
+
+def test_subtitle_style_emits_optional_fields_only_when_set():
+    style = SubtitleStyle(font_size=26, margin_v=80, alignment=8, outline=2.0)
+    assert style.to_force_style() == "Fontsize=26,MarginV=80,Alignment=8,Outline=2"
+
+
+def test_subtitle_style_from_mapping_ignores_blank_and_unknown():
+    style = SubtitleStyle.from_mapping(
+        {"font_size": "30", "margin_v": "", "outline": "1.5", "bogus": "x"}
+    )
+    assert style.font_size == 30
+    assert style.margin_v == 60
+    assert style.outline == 1.5
+    assert style.to_mapping() == {"font_size": 30, "margin_v": 60, "outline": 1.5}
 
 
 def test_format_srt_timestamp_uses_milliseconds():

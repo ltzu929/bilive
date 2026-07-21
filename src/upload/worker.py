@@ -29,7 +29,9 @@ from src.db.conn import (
 )
 from src.upload.models import UploadMetadataError, UploadResult, UploadSettings
 from src.upload.slice_metadata import (
+    delete_slice_features,
     delete_slice_upload_metadata,
+    read_slice_features,
     read_slice_upload_metadata,
     slice_upload_metadata_path,
 )
@@ -167,6 +169,7 @@ class UploadWorker:
             mark_upload_published(
                 video_path,
                 bvid,
+                features=read_slice_features(video_path),
                 db_path=self.settings.db_path,
                 now=current_time,
             )
@@ -281,6 +284,7 @@ class UploadWorker:
         except FileNotFoundError:
             pass
         delete_slice_upload_metadata(path)
+        delete_slice_features(path)
 
         cover = str(metadata.get("cover") or "")
         if cover:

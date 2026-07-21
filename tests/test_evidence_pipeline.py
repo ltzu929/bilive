@@ -53,7 +53,7 @@ def _setup_pipeline(tmp_path, monkeypatch, analysis):
     monkeypatch.setattr(
         slice_only_module,
         "extract_danmaku_text",
-        lambda *args: "高能 弹幕反馈",
+        lambda *args, **kwargs: "高能 弹幕反馈",
     )
     monkeypatch.setattr(
         slice_only_module,

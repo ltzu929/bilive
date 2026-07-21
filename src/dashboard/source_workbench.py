@@ -288,6 +288,102 @@ def render_segment(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
     return _mutate_segment(videos_root, segment_id, mutate)
 
 
+def update_segment_subtitle_style(
+    videos_root: str | Path,
+    segment_id: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist per-slice burned-subtitle appearance on a segment.
+
+    This only records the desired style; re-burning the candidate is a
+    Windows-only ffmpeg action queued separately via ``reburn_subtitles``.
+    """
+    from src.burn.subtitle_burn import SubtitleStyle
+
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be an object")
+    style = SubtitleStyle.from_mapping(payload)
+
+    def mutate(_root: Path, _source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        segment["subtitle_style"] = style.to_mapping()
+        segment["manual_override"] = True
+        return segment
+
+    return _mutate_segment(videos_root, segment_id, mutate)
+
+
+def reburn_segment_subtitles(
+    videos_root: str | Path,
+    segment_id: str,
+) -> dict[str, Any]:
+    """Re-render burned subtitles for a candidate using its stored style.
+
+    ``render_segment`` only stream-copies the source range, so subtitles are
+    re-baked here by re-slicing the raw candidate window and running the
+    subtitle burner with the segment's persisted style (falling back to the
+    global default). Requires the ``_analysis.json`` sidecar written during
+    slicing for the transcript segments and MiMo trim.
+    """
+    from src.burn.subtitle_burn import SubtitleStyle, burn_subtitles_from_analysis
+    from src.config import default_subtitle_style
+
+    def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        candidate = _segment_candidate_path(root, segment)
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Candidate not found: {candidate}")
+        analysis = _load_segment_analysis(candidate)
+        if analysis is None:
+            raise FileNotFoundError(
+                f"Analysis sidecar not found for candidate: {candidate}"
+            )
+        stored_style = segment.get("subtitle_style")
+        style = (
+            SubtitleStyle.from_mapping(stored_style)
+            if stored_style
+            else default_subtitle_style()
+        )
+        candidate_start = _float(segment.get("candidate_start_seconds"))
+        candidate_end = _float(segment.get("candidate_end_seconds"))
+        if candidate_end <= candidate_start:
+            raise ValueError("candidate range is invalid for subtitle reburn")
+        raw_temp = candidate.with_name(f"{candidate.stem}_reburn_src{candidate.suffix}")
+        try:
+            slice_video(
+                source,
+                raw_temp,
+                candidate_start,
+                candidate_end - candidate_start,
+            )
+            result = burn_subtitles_from_analysis(
+                raw_temp,
+                analysis,
+                output_path=candidate,
+                style=style,
+            )
+        finally:
+            if raw_temp.exists():
+                raw_temp.unlink()
+        if not result.burned:
+            raise RuntimeError(result.message or "subtitle reburn failed")
+        segment["subtitle_style"] = style.to_mapping()
+        segment["manual_override"] = True
+        return segment
+
+    return _mutate_segment(videos_root, segment_id, mutate)
+
+
+def _load_segment_analysis(candidate: Path):
+    from src.autoslice.analysis_result import AnalysisResult
+
+    sidecar = candidate.with_name(f"{candidate.stem}_analysis.json")
+    if not sidecar.is_file():
+        return None
+    try:
+        return AnalysisResult.from_json(sidecar.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
 def _normalize_segments(root: Path, source: Path, segments: Any) -> list[dict[str, Any]]:
     if not isinstance(segments, list):
         return []

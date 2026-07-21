@@ -19,6 +19,97 @@ class BurnSubtitleResult:
     message: str = ""
 
 
+def _format_style_number(value: float) -> str:
+    """Render a style number without trailing zeros (2.0 -> '2', 1.5 -> '1.5')."""
+    text = f"{float(value):.3f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+@dataclass(frozen=True)
+class SubtitleStyle:
+    """Configurable burned-subtitle appearance.
+
+    Only ``font_size`` and ``margin_v`` are emitted by default so the produced
+    ``force_style`` string stays byte-equivalent to the historical
+    ``Fontsize=20,MarginV=60``. Optional fields are omitted from the filter
+    when unset.
+    """
+
+    font_size: int = 20
+    margin_v: int = 60
+    alignment: int | None = None      # ASS numpad alignment (1-9)
+    outline: float | None = None      # outline (描边) width
+    primary_colour: str | None = None  # ASS &HAABBGGRR
+    outline_colour: str | None = None  # ASS &HAABBGGRR
+
+    def to_force_style(self) -> str:
+        parts = [f"Fontsize={int(self.font_size)}", f"MarginV={int(self.margin_v)}"]
+        if self.alignment is not None:
+            parts.append(f"Alignment={int(self.alignment)}")
+        if self.outline is not None:
+            parts.append(f"Outline={_format_style_number(self.outline)}")
+        if self.primary_colour:
+            parts.append(f"PrimaryColour={self.primary_colour}")
+        if self.outline_colour:
+            parts.append(f"OutlineColour={self.outline_colour}")
+        return ",".join(parts)
+
+    @classmethod
+    def from_mapping(cls, data: dict | None) -> "SubtitleStyle":
+        """Build a style from a plain mapping, ignoring unknown/blank fields."""
+        base = cls()
+        if not isinstance(data, dict):
+            return base
+
+        def _int(key, default):
+            value = data.get(key)
+            try:
+                return int(value) if value is not None and value != "" else default
+            except (TypeError, ValueError):
+                return default
+
+        def _opt_int(key):
+            value = data.get(key)
+            try:
+                return int(value) if value is not None and value != "" else None
+            except (TypeError, ValueError):
+                return None
+
+        def _opt_float(key):
+            value = data.get(key)
+            try:
+                return float(value) if value is not None and value != "" else None
+            except (TypeError, ValueError):
+                return None
+
+        def _opt_str(key):
+            value = data.get(key)
+            text = str(value).strip() if value is not None else ""
+            return text or None
+
+        return cls(
+            font_size=_int("font_size", base.font_size),
+            margin_v=_int("margin_v", base.margin_v),
+            alignment=_opt_int("alignment"),
+            outline=_opt_float("outline"),
+            primary_colour=_opt_str("primary_colour"),
+            outline_colour=_opt_str("outline_colour"),
+        )
+
+    def to_mapping(self) -> dict:
+        """Serialise non-default fields for persistence in task metadata."""
+        data: dict = {"font_size": int(self.font_size), "margin_v": int(self.margin_v)}
+        if self.alignment is not None:
+            data["alignment"] = int(self.alignment)
+        if self.outline is not None:
+            data["outline"] = float(self.outline)
+        if self.primary_colour:
+            data["primary_colour"] = self.primary_colour
+        if self.outline_colour:
+            data["outline_colour"] = self.outline_colour
+        return data
+
+
 def format_srt_timestamp(seconds: float) -> str:
     total_ms = max(0, int(round(float(seconds) * 1000)))
     hours, remainder = divmod(total_ms, 3_600_000)
@@ -124,10 +215,11 @@ def _escape_subtitles_path(path: Path) -> str:
     return value.replace(":", r"\:").replace("'", r"\'")
 
 
-def _subtitle_filter(srt_path: Path, font_size: int = 20, margin_v: int = 60) -> str:
+def _subtitle_filter(srt_path: Path, style: SubtitleStyle | None = None) -> str:
+    style = style or SubtitleStyle()
     return (
         f"subtitles='{_escape_subtitles_path(srt_path)}':"
-        f"force_style='Fontsize={font_size},MarginV={margin_v}'"
+        f"force_style='{style.to_force_style()}'"
     )
 
 
@@ -138,10 +230,13 @@ def burn_subtitles_from_analysis(
     output_path: str | Path | None = None,
     font_size: int = 20,
     margin_v: int = 60,
+    style: SubtitleStyle | None = None,
     run=subprocess.run,
     probe_duration: Callable[[Path], float | None] | None = None,
     allow_plain_transcript_fallback: bool = False,
 ) -> BurnSubtitleResult:
+    if style is None:
+        style = SubtitleStyle(font_size=font_size, margin_v=margin_v)
     video_path = Path(video_path)
     final_output = Path(output_path) if output_path is not None else video_path
     srt_text = segments_to_srt(analysis.transcript_segments)
@@ -174,8 +269,7 @@ def burn_subtitles_from_analysis(
             temp_output,
             srt_path,
             analysis,
-            font_size=font_size,
-            margin_v=margin_v,
+            style=style,
         )
         run(command, check=True, capture_output=True, text=True, encoding="utf-8")
         if output_path is None:
@@ -205,10 +299,9 @@ def _burn_command(
     srt_path: Path,
     analysis: AnalysisResult,
     *,
-    font_size: int,
-    margin_v: int,
+    style: SubtitleStyle | None = None,
 ) -> list[str]:
-    subtitle_filter = _subtitle_filter(srt_path, font_size=font_size, margin_v=margin_v)
+    subtitle_filter = _subtitle_filter(srt_path, style=style)
     trim = analysis.suggested_trim
     if trim is None:
         return [

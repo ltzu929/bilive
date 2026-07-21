@@ -80,3 +80,23 @@ async def segment_render(
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
     return _segment_action(lambda: ctx.queue_segment_action("render_segment", segment_id))
+
+
+@router.post("/api/segments/{segment_id}/subtitle-style")
+async def segment_subtitle_style(
+    segment_id: str,
+    payload: Dict[str, Any],
+    ctx: DashboardContext = Depends(get_context),
+) -> Dict[str, Any]:
+    wb = _workbench()
+    return _segment_action(
+        lambda: wb.update_segment_subtitle_style(ctx.store.videos_root, segment_id, payload)
+    )
+
+
+@router.post("/api/segments/{segment_id}/reburn")
+async def segment_reburn(
+    segment_id: str,
+    ctx: DashboardContext = Depends(get_context),
+) -> Dict[str, Any]:
+    return _segment_action(lambda: ctx.queue_segment_action("reburn_subtitles", segment_id))

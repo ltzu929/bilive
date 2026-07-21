@@ -60,7 +60,7 @@ def test_recovery_timer_runs_root_oneshot_every_15_seconds():
 def test_recovery_script_repairs_failed_and_stale_cifs_mounts():
     text = RECOVERY_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'SMB_HOST="${BILIVE_SMB_HOST:-192.168.31.202}"' in text
+    assert 'SMB_HOST="${BILIVE_SMB_HOST:-100.118.141.26}"' in text
     assert 'SMB_PORT="${BILIVE_SMB_PORT:-445}"' in text
     assert 'MOUNT_UNIT="${BILIVE_MOUNT_UNIT:-mnt-win.mount}"' in text
     assert 'PROBE_PATH="${BILIVE_PROBE_PATH:-/mnt/win/bilive}"' in text

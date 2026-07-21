@@ -79,7 +79,7 @@ def test_slice_only_outputs_multiple_mimo_clips(monkeypatch, tmp_path):
 
     burned = []
 
-    def fake_burn(video_path, analysis, *, output_path=None):
+    def fake_burn(video_path, analysis, *, output_path=None, style=None):
         Path(output_path).write_bytes(f"rendered {analysis.title}".encode("utf-8"))
         burned.append((Path(video_path), Path(output_path), analysis.title))
         return type("Burn", (), {"burned": True, "message": "ok"})()
@@ -149,7 +149,7 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
 
     burned_titles = []
 
-    def fake_burn(video_path, analysis, *, output_path=None):
+    def fake_burn(video_path, analysis, *, output_path=None, style=None):
         Path(output_path).write_bytes(f"rendered {analysis.title}".encode("utf-8"))
         burned_titles.append(analysis.title)
         return type("Burn", (), {"burned": True, "message": "ok"})()
@@ -231,7 +231,7 @@ def test_slice_only_parallel_mimo_does_not_run_full_asr_analyzer_in_workers(monk
 
     burned_titles = []
 
-    def fake_burn(video_path, analysis, *, output_path=None):
+    def fake_burn(video_path, analysis, *, output_path=None, style=None):
         Path(output_path).write_bytes(f"rendered {analysis.title}".encode("utf-8"))
         burned_titles.append(analysis.title)
         return type("Burn", (), {"burned": True, "message": "ok"})()
@@ -283,7 +283,7 @@ def test_slice_only_logs_mimo_clip_decisions(monkeypatch, tmp_path):
         _clip("Clip B", 90.0, 130.0),
     ])
 
-    def fake_burn(video_path, analysis, *, output_path=None):
+    def fake_burn(video_path, analysis, *, output_path=None, style=None):
         Path(output_path).write_bytes(f"rendered {analysis.title}".encode("utf-8"))
         return type("Burn", (), {"burned": True, "message": "ok"})()
 

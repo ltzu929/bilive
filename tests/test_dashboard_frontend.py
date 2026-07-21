@@ -54,8 +54,8 @@ def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
     assert "由 Windows 环境管理" in texts["js"]
     assert 'aria-label="切片工作台"' in texts["html"]
     assert "?????" not in texts["html"]
-    assert 'src="/app.js?v=20260627-4"' in texts["html"]
-    assert 'href="/styles.css?v=20260627-4"' in texts["html"]
+    assert 'src="/app.js?v=20260709-1"' in texts["html"]
+    assert 'href="/styles.css?v=20260709-1"' in texts["html"]
 
     for contract in [
         "activateCurrentView",
@@ -273,6 +273,40 @@ def test_frontend_left_queue_is_up_owner_queue_contract():
         "width: calc(100% - 38px);",
         "box-sizing: border-box;",
         ".up-source-group.collapsed",
+    ]:
+        assert css_contract in texts["css"]
+
+
+def test_frontend_slice_workbench_refresh_contract():
+    texts = _frontend_texts()
+
+    for element_id in [
+        "segment-strip",
+        "segment-strip-count",
+    ]:
+        assert f'id="{element_id}"' in texts["html"]
+
+    for html_contract in [
+        "候选片段",
+        "工作台信号",
+        "review-command-bar",
+    ]:
+        assert html_contract in texts["html"]
+
+    for js_contract in [
+        "renderSegmentStrip",
+        "segmentStatusLabel",
+        "segment-chip-active",
+        "segment-strip-empty",
+    ]:
+        assert js_contract in texts["js"]
+
+    for css_contract in [
+        ".review-command-bar",
+        ".segment-strip",
+        ".segment-chip",
+        ".segment-chip-active",
+        ".workbench-refresh-surface",
     ]:
         assert css_contract in texts["css"]
 

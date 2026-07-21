@@ -283,6 +283,7 @@ def mark_upload_published(
     video_path: str,
     bvid: str,
     *,
+    features: dict[str, Any] | None = None,
     db_path: str | Path | None = None,
     now: float | None = None,
 ) -> dict[str, Any] | None:
@@ -301,7 +302,25 @@ def mark_upload_published(
             """,
             (bvid, updated_at, str(video_path)),
         )
-        return _fetch_item(db, video_path)
+        item = _fetch_item(db, video_path)
+
+    if bvid and features:
+        snapshot = {
+            key: value
+            for key, value in dict(features).items()
+            if key in SLICE_PERFORMANCE_COLUMNS
+        }
+        snapshot["video_path"] = str(video_path)
+        snapshot["collected_at"] = updated_at
+        try:
+            migrate_slice_performance(db_path)
+            upsert_slice_performance(bvid, snapshot, db_path=db_path)
+        except sqlite3.Error:
+            logger.exception(
+                "failed to snapshot slice_performance for bvid=%s", bvid
+            )
+
+    return item
 
 
 def mark_upload_failed(
@@ -543,6 +562,142 @@ def get_all_reserve_for_fixing_queue(
 def delete_all_queue(db_path: str | Path | None = None) -> None:
     with connect(db_path) as db:
         db.execute("delete from upload_queue")
+
+
+# ---------------------------------------------------------------------------
+# slice_performance (Phase 3 self-evolution feedback loop)
+#
+# Independent, idempotent table decoupled from the upload_queue user_version
+# gate. Migration is ONLY invoked from Windows analytics/worker entrypoints;
+# read-only dashboard routes must NOT trigger migration and instead treat a
+# missing table as "unavailable".
+# ---------------------------------------------------------------------------
+
+SLICE_PERFORMANCE_COLUMNS = (
+    "video_path",
+    "title",
+    "quality_score",
+    "completeness_score",
+    "burst_ratio",
+    "burst_context",
+    "lag_seconds",
+    "danmaku_count",
+    "trim_duration",
+    "context_start",
+    "context_end",
+    "view",
+    "likes",
+    "coin",
+    "favorite",
+    "share",
+    "reply",
+    "danmaku",
+    "collected_at",
+)
+
+
+def migrate_slice_performance(db_path: str | Path | None = None) -> None:
+    path = Path(_database_path(db_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with connect(path) as db:
+        db.execute(
+            """
+            create table if not exists slice_performance (
+                bvid text primary key,
+                video_path text default '',
+                title text default '',
+                quality_score real,
+                completeness_score real,
+                burst_ratio real,
+                burst_context real,
+                lag_seconds real,
+                danmaku_count integer,
+                trim_duration real,
+                context_start real,
+                context_end real,
+                view integer,
+                likes integer,
+                coin integer,
+                favorite integer,
+                share integer,
+                reply integer,
+                danmaku integer,
+                collected_at real default 0
+            )
+            """
+        )
+
+
+def slice_performance_available(db_path: str | Path | None = None) -> bool:
+    try:
+        with connect(db_path) as db:
+            row = db.execute(
+                "select name from sqlite_master "
+                "where type = 'table' and name = 'slice_performance'"
+            ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
+
+
+def upsert_slice_performance(
+    bvid: str,
+    fields: dict[str, Any],
+    *,
+    db_path: str | Path | None = None,
+) -> bool:
+    """Upsert the latest snapshot for ``bvid``.
+
+    Only columns present in ``fields`` are written, so feature snapshots (at
+    publish time) and B站 stat snapshots (later polls) can update the same row
+    independently without clobbering each other's columns.
+    """
+    bvid = str(bvid or "").strip()
+    if not bvid:
+        return False
+    data = {
+        key: value
+        for key, value in dict(fields or {}).items()
+        if key in SLICE_PERFORMANCE_COLUMNS
+    }
+    columns = ["bvid", *data.keys()]
+    placeholders = ", ".join("?" for _ in columns)
+    values = [bvid, *data.values()]
+    sql = (
+        f"insert into slice_performance ({', '.join(columns)}) "
+        f"values ({placeholders})"
+    )
+    if data:
+        updates = ", ".join(f"{col} = excluded.{col}" for col in data)
+        sql += f" on conflict(bvid) do update set {updates}"
+    else:
+        sql += " on conflict(bvid) do nothing"
+    try:
+        with connect(db_path) as db:
+            db.execute(sql, values)
+        return True
+    except sqlite3.Error:
+        logger.exception("upsert_slice_performance failed for bvid=%s", bvid)
+        return False
+
+
+def get_slice_performance(
+    db_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Return all slice_performance rows, newest/highest-view first.
+
+    Returns an empty list when the table is absent (read-only callers must not
+    trigger migration).
+    """
+    try:
+        with connect(db_path) as db:
+            rows = db.execute(
+                "select * from slice_performance "
+                "order by coalesce(view, 0) desc, coalesce(collected_at, 0) desc"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(row) for row in rows]
 
 
 if __name__ == "__main__":

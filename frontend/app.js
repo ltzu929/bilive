@@ -112,6 +112,12 @@ const elements = {
   segmentDropButton: document.querySelector("#segment-drop-button"),
   segmentRetryButton: document.querySelector("#segment-retry-button"),
   segmentRenderButton: document.querySelector("#segment-render-button"),
+  subtitleFontSize: document.querySelector("#subtitle-font-size"),
+  subtitleMarginV: document.querySelector("#subtitle-margin-v"),
+  subtitleAlignment: document.querySelector("#subtitle-alignment"),
+  subtitleOutline: document.querySelector("#subtitle-outline"),
+  subtitleSaveButton: document.querySelector("#subtitle-save-button"),
+  subtitleReburnButton: document.querySelector("#subtitle-reburn-button"),
   taskStatePill: document.querySelector("#task-state-pill"),
   taskStateLabel: document.querySelector("#task-state-label"),
   overviewSourceTotal: document.querySelector("#overview-source-total"),
@@ -124,8 +130,13 @@ const elements = {
   publishQueueCount: document.querySelector("#publish-queue-count"),
   publishRefreshButton: document.querySelector("#publish-refresh-button"),
   publishWakeButton: document.querySelector("#publish-wake-button"),
+  performanceBody: document.querySelector("#performance-body"),
+  performanceCount: document.querySelector("#performance-count"),
+  performanceRefreshButton: document.querySelector("#performance-refresh-button"),
   rangeDraftStatus: document.querySelector("#range-draft-status"),
   segmentSaveRenderButton: document.querySelector("#segment-save-render-button"),
+  segmentStrip: document.querySelector("#segment-strip"),
+  segmentStripCount: document.querySelector("#segment-strip-count"),
 };
 
 function mediaUrl(item) {
@@ -204,8 +215,25 @@ const SOURCE_STATUS_PRESENTATION = {
   unknown: { label: "未知", tone: "neutral" },
 };
 
+const SEGMENT_STATUS_PRESENTATION = {
+  review: { label: "待复核", tone: "review" },
+  keep: { label: "保留", tone: "keep" },
+  manual_keep: { label: "手动保留", tone: "keep" },
+  judge_failed: { label: "判断失败", tone: "failed" },
+  drop: { label: "已丢弃", tone: "drop" },
+  not_queued: { label: "未入队", tone: "review" },
+  queue_failed: { label: "入队失败", tone: "failed" },
+};
+
 function sourceStatusPresentation(status) {
   return SOURCE_STATUS_PRESENTATION[status] || SOURCE_STATUS_PRESENTATION.unknown;
+}
+
+function segmentStatusLabel(status) {
+  return SEGMENT_STATUS_PRESENTATION[status] || {
+    label: status || "待复核",
+    tone: "review",
+  };
 }
 
 function decisionTag(decision) {
@@ -514,6 +542,56 @@ function segmentRangeLabel(segment) {
   const start = Number(segment.start_seconds || 0).toFixed(1);
   const end = Number(segment.end_seconds || 0).toFixed(1);
   return `${start}s - ${end}s`;
+}
+
+function renderSegmentStrip(segments = []) {
+  if (!elements.segmentStrip || !elements.segmentStripCount) return;
+  const items = Array.isArray(segments) ? segments : [];
+  elements.segmentStripCount.textContent = `${items.length} 个候选`;
+  elements.segmentStrip.innerHTML = "";
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "segment-strip-empty";
+    empty.textContent = "当前录播还没有候选片段";
+    elements.segmentStrip.appendChild(empty);
+    return;
+  }
+
+  for (const segment of items) {
+    const status = segmentStatusLabel(segment.judge_status || "review");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = [
+      "segment-chip",
+      `segment-chip-${status.tone}`,
+      segment.segment_id === state.selectedSegmentId ? "segment-chip-active" : "",
+    ].filter(Boolean).join(" ");
+    button.dataset.segmentId = segment.segment_id;
+
+    const title = document.createElement("strong");
+    title.textContent = segment.title
+      || segment.quality_reason
+      || segment.judge_error
+      || "候选片段";
+
+    const meta = document.createElement("span");
+    meta.textContent = [
+      segmentRangeLabel(segment),
+      status.label,
+      segment.quality_score != null ? `质量 ${Math.round(Number(segment.quality_score) * 100)}%` : "",
+    ].filter(Boolean).join(" · ");
+
+    button.append(title, meta);
+    button.addEventListener("click", () => {
+      if (elements.sourcePreviewVideo) {
+        elements.sourcePreviewVideo.currentTime = Number(segment.start_seconds || 0);
+        elements.sourcePreviewVideo.pause();
+      }
+      selectSegment(segment.segment_id);
+    });
+    elements.segmentStrip.appendChild(button);
+  }
 }
 
 function sourceSummaryLabel(counts = {}) {
@@ -1047,6 +1125,7 @@ function renderSourceDetail() {
     if (elements.sourcePreviewVideo) elements.sourcePreviewVideo.removeAttribute("src");
     if (elements.sourceRecording) elements.sourceRecording.textContent = "-";
     if (elements.sourceFileSize) elements.sourceFileSize.textContent = "-";
+    renderSegmentStrip([]);
     renderSegmentPanel();
     renderDensityChart({ density_points: [], segments: [] });
     return;
@@ -1060,6 +1139,7 @@ function renderSourceDetail() {
   if (elements.sourceFileSize) elements.sourceFileSize.textContent = formatMegabytes(detail.source_size_mb);
   if (elements.sourceStatus) elements.sourceStatus.textContent = detail.message || detail.status || "-";
   if (elements.sourceSummary) elements.sourceSummary.textContent = sourceSummaryLabel(detail.summary_counts);
+  renderSegmentStrip(detail.segments || []);
   renderSegmentPanel();
   renderDensityChart(detail);
 }
@@ -1120,6 +1200,7 @@ function renderDensityChart(detail) {
 function selectSegment(segmentId) {
   state.selectedSegmentId = segmentId;
   state.draftRange = null;
+  renderSegmentStrip(state.sourceDetail?.segments || []);
   renderSegmentPanel();
   renderDensityChart(state.sourceDetail);
 }
@@ -1386,6 +1467,37 @@ function renderSegmentPanel() {
       : "-";
   }
   if (elements.burstRatio) elements.burstRatio.textContent = segment.burst_ratio != null ? `${segment.burst_ratio}x` : "-";
+  populateSubtitleStyle(segment);
+}
+
+function populateSubtitleStyle(segment) {
+  const style = (segment && segment.subtitle_style) || {};
+  if (elements.subtitleFontSize) elements.subtitleFontSize.value = style.font_size != null ? String(style.font_size) : "";
+  if (elements.subtitleMarginV) elements.subtitleMarginV.value = style.margin_v != null ? String(style.margin_v) : "";
+  if (elements.subtitleAlignment) elements.subtitleAlignment.value = style.alignment != null ? String(style.alignment) : "";
+  if (elements.subtitleOutline) elements.subtitleOutline.value = style.outline != null ? String(style.outline) : "";
+}
+
+function collectSubtitleStyle() {
+  const payload = {};
+  const fontSize = elements.subtitleFontSize?.value;
+  const marginV = elements.subtitleMarginV?.value;
+  const alignment = elements.subtitleAlignment?.value;
+  const outline = elements.subtitleOutline?.value;
+  if (fontSize !== undefined && fontSize !== "") payload.font_size = Number(fontSize);
+  if (marginV !== undefined && marginV !== "") payload.margin_v = Number(marginV);
+  if (alignment !== undefined && alignment !== "") payload.alignment = Number(alignment);
+  if (outline !== undefined && outline !== "") payload.outline = Number(outline);
+  return payload;
+}
+
+async function saveSubtitleStyle() {
+  await runSegmentAction("subtitle-style", collectSubtitleStyle());
+}
+
+async function reburnCurrentSubtitles() {
+  await saveSubtitleStyle();
+  await runSegmentAction("reburn");
 }
 
 async function runSegmentAction(action, payload = null) {
@@ -1928,6 +2040,56 @@ function renderPublishQueue() {
   }
 }
 
+function formatPerformanceNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "-";
+  if (num >= 10000) return `${(num / 10000).toFixed(1)}万`;
+  return String(num);
+}
+
+async function refreshPerformancePanel() {
+  if (!elements.performanceBody) return;
+  let payload;
+  try {
+    payload = await request("/api/slice-performance");
+  } catch (reason) {
+    elements.performanceBody.innerHTML = `<div class="task-empty">读取失败：${escapeHtml(reason.message)}</div>`;
+    return;
+  }
+  if (payload.status === "unavailable") {
+    if (elements.performanceCount) elements.performanceCount.textContent = "暂无数据";
+    elements.performanceBody.innerHTML = '<div class="task-empty">尚无发布表现数据（需先在 Windows 端采集）</div>';
+    return;
+  }
+  const items = payload.items || [];
+  if (elements.performanceCount) elements.performanceCount.textContent = `${items.length} 个切片`;
+  if (!items.length) {
+    elements.performanceBody.innerHTML = '<div class="task-empty">暂无已发布切片</div>';
+    return;
+  }
+  const rows = items
+    .map(
+      (item) => `
+        <tr>
+          <td class="performance-title" title="${escapeHtml(item.title || item.bvid || "-")}">${escapeHtml(item.title || item.bvid || "-")}</td>
+          <td>${formatPerformanceNumber(item.view)}</td>
+          <td>${formatPerformanceNumber(item.likes)}</td>
+          <td>${formatPerformanceNumber(item.coin)}</td>
+          <td>${formatPerformanceNumber(item.favorite)}</td>
+          <td>${formatPerformanceNumber(item.danmaku)}</td>
+          <td>${item.quality_score != null ? Number(item.quality_score).toFixed(2) : "-"}</td>
+        </tr>`
+    )
+    .join("");
+  elements.performanceBody.innerHTML = `
+    <table class="performance-table">
+      <thead>
+        <tr><th>切片</th><th>播放</th><th>点赞</th><th>投币</th><th>收藏</th><th>弹幕</th><th>质量分</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 function renderUploadQueue() {
   const counts = uploadDashboardState.queue_counts || {};
   updateUploadMetrics("upload", counts);
@@ -2070,6 +2232,7 @@ elements.manualEnd?.addEventListener("input", markRangeDraftFromInputs);
 elements.taskToggle?.addEventListener("click", toggleTaskPanel);
 document.querySelector("#upload-refresh-button")?.addEventListener("click", refreshUploadDashboard);
 elements.publishRefreshButton?.addEventListener("click", refreshUploadDashboard);
+elements.performanceRefreshButton?.addEventListener("click", refreshPerformancePanel);
 document.querySelector("#upload-wake-button")?.addEventListener("click", wakeUploadWorker);
 elements.publishWakeButton?.addEventListener("click", wakeUploadWorker);
 document.querySelector("#upload-status-filter")?.addEventListener("change", renderUploadQueue);
@@ -2079,6 +2242,8 @@ elements.segmentKeepButton?.addEventListener("click", () => manualKeepCurrentSeg
 elements.segmentDropButton?.addEventListener("click", () => dropCurrentSegment().catch((error) => showError(error.message)));
 elements.segmentRetryButton?.addEventListener("click", () => retryCurrentSegmentJudge().catch((error) => showError(error.message)));
 elements.segmentRenderButton?.addEventListener("click", () => renderCurrentSegment().catch((error) => showError(error.message)));
+elements.subtitleSaveButton?.addEventListener("click", () => saveSubtitleStyle().catch((error) => showError(error.message)));
+elements.subtitleReburnButton?.addEventListener("click", () => reburnCurrentSubtitles().catch((error) => showError(error.message)));
 elements.segmentSaveRenderButton?.addEventListener("click", () => saveAndRenderCurrentSegment().catch((error) => showError(error.message)));
 for (const button of elements.decisionButtons) {
   button.addEventListener("click", () => {
@@ -2142,6 +2307,7 @@ if (activeView === "tasks") {
   refreshSliceDiagnostics();
   refreshTasks();
   refreshUploadDashboard();
+  refreshPerformancePanel();
   wakeWorkerOnPageLoad();
 } else if (activeView === "uploads") {
   refreshUploadDashboard();
@@ -2195,6 +2361,7 @@ document.addEventListener("visibilitychange", () => {
     refreshSliceDiagnostics();
     refreshWorkerStatus();
     refreshUploadDashboard();
+    refreshPerformancePanel();
   } else if (view === "uploads") {
     refreshUploadDashboard();
   }

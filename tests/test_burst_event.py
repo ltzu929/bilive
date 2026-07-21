@@ -29,3 +29,21 @@ def test_detect_bursts_populates_baseline_and_local_density():
     for event in events:
         assert event.baseline_density > 0
         assert event.local_density > 0
+
+
+def test_detect_bursts_lag_seconds_shifts_window_earlier():
+    """lag_seconds moves the slice window anchor earlier without changing peak_time."""
+    timestamps = [float(i) * 2 for i in range(150)] + [100.0] * 60
+
+    no_lag = detect_bursts(
+        timestamps, video_duration=300.0, burst_ratio=2.0, context=30, lag_seconds=0.0
+    )
+    lagged = detect_bursts(
+        timestamps, video_duration=300.0, burst_ratio=2.0, context=30, lag_seconds=15.0
+    )
+
+    assert no_lag and lagged
+    # peak_time reflects the danmaku density peak and must not move.
+    assert lagged[0].peak_time == no_lag[0].peak_time
+    # The slice window anchor is pulled earlier by lag_seconds.
+    assert lagged[0].start < no_lag[0].start

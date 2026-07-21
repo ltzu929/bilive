@@ -165,7 +165,7 @@ def test_slice_only_unloads_audio_models_once_after_batch(tmp_path, monkeypatch)
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
@@ -221,7 +221,7 @@ def test_slice_only_keeps_source_by_default_after_generating_slices(tmp_path, mo
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
@@ -260,7 +260,7 @@ def test_slice_only_can_delete_source_when_explicitly_enabled(tmp_path, monkeypa
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
@@ -360,7 +360,7 @@ def test_slice_only_burns_asr_subtitles_for_retained_analysis(tmp_path, monkeypa
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(
         slice_only_module,
@@ -422,7 +422,7 @@ def test_slice_only_retains_judge_failed_candidate_without_upload(tmp_path, monk
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(
         slice_only_module,
@@ -482,7 +482,7 @@ def test_slice_only_deletes_dropped_candidate_without_downstream_work(
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(
         slice_only_module,
@@ -565,13 +565,13 @@ def test_slice_only_kept_candidate_burns_metadata_and_enters_queue(
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: analysis)
     monkeypatch.setattr(
         slice_only_module,
         "burn_subtitles_from_analysis",
-        lambda path, value, *, output_path=None: burned.append(
+        lambda path, value, *, output_path=None, style=None: burned.append(
             (path, value, output_path)
         ) or successful_burn(output_path, value),
     )
@@ -629,7 +629,7 @@ def test_slice_only_keeps_review_candidate_when_subtitle_burn_fails(tmp_path, mo
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
     monkeypatch.setattr(
@@ -681,7 +681,7 @@ def test_slice_only_keeps_review_candidate_when_metadata_fails(
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
@@ -731,7 +731,7 @@ def test_slice_only_does_not_report_queue_failure_as_queued(tmp_path, monkeypatc
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
     monkeypatch.setattr(slice_only_module, "get_video_info", lambda path: ("title", "artist", "date"))
-    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args: "danmaku")
+    monkeypatch.setattr(slice_only_module, "extract_danmaku_text", lambda *args, **kwargs: "danmaku")
     monkeypatch.setattr(slice_only_module, "slice_video_by_danmaku", lambda *args, **kwargs: generated)
     monkeypatch.setattr(slice_only_module, "analyze_candidate", lambda *args, **kwargs: retained_analysis())
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)

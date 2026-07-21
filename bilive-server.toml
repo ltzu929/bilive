@@ -32,6 +32,10 @@ burst_window = 10
 burst_context = 120
 burst_merge_gap = 5
 burst_top_n = 3
+# 弹幕相对真实爆点的滞后补偿（秒），切窗锚点前移；0 表示不补偿
+burst_lag_seconds = 0.0
+# 送 MiMo 的弹幕是否带 [mm:ss] 完整时间轴（true 时超长从中间丢弃保留头尾）
+danmaku_timeline = false
 
 [slice.llm_judge]
 provider = "managed-llama-server"
@@ -66,9 +70,26 @@ max_base64_bytes = 48000000
 
 [slice.analysis]
 write_analysis_json = true
+# 将 MiMo 的 trim 端点吸附到附近 ASR 句子边界（默认关；开启会多一遍候选级 ASR）
+snap_trim_to_segments = false
+# 吸附容差（秒）：trim 端点在此范围内才会对齐到句子边界
+snap_trim_tolerance = 2.0
 
 [slice.edit]
 enable_edit_instruction = true
 enable_prompt_package = false
 max_subtitle_evidence = 6
 default_highlight_window = 12
+
+[slice.subtitle]
+# 硬烧字幕外观（全局默认，可被单切片编辑覆盖）
+font_size = 20
+margin_v = 60
+# 以下为可选项，留空则不写入 force_style（保持 ffmpeg 默认）
+# alignment：ASS 小键盘对齐 1-9（2=底部居中，8=顶部居中）
+# alignment = 2
+# outline：描边宽度
+# outline = 2
+# primary_colour / outline_colour：ASS 颜色 &HAABBGGRR
+# primary_colour = "&H00FFFFFF"
+# outline_colour = "&H00000000"

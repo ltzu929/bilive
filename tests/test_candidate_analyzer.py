@@ -344,3 +344,83 @@ def test_analyze_candidate_clips_runs_asr_for_each_mimo_clip(monkeypatch):
             "duration_seconds": 25.0,
         },
     ]
+
+
+def test_snap_trim_to_segments_aligns_to_sentence_boundaries():
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.analysis_result import TranscriptSegment
+
+    trim = TrimSuggestion(trim_start=3.2, trim_end=9.4, reason="raw")
+    segments = [
+        TranscriptSegment(start=0.0, end=3.0, text="a"),
+        TranscriptSegment(start=3.0, end=9.0, text="b"),
+        TranscriptSegment(start=9.0, end=15.0, text="c"),
+    ]
+
+    snapped = candidate_analyzer.snap_trim_to_segments(trim, segments, tolerance=1.0)
+
+    assert snapped.trim_start == 3.0
+    assert snapped.trim_end == 9.0
+    assert snapped.reason == "raw"
+
+
+def test_snap_trim_to_segments_keeps_endpoint_outside_tolerance():
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.analysis_result import TranscriptSegment
+
+    trim = TrimSuggestion(trim_start=3.0, trim_end=20.0, reason="raw")
+    segments = [TranscriptSegment(start=3.0, end=9.0, text="b")]
+
+    # trim_end 20.0 is far from any boundary (9.0) -> stays put.
+    snapped = candidate_analyzer.snap_trim_to_segments(trim, segments, tolerance=1.0)
+
+    assert snapped.trim_start == 3.0
+    assert snapped.trim_end == 20.0
+
+
+def test_analyze_candidate_snap_reuses_candidate_asr(monkeypatch):
+    from src.autoslice import candidate_analyzer
+
+    monkeypatch.setattr(candidate_analyzer, "SNAP_TRIM_TO_SEGMENTS", True)
+    monkeypatch.setattr(candidate_analyzer, "SNAP_TRIM_TOLERANCE", 1.0)
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: _mimo_keep(trim_start=3.3, trim_end=9.4),
+    )
+
+    audio_calls = []
+
+    def fake_analyze_audio(video_path, model, **kwargs):
+        audio_calls.append(kwargs)
+        return {
+            "transcript": "seg one seg two seg three",
+            "segments": [
+                {"start": 0.0, "end": 3.0, "text": "seg one"},
+                {"start": 3.0, "end": 9.0, "text": "seg two"},
+                {"start": 9.0, "end": 15.0, "text": "seg three"},
+            ],
+        }
+
+    monkeypatch.setattr(candidate_analyzer, "analyze_audio", fake_analyze_audio)
+
+    result = candidate_analyzer.analyze_candidate(
+        "clip.mp4",
+        "artist",
+        "danmaku",
+        candidate_duration=20.0,
+        candidate_start=100.0,
+    )
+
+    assert result.judge_status == "keep"
+    # Only one ASR pass over the whole candidate (start 0, full duration).
+    assert len(audio_calls) == 1
+    assert audio_calls[0]["start_seconds"] == 0.0
+    assert audio_calls[0]["duration_seconds"] == 20.0
+    # trim snapped to 3.0/9.0 -> source range reflects the snapped trim.
+    assert result.suggested_trim.trim_start == 3.0
+    assert result.suggested_trim.trim_end == 9.0
+    assert result.source_start == 103.0
+    assert result.source_end == 109.0
+    # transcript reused from candidate ASR, offset into the trim window.
+    assert result.transcript == "seg two"

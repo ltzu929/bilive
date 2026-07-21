@@ -97,3 +97,36 @@ def test_slice_video_by_danmaku_uses_xml_burst_events(tmp_path, monkeypatch):
     assert slices[0].context_end == 110.0
     assert slices[0].duration == 60.0
     assert slices[0].danmaku_count == 2
+
+
+def test_extract_danmaku_text_with_timestamps_emits_timeline(tmp_path):
+    xml_path = tmp_path / "source.xml"
+    _write_danmaku_xml(xml_path)
+
+    text = danmaku_slice.extract_danmaku_text(
+        str(xml_path), 0.0, 20.0, with_timestamps=True
+    )
+
+    # Chronological [mm:ss] lines, one per danmaku.
+    assert text.splitlines() == ["[00:01] hello", "[00:10] burst"]
+
+
+def test_extract_danmaku_text_without_timestamps_joins_plainly(tmp_path):
+    xml_path = tmp_path / "source.xml"
+    _write_danmaku_xml(xml_path)
+
+    text = danmaku_slice.extract_danmaku_text(str(xml_path), 0.0, 20.0)
+
+    assert text == "hello burst"
+
+
+def test_truncate_timeline_middle_keeps_head_and_tail():
+    lines = [f"[00:{i:02d}] line{i}" for i in range(20)]
+
+    result = danmaku_slice._truncate_timeline_middle(lines, max_chars=80)
+
+    assert len(result) <= 80 + len("\n…(中间省略)…\n")
+    assert "中间省略" in result
+    # First and last lines survive; the middle is dropped.
+    assert result.startswith("[00:00] line0")
+    assert result.rstrip().endswith("line19")

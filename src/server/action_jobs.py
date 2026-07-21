@@ -19,7 +19,7 @@ from src.server.worker_lock import (
 )
 
 
-SUPPORTED_ACTIONS = {"retry_judge", "render_segment"}
+SUPPORTED_ACTIONS = {"retry_judge", "render_segment", "reburn_subtitles"}
 JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = ("pending", "processing", "done", "failed")
 _THREAD_LOCKS: dict[str, threading.Lock] = {}
@@ -164,12 +164,18 @@ def process_action_jobs(
 
 
 def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any]:
-    from src.dashboard.source_workbench import render_segment, retry_segment_judge
+    from src.dashboard.source_workbench import (
+        reburn_segment_subtitles,
+        render_segment,
+        retry_segment_judge,
+    )
 
     if job["action"] == "retry_judge":
         return retry_segment_judge(videos_root, job["segment_id"])
     if job["action"] == "render_segment":
         return render_segment(videos_root, job["segment_id"])
+    if job["action"] == "reburn_subtitles":
+        return reburn_segment_subtitles(videos_root, job["segment_id"])
     raise ValueError(f"Unsupported action job: {job['action']}")
 
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bilive Studio · 切片工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260627-4" />
+    <link rel="stylesheet" href="/styles.css?v=20260709-1" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -53,7 +53,7 @@
             </div>
             <p>Bilive Studio / 自动切片 / 任务详情</p>
           </div>
-          <div class="toolbar-controls">
+          <div class="toolbar-controls review-command-bar">
             <span id="worker-badge" class="worker-badge worker-idle" title="Windows 重任务节点状态">
               Windows 重任务节点：检测中
             </span>
@@ -64,7 +64,7 @@
           </div>
         </header>
 
-        <section class="page">
+        <section class="page workbench-refresh-surface">
           <div id="error" class="error hidden"></div>
 
           <section id="slice-progress-panel" class="overview-card progress-panel" aria-live="polite">
@@ -100,7 +100,7 @@
               </div>
             </section>
 
-            <div class="overview-stats" aria-label="任务统计">
+            <div class="overview-stats workbench-signals" aria-label="工作台信号">
               <div class="stat-card">
                 <span>录播总数</span>
                 <strong id="overview-source-total">0</strong>
@@ -201,6 +201,18 @@
                     <div class="meta-chip"><span>弹幕数</span><strong id="danmaku-count">-</strong></div>
                     <div class="meta-chip"><span>质量分</span><strong id="quality-score">-</strong></div>
                   </div>
+                  <div class="segment-strip-card" aria-label="候选片段导航">
+                    <div class="segment-strip-header">
+                      <div>
+                        <strong>候选片段</strong>
+                        <span id="segment-strip-count">0 个候选</span>
+                      </div>
+                      <span>点击跳转到片段起点</span>
+                    </div>
+                    <div id="segment-strip" class="segment-strip">
+                      <div class="segment-strip-empty">选择录播后显示候选片段</div>
+                    </div>
+                  </div>
                 </section>
               </div>
             </section>
@@ -257,6 +269,32 @@
                   <button id="segment-retry-button" type="button">重新分析</button>
                   <button id="segment-render-button" class="render-button" type="button">重新渲染片段</button>
                 </div>
+                <details class="subtitle-style" id="subtitle-style-panel">
+                  <summary>字幕样式</summary>
+                  <div class="subtitle-style-grid">
+                    <label class="field"><span>字号</span><input id="subtitle-font-size" type="number" min="8" step="1" placeholder="20" /></label>
+                    <label class="field"><span>底边距</span><input id="subtitle-margin-v" type="number" min="0" step="1" placeholder="60" /></label>
+                    <label class="field">
+                      <span>位置</span>
+                      <select id="subtitle-alignment">
+                        <option value="">默认</option>
+                        <option value="1">左下</option>
+                        <option value="2">底部居中</option>
+                        <option value="3">右下</option>
+                        <option value="5">左上</option>
+                        <option value="8">顶部居中</option>
+                      </select>
+                    </label>
+                    <label class="field"><span>描边</span><input id="subtitle-outline" type="number" min="0" step="0.5" placeholder="默认" /></label>
+                  </div>
+                  <div class="review-note">
+                    先保存样式，再点击“重新烧录字幕”让 Windows Worker 用当前样式重烧候选。
+                  </div>
+                  <div class="segment-actions">
+                    <button id="subtitle-save-button" type="button">保存字幕样式</button>
+                    <button id="subtitle-reburn-button" class="render-button" type="button">重新烧录字幕</button>
+                  </div>
+                </details>
               </div>
             </section>
           </div>
@@ -280,6 +318,21 @@
             </div>
             <div id="publish-queue-list" class="publish-queue-compact panel-body">
               <div class="task-empty">正在读取投稿队列</div>
+            </div>
+          </section>
+
+          <section id="performance-panel" class="publish-panel panel" aria-label="切片表现">
+            <div class="panel-header">
+              <div class="panel-title">
+                <strong>切片表现</strong>
+                <span id="performance-count">0 个切片</span>
+              </div>
+              <div class="publish-actions">
+                <button id="performance-refresh-button" class="btn-secondary btn-compact" type="button">刷新</button>
+              </div>
+            </div>
+            <div id="performance-body" class="panel-body">
+              <div class="task-empty">正在读取切片表现</div>
             </div>
           </section>
 
@@ -376,6 +429,6 @@
         </div>
       </main>
     </div>
-    <script src="/app.js?v=20260627-4"></script>
+    <script src="/app.js?v=20260709-1"></script>
   </body>
 </html>

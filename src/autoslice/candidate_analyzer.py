@@ -3,7 +3,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment
+from src.autoslice.analysis_result import (
+    AnalysisResult,
+    TranscriptSegment,
+    TrimSuggestion,
+)
 from src.autoslice.mllm_sdk.audio_analyzer import (
     analyze_audio,
     unload_asr_models,
@@ -15,6 +19,8 @@ from src.autoslice.mllm_sdk.mimo_video import (
 from src.config import (
     MULTI_MODAL_UNLOAD_AUDIO_MODEL,
     MULTI_MODAL_WHISPER_MODEL,
+    SNAP_TRIM_TO_SEGMENTS,
+    SNAP_TRIM_TOLERANCE,
     WHISPER_COMPUTE_TYPE,
     WHISPER_DEVICE,
 )
@@ -90,6 +96,12 @@ def analyze_candidate_clip_results(
 
         trim = result.suggested_trim
         assert trim is not None
+        error, transcript, segments = _transcribe_for_trim(
+            video_path, result, duration
+        )
+        if error:
+            analyzed.append(_failed_result(artist, error, base=result))
+            continue
         _annotate_ranges(
             result,
             candidate_start,
@@ -97,34 +109,6 @@ def analyze_candidate_clip_results(
             duration,
             include_trim=True,
         )
-        try:
-            audio = analyze_audio(
-                video_path,
-                MULTI_MODAL_WHISPER_MODEL,
-                whisper_device=WHISPER_DEVICE,
-                whisper_compute_type=WHISPER_COMPUTE_TYPE,
-                start_seconds=float(trim.trim_start),
-                duration_seconds=float(trim.trim_end - trim.trim_start),
-            )
-        except Exception as exc:
-            analyzed.append(_failed_result(artist, f"ASR failed: {exc}", base=result))
-            continue
-
-        transcript = str(audio.get("transcript") or "").strip()
-        if not transcript:
-            detail = str(audio.get("error") or "ASR produced no transcript")
-            analyzed.append(_failed_result(artist, detail, base=result))
-            continue
-        segments = _valid_transcript_segments(audio.get("segments"))
-        if not segments:
-            analyzed.append(
-                _failed_result(
-                    artist,
-                    "ASR produced no valid timestamped transcript segments",
-                    base=result,
-                )
-            )
-            continue
         result.transcript = transcript
         result.transcript_segments = segments
         analyzed.append(result)
@@ -206,6 +190,9 @@ def analyze_candidate(
 
     trim = result.suggested_trim
     assert trim is not None
+    error, transcript, segments = _transcribe_for_trim(video_path, result, duration)
+    if error:
+        return _failed_result(artist, error, base=result)
     _annotate_ranges(
         result,
         candidate_start,
@@ -213,30 +200,6 @@ def analyze_candidate(
         duration,
         include_trim=True,
     )
-    try:
-        audio = analyze_audio(
-            video_path,
-            MULTI_MODAL_WHISPER_MODEL,
-            whisper_device=WHISPER_DEVICE,
-            whisper_compute_type=WHISPER_COMPUTE_TYPE,
-            start_seconds=float(trim.trim_start),
-            duration_seconds=float(trim.trim_end - trim.trim_start),
-        )
-    except Exception as exc:
-        return _failed_result(artist, f"ASR failed: {exc}", base=result)
-
-    transcript = str(audio.get("transcript") or "").strip()
-    if not transcript:
-        detail = str(audio.get("error") or "ASR produced no transcript")
-        return _failed_result(artist, detail, base=result)
-
-    segments = _valid_transcript_segments(audio.get("segments"))
-    if not segments:
-        return _failed_result(
-            artist,
-            "ASR produced no valid timestamped transcript segments",
-            base=result,
-        )
 
     result.transcript = transcript
     result.transcript_segments = segments
@@ -247,6 +210,142 @@ def unload_candidate_models() -> None:
     if not MULTI_MODAL_UNLOAD_AUDIO_MODEL:
         return
     unload_asr_models()
+
+
+def _run_asr(video_path: str, start_seconds: float, duration_seconds: float) -> dict:
+    return analyze_audio(
+        video_path,
+        MULTI_MODAL_WHISPER_MODEL,
+        whisper_device=WHISPER_DEVICE,
+        whisper_compute_type=WHISPER_COMPUTE_TYPE,
+        start_seconds=start_seconds,
+        duration_seconds=duration_seconds,
+    )
+
+
+def _transcribe_for_trim(
+    video_path: str,
+    result: AnalysisResult,
+    duration: float,
+) -> tuple[str, str, list[TranscriptSegment]]:
+    """Run ASR for the current trim, returning (error, transcript, segments).
+
+    When ``SNAP_TRIM_TO_SEGMENTS`` is enabled, ASR runs once over the whole
+    candidate; the trim endpoints are snapped to the nearest sentence
+    boundaries and the candidate transcript is reused for the trimmed window
+    (avoiding a second ASR pass). Snapping is only accepted when the snapped
+    trim still passes ``_validate_trim`` and yields a usable transcript;
+    otherwise it falls back to a normal ASR pass over the original trim.
+    On success ``result.suggested_trim`` reflects the (possibly snapped) trim.
+    """
+    trim = result.suggested_trim
+    assert trim is not None
+
+    if SNAP_TRIM_TO_SEGMENTS:
+        try:
+            candidate_audio = _run_asr(video_path, 0.0, float(duration))
+        except Exception as exc:
+            return f"ASR failed: {exc}", "", []
+        candidate_segments = _valid_transcript_segments(
+            candidate_audio.get("segments")
+        )
+        if candidate_segments:
+            snapped = snap_trim_to_segments(
+                trim, candidate_segments, SNAP_TRIM_TOLERANCE
+            )
+            original_trim = trim
+            result.suggested_trim = snapped
+            if _validate_trim(result, duration):
+                result.suggested_trim = original_trim
+            else:
+                trim = snapped
+            transcript, segments = _slice_segments_to_trim(
+                candidate_segments, trim
+            )
+            if transcript and segments:
+                return "", transcript, segments
+        # Candidate ASR produced nothing reusable; fall back to trimmed ASR.
+
+    try:
+        audio = _run_asr(
+            video_path,
+            float(trim.trim_start),
+            float(trim.trim_end - trim.trim_start),
+        )
+    except Exception as exc:
+        return f"ASR failed: {exc}", "", []
+
+    transcript = str(audio.get("transcript") or "").strip()
+    if not transcript:
+        return str(audio.get("error") or "ASR produced no transcript"), "", []
+    segments = _valid_transcript_segments(audio.get("segments"))
+    if not segments:
+        return "ASR produced no valid timestamped transcript segments", "", []
+    return "", transcript, segments
+
+
+def snap_trim_to_segments(
+    trim: TrimSuggestion,
+    segments: list[TranscriptSegment],
+    tolerance: float,
+) -> TrimSuggestion:
+    """Snap trim endpoints to the nearest sentence boundary within ``tolerance``.
+
+    ``trim`` and ``segments`` are both relative to the candidate start.
+    Endpoints without a boundary within ``tolerance`` seconds stay put.
+    Returns the original trim if snapping would empty or reverse it.
+    """
+    if not segments or tolerance <= 0:
+        return trim
+    starts = [seg.start for seg in segments]
+    ends = [seg.end for seg in segments]
+    new_start = _snap_value(float(trim.trim_start), starts, tolerance)
+    new_end = _snap_value(float(trim.trim_end), ends, tolerance)
+    if new_end <= new_start:
+        return trim
+    return TrimSuggestion(
+        trim_start=new_start,
+        trim_end=new_end,
+        reason=trim.reason,
+    )
+
+
+def _snap_value(value: float, candidates: list[float], tolerance: float) -> float:
+    best = value
+    best_dist = tolerance
+    for candidate in candidates:
+        dist = abs(candidate - value)
+        if dist <= best_dist:
+            best_dist = dist
+            best = candidate
+    return best
+
+
+def _slice_segments_to_trim(
+    segments: list[TranscriptSegment],
+    trim: TrimSuggestion,
+) -> tuple[str, list[TranscriptSegment]]:
+    """Offset candidate-relative segments into trim-relative segments.
+
+    Segments overlapping ``[trim_start, trim_end]`` are clipped to the window
+    and shifted so they are relative to ``trim_start``.
+    """
+    start = float(trim.trim_start)
+    end = float(trim.trim_end)
+    window = end - start
+    out: list[TranscriptSegment] = []
+    for seg in segments:
+        if seg.end <= start or seg.start >= end:
+            continue
+        new_start = max(0.0, seg.start - start)
+        new_end = min(window, seg.end - start)
+        if new_end <= new_start:
+            continue
+        out.append(
+            TranscriptSegment(start=new_start, end=new_end, text=seg.text)
+        )
+    transcript = " ".join(seg.text for seg in out).strip()
+    return transcript, out
 
 
 def _valid_transcript_segments(raw_segments: Any) -> list[TranscriptSegment]:

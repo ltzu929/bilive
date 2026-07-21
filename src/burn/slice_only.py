@@ -13,6 +13,8 @@ from src.config import (
     BURST_CONTEXT,
     BURST_MERGE_GAP,
     BURST_TOP_N,
+    BURST_LAG_SECONDS,
+    DANMAKU_TIMELINE,
     MIMO_PARALLELISM,
 )
 from src.autoslice import slice_video_by_danmaku
@@ -33,6 +35,7 @@ from src.burn.pipeline_stages import (
 )
 from src.upload.slice_metadata import (
     delete_slice_upload_metadata,
+    write_slice_features,
     write_slice_upload_metadata,
 )
 from src.upload.extract_video_info import get_video_info
@@ -58,12 +61,17 @@ def analyze_candidate_clip_results(*args, **kwargs):
     return _candidate_clip_result_analyzer(*args, **kwargs)
 
 
-def burn_subtitles_for_output(video_path, analysis, output_path):
+def burn_subtitles_for_output(video_path, analysis, output_path, style=None):
+    if style is None:
+        from src.config import default_subtitle_style
+
+        style = default_subtitle_style()
     try:
         return burn_subtitles_from_analysis(
             video_path,
             analysis,
             output_path=output_path,
+            style=style,
         )
     except TypeError as exc:
         if "output_path" not in str(exc):
@@ -378,6 +386,7 @@ def slice_only(video_path, **_slice_options):
             burst_context=_slice_options.get("burst_context", BURST_CONTEXT),
             burst_merge_gap=_slice_options.get("burst_merge_gap", BURST_MERGE_GAP),
             burst_top_n=_slice_options.get("burst_top_n", BURST_TOP_N),
+            burst_lag_seconds=_slice_options.get("burst_lag_seconds", BURST_LAG_SECONDS),
             progress_callback=on_slice_progress,
         )
         scan_log.info(f"Generated {len(slices_path)} slices")
@@ -443,6 +452,7 @@ def slice_only(video_path, **_slice_options):
                 xml_path,
                 generated_slice.context_start,
                 generated_slice.context_end,
+                with_timestamps=DANMAKU_TIMELINE,
             )
             results = analyze_clips_stage(
                 generated_slice.path,
@@ -503,6 +513,7 @@ def slice_only(video_path, **_slice_options):
                 xml_path,
                 generated_slice.context_start,
                 generated_slice.context_end,
+                with_timestamps=DANMAKU_TIMELINE,
             )
             mimo_details = [
                 ("候选", f"{index}/{total_slices}"),
@@ -787,6 +798,35 @@ def slice_only(video_path, **_slice_options):
 
                 if segment["upload_status"] == "skipped":
                     scan_log.info(f"Slice finalized without queueing: {output_path}")
+                try:
+                    write_slice_features(
+                        output_path,
+                        {
+                            "title": segment.get("title"),
+                            "quality_score": segment.get("quality_score"),
+                            "completeness_score": getattr(
+                                result, "completeness_score", None
+                            ),
+                            "burst_ratio": _slice_options.get(
+                                "burst_ratio", BURST_RATIO
+                            ),
+                            "burst_context": _slice_options.get(
+                                "burst_context", BURST_CONTEXT
+                            ),
+                            "lag_seconds": _slice_options.get(
+                                "burst_lag_seconds", BURST_LAG_SECONDS
+                            ),
+                            "danmaku_count": segment.get("danmaku_count"),
+                            "trim_duration": trim_duration,
+                            "context_start": segment.get("candidate_start_seconds"),
+                            "context_end": segment.get("candidate_end_seconds"),
+                        },
+                    )
+                except OSError as feature_error:
+                    scan_log.warning(
+                        f"Failed to write slice feature sidecar for "
+                        f"{output_path}: {feature_error}"
+                    )
                 output_slices.append(output_path)
                 segments.append(segment)
 
