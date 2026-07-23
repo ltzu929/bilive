@@ -51,6 +51,14 @@ def test_load_remote_worker_config_reads_toml_command(tmp_path):
             "-sS",
             "http://127.0.0.1:2235/api/worker/status",
         ],
+        stop_command=[
+            "curl.exe",
+            "-sS",
+            "-X",
+            "POST",
+            "http://127.0.0.1:2235/api/worker/stop",
+        ],
+        wake_command=["schtasks.exe", "/Run", "/TN", "BiliveWorkerApi"],
         timeout=8.0,
     )
 

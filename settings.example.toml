@@ -1,0 +1,57 @@
+version = "1.0"
+webhooks = []
+
+# Replace this example with the full numeric room ID before enabling recording.
+[[tasks]]
+room_id = 12345678
+enable_monitor = true
+enable_recorder = false
+
+[output]
+path_template = "{roomid}/{roomid}_{year}{month}{day}-{hour}-{minute}-{second}"
+filesize_limit = 0
+duration_limit = 0
+out_dir = "./Videos"
+
+[logging]
+log_dir = "./logs/record"
+console_log_level = "INFO"
+backup_count = 30
+
+[bili_api]
+base_api_urls = ["https://api.bilibili.com"]
+base_live_api_urls = ["https://api.live.bilibili.com"]
+base_play_info_api_urls = ["https://api.live.bilibili.com"]
+
+[header]
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+cookie = ""
+
+[danmaku]
+danmu_uname = false
+record_gift_send = true
+record_free_gifts = true
+record_guard_buy = true
+record_super_chat = true
+save_raw_danmaku = false
+
+[recorder]
+stream_format = "flv"
+recording_mode = "standard"
+quality_number = 20000
+fmp4_stream_timeout = 10
+read_timeout = 3
+disconnection_timeout = 600
+buffer_size = 8192
+save_cover = false
+cover_save_strategy = "default"
+
+[postprocessing]
+remux_to_mp4 = true
+inject_extra_metadata = true
+delete_source = "never"
+
+[space]
+check_interval = 60
+space_threshold = 1073741824
+recycle_records = false

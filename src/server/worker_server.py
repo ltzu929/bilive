@@ -44,6 +44,18 @@ def configure_worker_environment(
 ) -> None:
     root = Path(project_root).expanduser().resolve()
     _load_project_env_file(root / ".secrets" / "env")
+    videos_dir = Path(
+        os.environ.get("BILIVE_VIDEOS_DIR", root / "Videos")
+    ).expanduser().resolve()
+    database_path = Path(
+        os.environ.get("BILIVE_DB_PATH", root / "src" / "db" / "data.db")
+    ).expanduser().resolve()
+    cookie_path = Path(
+        os.environ.get(
+            "BILIVE_COOKIE_FILE",
+            root / ".secrets" / "bilibili.cookie",
+        )
+    ).expanduser().resolve()
     os.environ["PYTHONPATH"] = str(root)
     os.environ["PYTHONUTF8"] = "1"
     os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -51,11 +63,9 @@ def configure_worker_environment(
     os.environ["no_proxy"] = os.environ["NO_PROXY"]
     os.environ["BILIVE_DIR"] = str(root)
     os.environ["BILIVE_CONFIG"] = str(root / "bilive-server.toml")
-    os.environ["BILIVE_VIDEOS_DIR"] = str(root / "Videos")
-    os.environ["BILIVE_DB_PATH"] = str(root / "src" / "db" / "data.db")
-    os.environ["BILIVE_COOKIE_FILE"] = str(
-        root / ".secrets" / "bilibili.cookie"
-    )
+    os.environ["BILIVE_VIDEOS_DIR"] = str(videos_dir)
+    os.environ["BILIVE_DB_PATH"] = str(database_path)
+    os.environ["BILIVE_COOKIE_FILE"] = str(cookie_path)
     os.environ["BILIVE_AUTO_UPLOAD"] = "1" if auto_upload else "0"
 
 

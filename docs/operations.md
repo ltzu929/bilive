@@ -34,6 +34,26 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 
 `MIMO_API_KEY` 推荐配置到项目本地 `.secrets/env`。Worker 启动时会先加载该文件，再保留已有的进程环境变量；临时 PowerShell 变量只影响当前启动的 worker。
 
+## 单机 Windows 部署
+
+默认拓扑是 Pi 录制 + Windows 重处理（上文即分布式安装）。若要把录制也放在同一台 Windows，改用单机拓扑：`BILIVE_WINDOWS_SSH_TARGET` 留空即可让 dashboard 走本地 `curl.exe`，无需 SSH。blrec 依赖旧版 Python，用独立虚拟环境隔离：
+
+```powershell
+cd D:\alldata\pi\bilive
+.\setup_windows_recorder_env.ps1
+$env:BILIVE_WINDOWS_SSH_TARGET = ""
+.\start_windows_recorder.ps1
+.\start_windows_dashboard.ps1
+```
+
+`setup_windows_recorder_env.ps1` 用 `uv` 创建 `.venv-recorder`（Python 3.10）、安装 `requirements/recorder-windows.txt`、应用 `src.blrec_patch`，并从 `settings.example.toml` 生成机器本地 `settings.toml`。录制在 `127.0.0.1:2233`，dashboard 在 `127.0.0.1:2234`，Worker API 仍在 `127.0.0.1:2235`。开机自启用：
+
+```powershell
+.\install_windows_startup_tasks.ps1
+```
+
+它把录制和仪表盘注册为当前交互用户的登录自启计划任务（`pythonw.exe`，无窗口）；只装 dashboard 用 `-NoRecorder`。分布式部署不需要这些脚本，继续用 `bilive.service`/`bilive-dashboard.service`。
+
 ## MiMo 验收
 
 生产切片使用 `mimo-v2.5` 视频理解接口。健康检查只验证 `MIMO_API_KEY` 是否存在，不输出密钥值，也不执行真实 API 调用。

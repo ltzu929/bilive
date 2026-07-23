@@ -19,6 +19,15 @@ Bilive 分为 Pi 轻服务和 Windows 重任务：
 | `2234` | Pi dashboard | 常驻 |
 | `2235` | Windows Worker API | 按需存在，仅 localhost |
 
+## 部署拓扑
+
+同一份代码支持两种部署拓扑，区别只在运行时环境变量 `BILIVE_WINDOWS_SSH_TARGET`，不做编译打包或平台硬判断：
+
+- 分布式（默认）：`BILIVE_WINDOWS_SSH_TARGET` 指向 Windows 主机。blrec 在 Pi 的 `bilive.service`，dashboard 通过 `ssh <target> curl.exe ...` 跨机触发 Windows Worker API。
+- 单机 Windows：`BILIVE_WINDOWS_SSH_TARGET` 为空。blrec 由 `start_windows_recorder.ps1` 用 uvicorn 在本机 `.venv-recorder`（Python 3.10）拉起，dashboard 用本地 `curl.exe` 打 `127.0.0.1:2235`，全部端口收敛到同机 localhost。
+
+`src/dashboard/remote_worker.py` 按 `BILIVE_WINDOWS_SSH_TARGET` 是否为空决定命令是否带 `ssh` 前缀，这是唯一的拓扑开关；worker、watcher、MiMo、上传等处理链路两种拓扑完全一致。
+
 ## 数据流
 
 ```text

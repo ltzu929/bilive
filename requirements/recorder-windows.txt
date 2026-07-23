@@ -1,0 +1,6 @@
+fastapi==0.88.0
+uvicorn[standard]==0.20.0
+setuptools==80.9.0
+requests==2.32.3
+chardet==5.2.0
+toml==0.10.2

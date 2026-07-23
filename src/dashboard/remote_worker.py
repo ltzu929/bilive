@@ -14,6 +14,7 @@ import toml
 
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_STOP_TIMEOUT = 30.0
+WORKER_API_BASE_URL = "http://127.0.0.1:2235"
 
 
 @dataclass(frozen=True)
@@ -90,43 +91,43 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
             section.get("target", ""),
         )
     ).strip()
-    if target and not command:
-        command = [
-            "ssh",
+    # Deployment topology switch: when BILIVE_WINDOWS_SSH_TARGET is set the
+    # dashboard reaches the worker on another host over SSH (distributed Pi
+    # setup); when it is empty but the worker is enabled the dashboard talks to
+    # a worker on the same machine over localhost (single-machine Windows).
+    should_build = bool(target) or enabled
+    if should_build and not command:
+        command = _ssh_prefixed(
             target,
-            "curl.exe",
-            "-sS",
-            "-X",
-            "POST",
-            "http://127.0.0.1:2235/api/worker/run-once",
-        ]
-    if target and not status_command:
-        status_command = [
-            "ssh",
+            [
+                "curl.exe",
+                "-sS",
+                "-X",
+                "POST",
+                f"{WORKER_API_BASE_URL}/api/worker/run-once",
+            ],
+        )
+    if should_build and not status_command:
+        status_command = _ssh_prefixed(
             target,
-            "curl.exe",
-            "-sS",
-            "http://127.0.0.1:2235/api/worker/status",
-        ]
-    if target and not stop_command:
-        stop_command = [
-            "ssh",
+            ["curl.exe", "-sS", f"{WORKER_API_BASE_URL}/api/worker/status"],
+        )
+    if should_build and not stop_command:
+        stop_command = _ssh_prefixed(
             target,
-            "curl.exe",
-            "-sS",
-            "-X",
-            "POST",
-            "http://127.0.0.1:2235/api/worker/stop",
-        ]
-    if target and task_name and not wake_command:
-        wake_command = [
-            "ssh",
+            [
+                "curl.exe",
+                "-sS",
+                "-X",
+                "POST",
+                f"{WORKER_API_BASE_URL}/api/worker/stop",
+            ],
+        )
+    if should_build and task_name and not wake_command:
+        wake_command = _ssh_prefixed(
             target,
-            "schtasks.exe",
-            "/Run",
-            "/TN",
-            task_name,
-        ]
+            ["schtasks.exe", "/Run", "/TN", task_name],
+        )
 
     return RemoteWorkerConfig(
         enabled=enabled,
@@ -402,6 +403,13 @@ def _read_remote_status(
         "enabled": True,
         "message": payload.get("message") or "Windows Worker API",
     }
+
+
+def _ssh_prefixed(target: str, args: list[str]) -> list[str]:
+    """Wrap a local command with ``ssh <target>`` when a target host is set."""
+    if target:
+        return ["ssh", target, *args]
+    return list(args)
 
 
 def _default_config_path() -> Path:

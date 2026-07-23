@@ -5,8 +5,12 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 recorder environment
+    import toml as tomllib
 
 
 def keep_source_flv(settings_path: Path) -> bool:
@@ -65,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         "settings",
         nargs="?",
         type=Path,
-        default=Path("/mnt/win/bilive/settings.toml"),
+        default=Path(__file__).resolve().parents[1] / "settings.toml",
     )
     args = parser.parse_args(argv)
     changed = keep_source_flv(args.settings)

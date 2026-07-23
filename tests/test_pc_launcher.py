@@ -5,6 +5,10 @@ PIPELINE_SCRIPT = Path("start_pipeline.ps1")
 INSTALL_WORKER_TASK_SCRIPT = Path("install_windows_worker_task.ps1")
 INSTALL_PI_SSH_KEY_SCRIPT = Path("install_windows_pi_ssh_key.ps1")
 SETUP_WINDOWS_ENV_SCRIPT = Path("setup_windows_env.ps1")
+SETUP_RECORDER_ENV_SCRIPT = Path("setup_windows_recorder_env.ps1")
+START_WINDOWS_RECORDER_SCRIPT = Path("start_windows_recorder.ps1")
+START_WINDOWS_DASHBOARD_SCRIPT = Path("start_windows_dashboard.ps1")
+INSTALL_STARTUP_TASKS_SCRIPT = Path("install_windows_startup_tasks.ps1")
 START_PC_WORKER_API_SCRIPT = Path("start_pc_worker_api.ps1")
 RUN_UPLOAD_SCRIPT = Path("run_upload.ps1")
 HEALTH_SCRIPT = Path("check_windows_health.ps1")
@@ -93,6 +97,71 @@ def test_windows_environment_is_dedicated_and_pinned():
     assert "openai==" in requirements
     assert "fastapi==" in requirements
     assert not Path("requirements.txt").exists()
+
+
+def test_recorder_environment_is_separate_and_applies_blrec_hardening():
+    text = SETUP_RECORDER_ENV_SCRIPT.read_text(encoding="utf-8")
+    requirements = Path("requirements/recorder-windows.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".venv-recorder" in text
+    assert 'PythonVersion = "3.10"' in text
+    assert "Get-Command uv" in text
+    assert "requirements\\recorder-windows.txt" in text
+    assert "src.blrec_patch" in text
+    assert "src.blrec_settings" in text
+    assert "settings.example.toml" in text
+    assert "Copy-Item" in text
+    assert "-m pip check" in text
+    assert "blrec-2.0.0b4-py3-none-any.whl" in text
+    assert "fastapi==0.88.0" in requirements
+    assert "uvicorn[standard]==0.20.0" in requirements
+    assert "setuptools==80.9.0" in requirements
+
+
+def test_blrec_settings_supports_the_python_310_recorder_environment():
+    source = Path("src/blrec_settings.py").read_text(encoding="utf-8")
+
+    assert "except ModuleNotFoundError" in source
+    assert "import toml as tomllib" in source
+    assert "toml==0.10.2" in Path(
+        "requirements/recorder-windows.txt"
+    ).read_text(encoding="utf-8")
+
+
+def test_windows_recorder_and_dashboard_launchers_are_local_only():
+    recorder = START_WINDOWS_RECORDER_SCRIPT.read_text(encoding="utf-8")
+    dashboard = START_WINDOWS_DASHBOARD_SCRIPT.read_text(encoding="utf-8")
+
+    assert ".venv-recorder" in recorder
+    assert "src.server.recorder_server" in recorder
+    assert '"--console"' in recorder
+    assert 'HostAddress = "127.0.0.1"' in recorder
+    assert "2233" in recorder
+
+    assert ".venv-win" in dashboard
+    assert "src.server.dashboard_server" in dashboard
+    assert '"--console"' in dashboard
+    assert 'HostAddress = "127.0.0.1"' in dashboard
+    assert "2234" in dashboard
+
+
+def test_windows_logon_tasks_use_current_interactive_user():
+    text = INSTALL_STARTUP_TASKS_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'TaskName "BiliveRecorder"' in text
+    assert 'TaskName "BiliveDashboard"' in text
+    assert "New-ScheduledTaskTrigger -AtLogOn -User $UserId" in text
+    assert "LogonType Interactive" in text
+    assert "RunLevel Limited" in text
+    assert "pythonw.exe" in text
+    assert "src.server.recorder_server" in text
+    assert "src.server.dashboard_server" in text
+    assert "-WindowStyle Hidden" not in text
+    assert "[switch]$NoRecorder" in text
+    assert "if (-not $NoRecorder)" in text
+    assert "SYSTEM" not in text
 
 
 def test_windows_health_check_is_read_only_and_reports_all_dependencies():
