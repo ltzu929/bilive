@@ -52,6 +52,11 @@ const state = {
   draftRange: null,
   rangeDrag: null,
   failureInboxExpanded: false,
+  inspectorTab: "content",
+  queueDrawerOpen: false,
+  pendingDrop: null,
+  actionBusy: false,
+  pollingJobId: "",
 };
 
 const elements = {
@@ -73,6 +78,8 @@ const elements = {
   burstRank: document.querySelector("#burst-rank"),
   burstRatio: document.querySelector("#burst-ratio"),
   qualityScore: document.querySelector("#quality-score"),
+  completenessScore: document.querySelector("#completeness-score"),
+  confidenceScore: document.querySelector("#confidence-score"),
   fileSize: document.querySelector("#file-size"),
   qualityReason: document.querySelector("#quality-reason"),
   manualStart: document.querySelector("#manual-start"),
@@ -137,6 +144,17 @@ const elements = {
   segmentSaveRenderButton: document.querySelector("#segment-save-render-button"),
   segmentStrip: document.querySelector("#segment-strip"),
   segmentStripCount: document.querySelector("#segment-strip-count"),
+  queueToggle: document.querySelector("#source-queue-toggle"),
+  sourceQueuePanel: document.querySelector("#source-queue-panel"),
+  inspectorTabs: Array.from(document.querySelectorAll("[data-inspector-tab]")),
+  inspectorPanels: Array.from(document.querySelectorAll("[data-inspector-panel]")),
+  segmentFailureSummary: document.querySelector("#segment-failure-summary"),
+  segmentRecoveryHint: document.querySelector("#segment-recovery-hint"),
+  segmentRawError: document.querySelector("#segment-raw-error"),
+  liveRegion: document.querySelector("#workbench-live-region"),
+  actionToast: document.querySelector("#action-toast"),
+  actionToastMessage: document.querySelector("#action-toast-message"),
+  actionToastUndo: document.querySelector("#action-toast-undo"),
 };
 
 function mediaUrl(item) {
@@ -152,7 +170,9 @@ async function request(path, options = {}) {
     ...options,
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    const error = new Error(await response.text());
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -160,6 +180,99 @@ async function request(path, options = {}) {
 function showError(message) {
   elements.error.textContent = message;
   elements.error.classList.toggle("hidden", !message);
+}
+
+function announce(message) {
+  if (!elements.liveRegion) return;
+  elements.liveRegion.textContent = "";
+  window.requestAnimationFrame(() => {
+    elements.liveRegion.textContent = message || "";
+  });
+}
+
+function showActionToast(message, { undo = false } = {}) {
+  if (!elements.actionToast || !elements.actionToastMessage) return;
+  elements.actionToastMessage.textContent = message;
+  elements.actionToast.classList.remove("hidden");
+  elements.actionToastUndo?.classList.toggle("hidden", !undo);
+  announce(message);
+}
+
+function hideActionToast() {
+  elements.actionToast?.classList.add("hidden");
+  elements.actionToastUndo?.classList.add("hidden");
+}
+
+function humanizeFailure(rawValue, stage = "") {
+  const raw = String(rawValue || "").trim();
+  const normalized = `${stage} ${raw}`.toLowerCase();
+  if (!raw) {
+    return {
+      summary: "当前没有技术故障",
+      hint: "如需重新处理，可使用下方修复动作。",
+    };
+  }
+  if (normalized.includes("3221225786") || normalized.includes("c000013a")) {
+    return {
+      summary: "字幕渲染被系统中断",
+      hint: "源片段和模型结果仍会保留，可直接重新渲染，无需重新分析。",
+    };
+  }
+  if (normalized.includes("ffmpeg") || normalized.includes("render") || normalized.includes("burn")) {
+    return {
+      summary: "成片或字幕渲染失败",
+      hint: "先检查 Windows 重任务节点，再使用“重新渲染片段”。",
+    };
+  }
+  if (normalized.includes("timeout") || normalized.includes("timed out")) {
+    return {
+      summary: "处理请求超时",
+      hint: "确认 Windows 重任务节点在线后重新分析；现有候选不会自动投稿。",
+    };
+  }
+  if (normalized.includes("queue") || normalized.includes("入队")) {
+    return {
+      summary: "成片未进入投稿队列",
+      hint: "检查上传元数据与队列状态，修复后重新生成成片。",
+    };
+  }
+  if (normalized.includes("mimo") || normalized.includes("judge") || normalized.includes("判断")) {
+    return {
+      summary: "模型判断没有完成",
+      hint: "候选已保留供人工复核，可稍后重新分析。",
+    };
+  }
+  if (normalized.includes("worker") || normalized.includes("offline") || normalized.includes("unavailable")) {
+    return {
+      summary: "Windows 重任务节点不可用",
+      hint: "启动 start_pipeline.ps1 后重试；当前操作不会自动投稿。",
+    };
+  }
+  return {
+    summary: "处理未完成，需要人工检查",
+    hint: "展开原始错误确认阶段，再选择对应的修复动作。",
+  };
+}
+
+function setInspectorTab(tabName, { focus = false } = {}) {
+  const tab = ["content", "subtitles", "technical"].includes(tabName) ? tabName : "content";
+  state.inspectorTab = tab;
+  for (const button of elements.inspectorTabs) {
+    const active = button.dataset.inspectorTab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+    if (active && focus) button.focus();
+  }
+  for (const panel of elements.inspectorPanels) {
+    panel.classList.toggle("hidden", panel.dataset.inspectorPanel !== tab);
+  }
+}
+
+function toggleSourceQueue(open = !state.queueDrawerOpen) {
+  state.queueDrawerOpen = Boolean(open);
+  document.body.classList.toggle("source-queue-open", state.queueDrawerOpen);
+  elements.queueToggle?.setAttribute("aria-expanded", state.queueDrawerOpen ? "true" : "false");
 }
 
 function formatBytes(value) {
@@ -217,8 +330,11 @@ const SOURCE_STATUS_PRESENTATION = {
 
 const SEGMENT_STATUS_PRESENTATION = {
   review: { label: "待复核", tone: "review" },
-  keep: { label: "保留", tone: "keep" },
-  manual_keep: { label: "手动保留", tone: "keep" },
+  keep: { label: "已保留", tone: "keep" },
+  manual_keep: { label: "已生成成片", tone: "keep" },
+  finalized: { label: "已生成成片", tone: "keep" },
+  queued: { label: "等待处理", tone: "processing" },
+  processing: { label: "生成成片中", tone: "processing" },
   judge_failed: { label: "判断失败", tone: "failed" },
   drop: { label: "已丢弃", tone: "drop" },
   not_queued: { label: "未入队", tone: "review" },
@@ -688,11 +804,13 @@ function buildFailureInboxItems() {
   const items = [];
   for (const task of state.tasks || []) {
     if (task.status !== "failed") continue;
+    const failure = humanizeFailure(task.message, task.phase || task.stage);
     items.push({
       kind: "task_failed",
       typeLabel: "任务失败",
       title: task.source_name || task.source_rel_path || "-",
-      message: task.message || "整场切片任务失败，需要重新排队或标记完成。",
+      message: `${failure.summary}。${failure.hint}`,
+      rawMessage: task.message || "",
       actionLabel: "重新排队",
       sourceTaskId: task.task_id,
       roomId: task.room_id || "",
@@ -717,11 +835,13 @@ function buildFailureInboxItems() {
 
   for (const upload of uploadDashboardState.items || []) {
     if (upload.status !== "failed") continue;
+    const failure = humanizeFailure(upload.last_error, "upload");
     items.push({
       kind: "upload_failed",
       typeLabel: "投稿失败",
       title: upload.name || upload.video_path || "-",
-      message: upload.last_error || "投稿队列失败，需要进入上传中心处理。",
+      message: `${failure.summary}。${failure.hint}`,
+      rawMessage: upload.last_error || "",
       actionLabel: "查看投稿",
       upload,
     });
@@ -1067,6 +1187,7 @@ function selectSourceRecording(taskId) {
   state.selectedSourceId = taskId;
   state.selectedSegmentId = "";
   state.draftRange = null;
+  if (window.matchMedia("(max-width: 1320px)").matches) toggleSourceQueue(false);
   renderSourceRecordings();
   return refreshSourceDetail(taskId);
 }
@@ -1117,6 +1238,7 @@ async function refreshSourceDetail(taskId) {
     state.selectedSegmentId = state.sourceDetail.segments?.[0]?.segment_id || "";
   }
   renderSourceDetail();
+  resumeSelectedSegmentAction();
 }
 
 function renderSourceDetail() {
@@ -1399,6 +1521,8 @@ function renderEditableRangeOverlay(maxEnd) {
 function renderSegmentPanel() {
   const segment = selectedSegment();
   const hasSegment = Boolean(segment);
+  const actionStatus = segment?.action_state?.status || "idle";
+  const persistedBusy = ["pending", "processing", "running"].includes(actionStatus);
   for (const element of [
     elements.segmentTitle,
     elements.segmentDescription,
@@ -1412,8 +1536,10 @@ function renderSegmentPanel() {
     elements.segmentRetryButton,
     elements.segmentRenderButton,
     elements.segmentSaveRenderButton,
+    elements.subtitleSaveButton,
+    elements.subtitleReburnButton,
   ]) {
-    if (element) element.disabled = !hasSegment;
+    if (element) element.disabled = !hasSegment || state.actionBusy || persistedBusy;
   }
 
   if (!segment) {
@@ -1431,17 +1557,24 @@ function renderSegmentPanel() {
     if (elements.manualEnd) elements.manualEnd.value = 0;
     if (elements.danmakuCount) elements.danmakuCount.textContent = "-";
     if (elements.qualityScore) elements.qualityScore.textContent = "-";
+    if (elements.completenessScore) elements.completenessScore.textContent = "-";
+    if (elements.confidenceScore) elements.confidenceScore.textContent = "-";
     if (elements.burstRatio) elements.burstRatio.textContent = "-";
+    if (elements.segmentFailureSummary) elements.segmentFailureSummary.textContent = "当前没有技术故障";
+    if (elements.segmentRecoveryHint) elements.segmentRecoveryHint.textContent = "选择候选片段后查看处理信息。";
+    if (elements.segmentRawError) elements.segmentRawError.textContent = "无";
     updateRangeDraftStatus();
     return;
   }
 
   const draft = ensureDraftRange(segment);
   if (elements.segmentStatus) {
-    const status = segment.judge_status || "review";
+    const status = persistedBusy ? actionStatus : (segment.judge_status || "review");
     const normalizedStatus = status === "manual_keep" ? "keep" : status.replaceAll("_", "-");
     elements.segmentStatus.className = `panel-meta status-pill segment-status-${normalizedStatus}`;
-    elements.segmentStatus.textContent = status;
+    elements.segmentStatus.textContent = persistedBusy
+      ? (status === "pending" ? "等待处理" : "生成成片中")
+      : segmentStatusLabel(status).label;
   }
   if (elements.segmentTitle) elements.segmentTitle.value = segment.title || "";
   if (elements.segmentDescription) elements.segmentDescription.value = segment.description || "";
@@ -1450,20 +1583,39 @@ function renderSegmentPanel() {
   // could not be inserted into upload_queue leaves upload_status="queue_failed"
   // and an upload_error reason; without this the operator sees a "kept"
   // segment that silently never publishes.
-  const queueFailure = segment.upload_status === "queue_failed"
-    ? `入队失败：${segment.upload_error || "未知原因"}`
-    : "";
+  const queueFailure = segment.upload_status === "queue_failed" ? segment.upload_error || "未知原因" : "";
   if (elements.qualityReason) {
-    const reason = segment.quality_reason || segment.judge_error || "";
-    elements.qualityReason.value = queueFailure
-      ? `${reason}${reason ? "\n" : ""}${queueFailure}`
-      : reason;
+    elements.qualityReason.value = segment.quality_reason || "";
   }
+  const rawFailure = [
+    segment.failure?.technical_details,
+    segment.judge_status === "judge_failed" ? segment.judge_error : "",
+    queueFailure,
+  ].filter(Boolean).join("\n\n");
+  const fallbackFailure = humanizeFailure(rawFailure, segment.failure?.stage || segment.upload_status);
+  const failureSummary = segment.failure?.summary || fallbackFailure.summary;
+  const recoveryAction = segment.failure?.recovery_action || fallbackFailure.hint;
+  if (elements.segmentFailureSummary) elements.segmentFailureSummary.textContent = failureSummary;
+  if (elements.segmentRecoveryHint) elements.segmentRecoveryHint.textContent = recoveryAction;
+  if (elements.segmentRawError) elements.segmentRawError.textContent = rawFailure || "无";
   if (draft) updateRangeDraftControls();
   if (elements.danmakuCount) elements.danmakuCount.textContent = segment.danmaku_count != null ? String(segment.danmaku_count) : "-";
   if (elements.qualityScore) {
     elements.qualityScore.textContent = segment.quality_score != null
       ? `${Math.round(Number(segment.quality_score) * 100)}%`
+      : "-";
+  }
+  const quality = segment.quality || {};
+  if (elements.completenessScore) {
+    const value = segment.completeness_score ?? quality.completeness_score;
+    elements.completenessScore.textContent = value != null
+      ? `${Math.round(Number(value) * 100)}%`
+      : "-";
+  }
+  if (elements.confidenceScore) {
+    const value = segment.confidence ?? quality.confidence;
+    elements.confidenceScore.textContent = value != null
+      ? `${Math.round(Number(value) * 100)}%`
       : "-";
   }
   if (elements.burstRatio) elements.burstRatio.textContent = segment.burst_ratio != null ? `${segment.burst_ratio}x` : "-";
@@ -1500,38 +1652,125 @@ async function reburnCurrentSubtitles() {
   await runSegmentAction("reburn");
 }
 
-async function runSegmentAction(action, payload = null) {
-  const segment = selectedSegment();
+function setSegmentActionBusy(busy, label = "") {
+  state.actionBusy = Boolean(busy);
+  const controls = [
+    elements.segmentKeepButton,
+    elements.segmentDropButton,
+    elements.saveButton,
+    elements.segmentRetryButton,
+    elements.segmentRenderButton,
+    elements.segmentSaveRenderButton,
+    elements.subtitleSaveButton,
+    elements.subtitleReburnButton,
+  ];
+  for (const control of controls) {
+    if (control) control.disabled = Boolean(busy) || !selectedSegment();
+  }
+  elements.segmentPanel?.setAttribute("aria-busy", busy ? "true" : "false");
+  if (elements.segmentKeepButton) {
+    elements.segmentKeepButton.textContent = busy && label
+      ? label
+      : "通过并生成成片";
+  }
+}
+
+async function runSegmentAction(action, payload = null, segmentId = selectedSegment()?.segment_id) {
+  const segment = (state.sourceDetail?.segments || []).find((item) => item.segment_id === segmentId);
   if (!segment) return;
   const options = { method: "POST" };
   if (payload) options.body = JSON.stringify(payload);
   const updated = await request(`/api/segments/${encodeURIComponent(segment.segment_id)}/${action}`, options);
   if (updated.status_url) {
-    if (elements.segmentStatus) elements.segmentStatus.textContent = "queued";
+    if (elements.segmentStatus) elements.segmentStatus.textContent = "等待处理";
     const worker = describeWorkerTrigger(updated.worker_trigger);
     if (worker.message) showError(worker.message);
-    await pollActionJob(updated.status_url);
+    const result = await pollActionJob(updated.status_url);
     await refreshSourceDetail(state.selectedSourceId);
-    return;
+    return result;
   }
   const segments = state.sourceDetail?.segments || [];
   const index = segments.findIndex((item) => item.segment_id === updated.segment_id);
   if (index >= 0) segments[index] = updated;
   state.selectedSegmentId = updated.segment_id;
   renderSourceDetail();
+  return updated;
 }
 
 async function pollActionJob(statusUrl) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // A large-v3 CPU transcription followed by subtitle rendering can take
+  // materially longer than four minutes on Windows. Keep polling for 15
+  // minutes while the worker continues to report a non-terminal state.
+  for (let attempt = 0; attempt < 450; attempt += 1) {
     const job = await request(statusUrl);
-    if (elements.segmentStatus) elements.segmentStatus.textContent = job.status || "pending";
+    if (elements.segmentStatus) {
+      const labels = {
+        pending: "等待处理",
+        queued: "等待处理",
+        running: "生成成片中",
+        processing: "生成成片中",
+        done: "处理完成",
+        failed: "处理失败",
+      };
+      elements.segmentStatus.textContent = labels[job.status] || job.status || "等待处理";
+    }
     if (job.status === "done") return job.result || {};
     if (job.status === "failed") {
-      throw new Error(`动作执行失败：${job.error || "未知错误"}`);
+      const structured = job.failure || {};
+      const technicalDetails = structured.technical_details
+        ?? job.technical_details
+        ?? job.error
+        ?? "无技术详情";
+      const rawTechnicalDetails = typeof technicalDetails === "string"
+        ? technicalDetails
+        : JSON.stringify(technicalDetails, null, 2);
+      const fallback = humanizeFailure(rawTechnicalDetails, structured.stage || job.stage);
+      const summary = structured.summary || fallback.summary;
+      const recoveryAction = structured.recovery_action || structured.recovery_hint || fallback.hint;
+      if (elements.segmentFailureSummary) elements.segmentFailureSummary.textContent = summary;
+      if (elements.segmentRecoveryHint) elements.segmentRecoveryHint.textContent = recoveryAction;
+      if (elements.segmentRawError) elements.segmentRawError.textContent = rawTechnicalDetails;
+      setInspectorTab("technical");
+      const error = new Error(`${summary}。${recoveryAction}`);
+      error.userSummary = summary;
+      error.recoveryAction = recoveryAction;
+      error.technicalDetails = rawTechnicalDetails;
+      throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  throw new Error("动作执行超时，请检查 Windows Worker 状态");
+  const error = new Error("处理等待超过 15 分钟，请检查 Windows 重任务节点状态");
+  error.userSummary = "处理等待超时";
+  error.recoveryAction = "检查 Windows 重任务节点后，可从技术详情重新执行对应动作。";
+  throw error;
+}
+
+function resumeSelectedSegmentAction() {
+  const segment = selectedSegment();
+  const action = segment?.action_state || {};
+  const jobId = String(action.job_id || "");
+  if (
+    !jobId
+    || !["pending", "processing", "running"].includes(String(action.status || ""))
+    || state.actionBusy
+    || state.pollingJobId === jobId
+  ) {
+    return;
+  }
+  state.pollingJobId = jobId;
+  setSegmentActionBusy(true, "正在生成…");
+  pollActionJob(`/api/jobs/${encodeURIComponent(jobId)}`)
+    .then(() => refreshSourceDetail(state.selectedSourceId))
+    .catch((error) => {
+      const summary = error.userSummary || "成片任务处理失败";
+      const recoveryAction = error.recoveryAction || "检查技术详情后重试。";
+      showError(`${summary}。${recoveryAction}`);
+      return refreshSourceDetail(state.selectedSourceId);
+    })
+    .finally(() => {
+      state.pollingJobId = "";
+      setSegmentActionBusy(false);
+    });
 }
 
 async function saveSegmentRange() {
@@ -1557,21 +1796,126 @@ function parseTags(value) {
     .filter(Boolean);
 }
 
-async function manualKeepCurrentSegment() {
+function collectFinalizePayload() {
   const draft = selectedRangeDraft();
-  await runSegmentAction("manual-keep", {
+  return {
     title: elements.segmentTitle?.value || "",
     description: elements.segmentDescription?.value || "",
     tags: parseTags(elements.segmentTags?.value || ""),
     start_seconds: Number(draft?.start ?? elements.manualStart?.value ?? 0),
     end_seconds: Number(draft?.end ?? elements.manualEnd?.value ?? 0),
-  });
+    subtitle_style: collectSubtitleStyle(),
+  };
 }
 
-async function dropCurrentSegment() {
+async function advanceAfterDecision(completedSegmentId) {
+  const segments = state.sourceDetail?.segments || [];
+  const completedIndex = Math.max(0, segments.findIndex((item) => item.segment_id === completedSegmentId));
+  const pending = segments.filter((item) => (
+    item.segment_id !== completedSegmentId
+    && (
+      ["review", "judge_failed"].includes(item.judge_status || "review")
+      || ["not_queued", "queue_failed"].includes(item.upload_status || "")
+    )
+  ));
+  const next = pending.find((item) => segments.indexOf(item) > completedIndex) || pending[0];
+  if (next) {
+    selectSegment(next.segment_id);
+    announce("已切换到下一候选片段");
+    return;
+  }
+
+  const nextSource = sortedSourceRecordings().find((item) => (
+    item.task_id !== state.selectedSourceId && sourceReviewCount(item.summary_counts) > 0
+  ));
+  if (nextSource) {
+    await selectSourceRecording(nextSource.task_id);
+    announce(`已切换到 ${nextSource.room_name || nextSource.room_id || "下一位 UP 主"} 的待审核录播`);
+    return;
+  }
+  announce("当前队列已没有其他待审核候选");
+}
+
+async function finalizeCurrentSegment() {
+  const segment = selectedSegment();
+  if (!segment || state.actionBusy) return;
+  const segmentId = segment.segment_id;
+  const payload = collectFinalizePayload();
+  showError("");
+  setSegmentActionBusy(true, "正在生成…");
+  showActionToast("已提交成片任务，正在等待 Windows 重任务节点");
+  try {
+    let result = await request(`/api/segments/${encodeURIComponent(segmentId)}/finalize`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (result.status_url) {
+      const worker = describeWorkerTrigger(result.worker_trigger);
+      if (worker.message) showError(worker.message);
+      result = await pollActionJob(result.status_url);
+    }
+    await refreshSourceDetail(state.selectedSourceId);
+    showActionToast("成片已生成，正在切换到下一候选");
+    await advanceAfterDecision(segmentId);
+    window.setTimeout(hideActionToast, 3200);
+    return result;
+  } catch (error) {
+    const fallback = humanizeFailure(error.message, "finalize");
+    const summary = error.userSummary || fallback.summary;
+    const recoveryAction = error.recoveryAction || fallback.hint;
+    showError(`${summary}。${recoveryAction}`);
+    if (elements.segmentRawError) {
+      elements.segmentRawError.textContent = error.technicalDetails || error.message || "未知错误";
+    }
+    if (elements.segmentFailureSummary) elements.segmentFailureSummary.textContent = summary;
+    if (elements.segmentRecoveryHint) elements.segmentRecoveryHint.textContent = recoveryAction;
+    setInspectorTab("technical");
+    return null;
+  } finally {
+    setSegmentActionBusy(false);
+  }
+}
+
+async function manualKeepCurrentSegment() {
+  return finalizeCurrentSegment();
+}
+
+async function dropCurrentSegment(segmentId = selectedSegment()?.segment_id) {
   await runSegmentAction("drop", {
     reason: elements.qualityReason?.value || "",
-  });
+  }, segmentId);
+  await advanceAfterDecision(segmentId);
+}
+
+function undoPendingDrop() {
+  if (!state.pendingDrop) return;
+  window.clearTimeout(state.pendingDrop.timer);
+  state.pendingDrop = null;
+  hideActionToast();
+  announce("已撤销丢弃操作");
+}
+
+function scheduleDropCurrentSegment() {
+  const segment = selectedSegment();
+  if (!segment || state.actionBusy) return;
+  undoPendingDrop();
+  const segmentId = segment.segment_id;
+  const timer = window.setTimeout(async () => {
+    state.pendingDrop = null;
+    hideActionToast();
+    setSegmentActionBusy(true);
+    try {
+      await dropCurrentSegment(segmentId);
+      showActionToast("候选已丢弃");
+      window.setTimeout(hideActionToast, 2200);
+    } catch (error) {
+      showError(humanizeFailure(error.message, "drop").summary);
+    } finally {
+      setSegmentActionBusy(false);
+    }
+  }, 5000);
+  state.pendingDrop = { segmentId, timer };
+  showActionToast("将在 5 秒后丢弃当前候选", { undo: true });
 }
 
 async function retryCurrentSegmentJudge() {
@@ -1918,6 +2262,37 @@ function selectNextCandidate() {
   render();
 }
 
+function selectRelativeSegment(offset) {
+  const segments = state.sourceDetail?.segments || [];
+  if (!segments.length) return;
+  const current = segments.findIndex((item) => item.segment_id === state.selectedSegmentId);
+  const index = (Math.max(current, 0) + offset + segments.length) % segments.length;
+  const segment = segments[index];
+  selectSegment(segment.segment_id);
+  if (elements.sourcePreviewVideo) {
+    elements.sourcePreviewVideo.currentTime = Number(segment.start_seconds || 0);
+    elements.sourcePreviewVideo.pause();
+  }
+  announce(`候选 ${index + 1}/${segments.length}，${segmentStatusLabel(segment.judge_status || "review").label}`);
+}
+
+function toggleSourcePreviewPlayback() {
+  const video = elements.sourcePreviewVideo;
+  if (!video?.src) return;
+  if (video.paused) {
+    video.play().catch((error) => showError(`无法播放预览：${error.message}`));
+  } else {
+    video.pause();
+  }
+}
+
+function setRangeBoundaryFromPlayhead(boundary) {
+  const video = elements.sourcePreviewVideo;
+  if (!video?.src || !selectedSegment()) return;
+  setDraftRangeBoundary(boundary, Number(video.currentTime || 0), { seek: false });
+  announce(boundary === "start" ? "已将当前播放位置设为入点" : "已将当前播放位置设为出点");
+}
+
 function replayPreview() {
   const video = elements.previewVideo;
   if (video && video.src) {
@@ -2184,20 +2559,34 @@ function saveDashboardPreferences(event) {
 }
 
 document.addEventListener("keydown", (event) => {
-  const tag = document.activeElement?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
+  const active = document.activeElement;
+  const tag = active?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || active?.isContentEditable) return;
+  if (currentViewName() !== "tasks") return;
   const key = event.key.toLowerCase();
-  if (key === "k") {
-    setDecisionAndSave("keep");
-  } else if (key === "d") {
-    setDecisionAndSave("drop");
-  } else if (key === "r") {
-    setDecisionAndSave("review");
+  if (event.ctrlKey && key === "enter") {
+    event.preventDefault();
+    finalizeCurrentSegment().catch((error) => showError(error.message));
   } else if (key === "j") {
-    selectNextCandidate();
-  } else if (key === "l") {
-    replayPreview();
+    event.preventDefault();
+    selectRelativeSegment(1);
+  } else if (key === "k") {
+    event.preventDefault();
+    selectRelativeSegment(-1);
+  } else if (key === " ") {
+    event.preventDefault();
+    toggleSourcePreviewPlayback();
+  } else if (key === "i") {
+    event.preventDefault();
+    setRangeBoundaryFromPlayhead("start");
+  } else if (key === "o") {
+    event.preventDefault();
+    setRangeBoundaryFromPlayhead("end");
+  } else if (key === "d") {
+    event.preventDefault();
+    scheduleDropCurrentSegment();
+  } else if (key === "escape" && state.queueDrawerOpen) {
+    toggleSourceQueue(false);
   }
 });
 
@@ -2226,10 +2615,13 @@ elements.roomFilter.addEventListener("change", () => {
   refreshTasks();
   refreshSourceRecordings();
 });
-elements.saveButton.addEventListener("click", saveFeedback);
+elements.saveButton.addEventListener("click", () => saveSegmentRange().catch((error) => showError(error.message)));
 elements.manualStart?.addEventListener("input", markRangeDraftFromInputs);
 elements.manualEnd?.addEventListener("input", markRangeDraftFromInputs);
-elements.taskToggle?.addEventListener("click", toggleTaskPanel);
+elements.taskPanel?.addEventListener("toggle", () => {
+  state.taskPanelCollapsed = !elements.taskPanel.open;
+  if (elements.taskToggle) elements.taskToggle.textContent = elements.taskPanel.open ? "收起" : "展开";
+});
 document.querySelector("#upload-refresh-button")?.addEventListener("click", refreshUploadDashboard);
 elements.publishRefreshButton?.addEventListener("click", refreshUploadDashboard);
 elements.performanceRefreshButton?.addEventListener("click", refreshPerformancePanel);
@@ -2238,13 +2630,26 @@ elements.publishWakeButton?.addEventListener("click", wakeUploadWorker);
 document.querySelector("#upload-status-filter")?.addEventListener("change", renderUploadQueue);
 document.querySelector("#settings-form")?.addEventListener("submit", saveDashboardPreferences);
 document.querySelector("#settings-save-button")?.addEventListener("click", saveDashboardPreferences);
-elements.segmentKeepButton?.addEventListener("click", () => manualKeepCurrentSegment().catch((error) => showError(error.message)));
-elements.segmentDropButton?.addEventListener("click", () => dropCurrentSegment().catch((error) => showError(error.message)));
+elements.segmentKeepButton?.addEventListener("click", () => finalizeCurrentSegment().catch((error) => showError(error.message)));
+elements.segmentDropButton?.addEventListener("click", scheduleDropCurrentSegment);
 elements.segmentRetryButton?.addEventListener("click", () => retryCurrentSegmentJudge().catch((error) => showError(error.message)));
 elements.segmentRenderButton?.addEventListener("click", () => renderCurrentSegment().catch((error) => showError(error.message)));
 elements.subtitleSaveButton?.addEventListener("click", () => saveSubtitleStyle().catch((error) => showError(error.message)));
 elements.subtitleReburnButton?.addEventListener("click", () => reburnCurrentSubtitles().catch((error) => showError(error.message)));
 elements.segmentSaveRenderButton?.addEventListener("click", () => saveAndRenderCurrentSegment().catch((error) => showError(error.message)));
+elements.actionToastUndo?.addEventListener("click", undoPendingDrop);
+elements.queueToggle?.addEventListener("click", () => toggleSourceQueue());
+for (const button of elements.inspectorTabs) {
+  button.addEventListener("click", () => setInspectorTab(button.dataset.inspectorTab));
+  button.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const index = elements.inspectorTabs.indexOf(button);
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    const next = elements.inspectorTabs[(index + offset + elements.inspectorTabs.length) % elements.inspectorTabs.length];
+    setInspectorTab(next.dataset.inspectorTab, { focus: true });
+  });
+}
 for (const button of elements.decisionButtons) {
   button.addEventListener("click", () => {
     state.decision = button.dataset.decision;
@@ -2266,7 +2671,10 @@ function renderRemoteWorkerStatus(data) {
   } else {
     badge.textContent = `Windows 重任务节点：空闲，待处理 ${Number(data.pending_tasks || 0)}`;
   }
-  badge.title = data.message || "Windows Worker API";
+  const failure = humanizeFailure(data.message, data.status);
+  badge.title = data.status === "unavailable"
+    ? `${failure.summary}。${failure.hint}`
+    : "Windows 重任务节点状态";
   return true;
 }
 
@@ -2299,6 +2707,11 @@ async function wakeWorkerOnPageLoad() {
 }
 
 const activeView = activateCurrentView();
+setInspectorTab("content");
+if (elements.taskPanel) elements.taskPanel.open = false;
+window.addEventListener("resize", () => {
+  if (!window.matchMedia("(max-width: 1320px)").matches) toggleSourceQueue(false);
+});
 if (activeView === "tasks") {
   refresh();
   refreshRooms();

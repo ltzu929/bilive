@@ -115,7 +115,12 @@ def test_extract_danmaku_text_without_timestamps_joins_plainly(tmp_path):
     xml_path = tmp_path / "source.xml"
     _write_danmaku_xml(xml_path)
 
-    text = danmaku_slice.extract_danmaku_text(str(xml_path), 0.0, 20.0)
+    text = danmaku_slice.extract_danmaku_text(
+        str(xml_path),
+        0.0,
+        20.0,
+        with_timestamps=False,
+    )
 
     assert text == "hello burst"
 
@@ -130,3 +135,27 @@ def test_truncate_timeline_middle_keeps_head_and_tail():
     # First and last lines survive; the middle is dropped.
     assert result.startswith("[00:00] line0")
     assert result.rstrip().endswith("line19")
+
+
+def test_focus_aware_timeline_truncation_keeps_head_focus_and_tail(tmp_path):
+    xml_path = tmp_path / "source.xml"
+    messages = "".join(
+        f'<d p="{second},1,25,16777215,0,0,0,0">line-{second}-xxxxxxxx</d>'
+        for second in range(30)
+    )
+    xml_path.write_text(f"<i>{messages}</i>", encoding="utf-8")
+
+    text = danmaku_slice.extract_danmaku_text(
+        str(xml_path),
+        0.0,
+        29.0,
+        max_chars=180,
+        focus_start=14.0,
+        focus_end=16.0,
+    )
+
+    assert len(text) <= 180
+    assert "[00:00]" in text
+    assert any(f"[00:{second:02d}]" in text for second in (14, 15, 16))
+    assert "[00:29]" in text
+    assert "省略" in text

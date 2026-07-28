@@ -5,6 +5,8 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from pathlib import Path
+import re
+import time
 
 from src.config import (
     MIN_VIDEO_SIZE,
@@ -14,8 +16,9 @@ from src.config import (
     BURST_MERGE_GAP,
     BURST_TOP_N,
     BURST_LAG_SECONDS,
+    DANMAKU_MAX_CHARS,
     DANMAKU_TIMELINE,
-    MIMO_PARALLELISM,
+    MIMO_REQUEST_PARALLELISM,
 )
 from src.autoslice import slice_video_by_danmaku
 from src.autoslice.candidate_analyzer import (
@@ -23,6 +26,7 @@ from src.autoslice.candidate_analyzer import (
     analyze_candidate_clip_results as _candidate_clip_result_analyzer,
     analyze_candidate_clips as _multi_candidate_analyzer,
     judge_candidate_clips_only as _mimo_candidate_judge,
+    route_below_quality_gate_to_review,
     unload_candidate_models,
 )
 from src.autoslice.danmaku_slice import extract_danmaku_text, format_seconds_for_filename
@@ -96,7 +100,7 @@ def _format_seconds_range(start, end):
 
 
 def _resolve_mimo_parallelism(value, total_slices):
-    configured = MIMO_PARALLELISM if value is None else value
+    configured = MIMO_REQUEST_PARALLELISM if value is None else value
     try:
         workers = int(configured)
     except (TypeError, ValueError):
@@ -104,6 +108,189 @@ def _resolve_mimo_parallelism(value, total_slices):
     if total_slices <= 1:
         return 1
     return max(1, min(workers, total_slices))
+
+
+def _ordered_pipeline_results(output_slices, segments):
+    """Return stable source-time ordering after completion-order processing."""
+    ordered_segments = sorted(
+        segments,
+        key=lambda segment: (
+            float(segment.get("candidate_start_seconds") or 0.0),
+            float(segment.get("start_seconds") or 0.0),
+            str(segment.get("candidate_path") or ""),
+        ),
+    )
+    dedupe_ids = {
+        str(segment.get("_dedupe_key")): str(segment.get("segment_id"))
+        for segment in ordered_segments
+        if segment.get("_dedupe_key")
+    }
+    for segment in ordered_segments:
+        duplicate_of = str(segment.get("duplicate_of") or "")
+        if duplicate_of in dedupe_ids:
+            segment["duplicate_of"] = dedupe_ids[duplicate_of]
+        segment.pop("_dedupe_key", None)
+    successful = set(output_slices)
+    ordered_outputs = [
+        str(segment.get("candidate_path"))
+        for segment in ordered_segments
+        if str(segment.get("candidate_path") or "") in successful
+    ]
+    seen = set(ordered_outputs)
+    ordered_outputs.extend(sorted(path for path in output_slices if path not in seen))
+    return ordered_outputs, ordered_segments
+
+
+def _candidate_overlap_components(slices):
+    """Group candidate indices whose context windows can contain duplicates."""
+    components: list[set[int]] = []
+    for index, candidate in enumerate(slices, start=1):
+        start = float(candidate.context_start)
+        end = float(candidate.context_end)
+        matching = []
+        for component_index, component in enumerate(components):
+            if any(
+                min(end, float(slices[member - 1].context_end))
+                > max(start, float(slices[member - 1].context_start))
+                for member in component
+            ):
+                matching.append(component_index)
+        merged = {index}
+        for component_index in reversed(matching):
+            merged.update(components.pop(component_index))
+        components.append(merged)
+    return {
+        member: component_id
+        for component_id, component in enumerate(components)
+        for member in component
+    }
+
+
+def _mark_cross_candidate_duplicates(items, source_path):
+    """Route lower-scored overlapping, text-similar clips to manual review."""
+    entries = []
+    for index, candidate, precomputed in items:
+        if precomputed.get("error") is not None:
+            continue
+        for result in precomputed.get("results") or []:
+            if route_below_quality_gate_to_review(result):
+                continue
+            trim = getattr(result, "suggested_trim", None)
+            if (
+                result.judge_status != "keep"
+                or not result.retain_recommendation
+                or trim is None
+            ):
+                continue
+            start = float(candidate.context_start) + float(trim.trim_start)
+            end = float(candidate.context_start) + float(trim.trim_end)
+            if end <= start:
+                continue
+            entries.append(
+                {
+                    "index": index,
+                    "result": result,
+                    "start": start,
+                    "end": end,
+                    "score": _quality_rank(result),
+                    "text": str(result.topic_summary or result.title or ""),
+                }
+            )
+
+    winners = []
+    for entry in sorted(
+        entries,
+        key=lambda item: (
+            -item["score"],
+            item["start"],
+            item["end"],
+            item["index"],
+        ),
+    ):
+        duplicate = next(
+            (
+                winner
+                for winner in winners
+                if _intervals_are_duplicate(entry, winner)
+                and _text_similarity(entry["text"], winner["text"]) >= 0.50
+            ),
+            None,
+        )
+        if duplicate is None:
+            entry["result"]._dedupe_key = segment_id_for(
+                source_path,
+                entry["start"],
+                entry["end"],
+            )
+            winners.append(entry)
+            continue
+        result = entry["result"]
+        duplicate_id = getattr(
+            duplicate["result"],
+            "_dedupe_key",
+            segment_id_for(
+                source_path,
+                duplicate["start"],
+                duplicate["end"],
+            ),
+        )
+        reason = (
+            "Duplicate clip routed to review: overlaps a higher-scored clip "
+            f"({duplicate_id})"
+        )
+        result.judge_status = "review"
+        result.retain_recommendation = False
+        result.judge_error = reason
+        result.quality_reason = (
+            f"{result.quality_reason}; {reason}"
+            if result.quality_reason
+            else reason
+        )
+        result.duplicate_of = duplicate_id
+        result.duplicate_reason = reason
+
+
+def _quality_rank(result):
+    def score(value):
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    return (
+        0.4 * score(result.quality_score)
+        + 0.4 * score(result.completeness_score)
+        + 0.2 * score(result.confidence)
+    )
+
+
+def _intervals_are_duplicate(left, right):
+    overlap = max(
+        0.0,
+        min(left["end"], right["end"]) - max(left["start"], right["start"]),
+    )
+    if overlap <= 0:
+        return False
+    left_duration = left["end"] - left["start"]
+    right_duration = right["end"] - right["start"]
+    union = left_duration + right_duration - overlap
+    iou = overlap / union if union > 0 else 0.0
+    shorter_coverage = overlap / min(left_duration, right_duration)
+    return iou >= 0.60 or shorter_coverage >= 0.80
+
+
+def _text_similarity(left, right):
+    def grams(value):
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "", value.lower())
+        if len(normalized) < 2:
+            return {normalized} if normalized else set()
+        return {normalized[index : index + 2] for index in range(len(normalized) - 1)}
+
+    left_grams = grams(str(left or ""))
+    right_grams = grams(str(right or ""))
+    if not left_grams or not right_grams:
+        return 0.0
+    return len(left_grams & right_grams) / len(left_grams | right_grams)
 
 
 def _format_score(value):
@@ -425,14 +612,67 @@ def slice_only(video_path, **_slice_options):
     judge_failed_count = 0
     dropped_count = 0
     empty_candidate_count = 0
-    mimo_results_by_index = {}
     mimo_parallelism = _resolve_mimo_parallelism(
-        _slice_options.get("mimo_parallelism"),
+        _slice_options.get(
+            "mimo_request_parallelism",
+            _slice_options.get("mimo_parallelism"),
+        ),
         total_slices,
     )
-    if mimo_parallelism > 1:
+    danmaku_by_index = {
+        index: extract_danmaku_text(
+            xml_path,
+            generated_slice.context_start,
+            generated_slice.context_end,
+            max_chars=DANMAKU_MAX_CHARS,
+            with_timestamps=DANMAKU_TIMELINE,
+            focus_start=generated_slice.density_core_start,
+            focus_end=generated_slice.density_core_end,
+        )
+        for index, generated_slice in enumerate(slices_path, start=1)
+    }
+
+    def run_mimo_candidate(index, generated_slice):
+        started = time.perf_counter()
+        results = analyze_clips_stage(
+            generated_slice.path,
+            artist=artist,
+            danmaku_text=danmaku_by_index[index],
+            candidate_start=generated_slice.context_start,
+            candidate_end=generated_slice.context_end,
+            candidate_duration=generated_slice.duration,
+            analyzer=judge_candidate_clips_with_mimo,
+        )
+        return {
+            "index": index,
+            "danmaku_text": danmaku_by_index[index],
+            "results": results,
+            "timings_ms": {
+                "mimo": round((time.perf_counter() - started) * 1000, 1),
+            },
+        }
+
+    def iter_candidate_work():
+        nonlocal diagnostics
+        if total_slices <= 1:
+            for candidate_index, candidate in enumerate(slices_path, start=1):
+                yield candidate_index, candidate, None
+            return
+
+        component_by_index = _candidate_overlap_components(slices_path)
+        component_sizes = {
+            component_id: sum(
+                1 for value in component_by_index.values() if value == component_id
+            )
+            for component_id in set(component_by_index.values())
+        }
+        component_results = {
+            component_id: []
+            for component_id in component_sizes
+        }
         scan_log.info(
-            f"Submitting {total_slices} candidate(s) to MiMo with parallelism={mimo_parallelism}"
+            f"Submitting {total_slices} candidate(s) to MiMo "
+            f"with request_parallelism={mimo_parallelism}"
         )
         progress.update(
             force=True,
@@ -442,33 +682,10 @@ def slice_only(video_path, **_slice_options):
             current_slice=0,
             total_slices=total_slices,
             current_slice_percent=100.0,
-            message=f"已并发发送 {total_slices} 个候选给 MiMo，并发数 {mimo_parallelism}",
+            message=f"已并发发送 {total_slices} 个候选给 MiMo，请求并发数 {mimo_parallelism}",
             error="",
             diagnostics=diagnostics,
         )
-
-        def run_mimo_candidate(index, generated_slice):
-            danmaku_text = extract_danmaku_text(
-                xml_path,
-                generated_slice.context_start,
-                generated_slice.context_end,
-                with_timestamps=DANMAKU_TIMELINE,
-            )
-            results = analyze_clips_stage(
-                generated_slice.path,
-                artist=artist,
-                danmaku_text=danmaku_text,
-                candidate_start=generated_slice.context_start,
-                candidate_end=generated_slice.context_end,
-                candidate_duration=generated_slice.duration,
-                analyzer=judge_candidate_clips_with_mimo,
-            )
-            return {
-                "index": index,
-                "danmaku_text": danmaku_text,
-                "results": results,
-            }
-
         with ThreadPoolExecutor(max_workers=mimo_parallelism) as executor:
             futures = {
                 executor.submit(run_mimo_candidate, index, generated_slice): index
@@ -478,9 +695,9 @@ def slice_only(video_path, **_slice_options):
             for future in as_completed(futures):
                 index = futures[future]
                 try:
-                    mimo_results_by_index[index] = future.result()
+                    precomputed = future.result()
                 except Exception as exc:
-                    mimo_results_by_index[index] = {"index": index, "error": exc}
+                    precomputed = {"index": index, "error": exc}
                 completed += 1
                 diagnostics = upsert_diagnostic(
                     diagnostics,
@@ -489,7 +706,10 @@ def slice_only(video_path, **_slice_options):
                         "MiMo 判断",
                         "pending" if completed < total_slices else "ok",
                         f"MiMo 并发判断完成 {completed}/{total_slices}",
-                        [("并发数", str(mimo_parallelism)), ("已完成", f"{completed}/{total_slices}")],
+                        [
+                            ("请求并发数", str(mimo_parallelism)),
+                            ("已完成", f"{completed}/{total_slices}"),
+                        ],
                     ),
                 )
                 progress.update(
@@ -500,21 +720,44 @@ def slice_only(video_path, **_slice_options):
                     current_slice=completed,
                     total_slices=total_slices,
                     current_slice_percent=100.0,
-                    message=f"MiMo 判断中：已完成 {completed}/{total_slices}，并发数 {mimo_parallelism}",
+                    message=(
+                        f"MiMo 判断中：已完成 {completed}/{total_slices}，"
+                        f"请求并发数 {mimo_parallelism}"
+                    ),
                     error="",
                     diagnostics=diagnostics,
                 )
-    for index, generated_slice in enumerate(slices_path, start=1):
+                component_id = component_by_index[index]
+                component_results[component_id].append(
+                    (index, slices_path[index - 1], precomputed)
+                )
+                if (
+                    len(component_results[component_id])
+                    < component_sizes[component_id]
+                ):
+                    continue
+                ready_items = sorted(
+                    component_results.pop(component_id),
+                    key=lambda item: item[0],
+                )
+                _mark_cross_candidate_duplicates(
+                    ready_items,
+                    original_video_path,
+                )
+                # Only potentially-overlapping candidates wait for one another.
+                # Independent ready groups can start single-worker ASR while
+                # unrelated MiMo requests continue in the pool.
+                yield from ready_items
+
+    for index, generated_slice, precomputed_mimo in iter_candidate_work():
         slice_path = generated_slice.path
         segment = None
         queue_created = False
+        candidate_timings = dict(
+            (precomputed_mimo or {}).get("timings_ms") or {}
+        )
         try:
-            danmaku_text = extract_danmaku_text(
-                xml_path,
-                generated_slice.context_start,
-                generated_slice.context_end,
-                with_timestamps=DANMAKU_TIMELINE,
-            )
+            danmaku_text = danmaku_by_index[index]
             mimo_details = [
                 ("候选", f"{index}/{total_slices}"),
                 (
@@ -551,13 +794,13 @@ def slice_only(video_path, **_slice_options):
                 error="",
                 diagnostics=diagnostics,
             )
-            precomputed_mimo = mimo_results_by_index.get(index)
             empty_result_source = None
             if precomputed_mimo is not None:
                 if precomputed_mimo.get("error") is not None:
                     raise precomputed_mimo["error"]
                 danmaku_text = precomputed_mimo.get("danmaku_text", danmaku_text)
                 empty_result_source = precomputed_mimo["results"]
+                asr_started = time.perf_counter()
                 results = analyze_candidate_clip_results(
                     precomputed_mimo["results"],
                     slice_path,
@@ -566,7 +809,12 @@ def slice_only(video_path, **_slice_options):
                     candidate_end=generated_slice.context_end,
                     candidate_duration=generated_slice.duration,
                 )
+                candidate_timings["asr"] = round(
+                    (time.perf_counter() - asr_started) * 1000,
+                    1,
+                )
             else:
+                analysis_started = time.perf_counter()
                 results = analyze_clips_stage(
                     slice_path,
                     artist=artist,
@@ -575,6 +823,10 @@ def slice_only(video_path, **_slice_options):
                     candidate_end=generated_slice.context_end,
                     candidate_duration=generated_slice.duration,
                     analyzer=analyze_candidate_clips,
+                )
+                candidate_timings["analysis"] = round(
+                    (time.perf_counter() - analysis_started) * 1000,
+                    1,
                 )
                 empty_result_source = results
             result_message = (
@@ -646,8 +898,10 @@ def slice_only(video_path, **_slice_options):
                     result,
                     upload_status="not_queued",
                 )
-                if result.judge_status == "judge_failed":
-                    judge_failed_count += 1
+                segment["timings_ms"] = dict(candidate_timings)
+                if result.judge_status in {"judge_failed", "review"}:
+                    if result.judge_status == "judge_failed":
+                        judge_failed_count += 1
                     _log_mimo_clip_decision(clip_index, len(results), result)
                     scan_log.warning(
                         f"Slice {slice_path} kept for manual review: "
@@ -678,12 +932,14 @@ def slice_only(video_path, **_slice_options):
                     upload_status="not_queued",
                     candidate_path_override=output_path,
                 )
+                segment["timings_ms"] = dict(candidate_timings)
 
                 if OMNI_ENABLE_DEEP_ANALYSIS:
                     analysis_json_path = output_path[:-4] + "_analysis.json"
                     result.to_json_file(analysis_json_path)
                     scan_log.info(f"Analysis result saved: {analysis_json_path}")
 
+                subtitle_started = time.perf_counter()
                 burn_result = subtitle_stage(
                     slice_path,
                     result,
@@ -692,6 +948,10 @@ def slice_only(video_path, **_slice_options):
                         analysis,
                         output_path,
                     ),
+                )
+                segment["timings_ms"]["subtitle"] = round(
+                    (time.perf_counter() - subtitle_started) * 1000,
+                    1,
                 )
                 if not burn_result["ok"]:
                     reason = burn_result["error"]
@@ -741,11 +1001,16 @@ def slice_only(video_path, **_slice_options):
                     message="正在写入上传参数",
                     diagnostics=diagnostics,
                 )
+                metadata_started = time.perf_counter()
                 metadata_result = metadata_stage(
                     output_path,
                     result,
                     room_id=room_id,
                     writer=write_slice_upload_metadata,
+                )
+                segment["timings_ms"]["metadata"] = round(
+                    (time.perf_counter() - metadata_started) * 1000,
+                    1,
                 )
                 if not metadata_result["ok"]:
                     reason = metadata_result["error"]
@@ -768,11 +1033,16 @@ def slice_only(video_path, **_slice_options):
                     message="正在加入上传队列",
                     diagnostics=diagnostics,
                 )
+                queue_started = time.perf_counter()
                 queue_result = enqueue_stage(
                     output_path,
                     insert=insert_upload_queue,
                     lookup=get_upload_item,
                     skip=os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1",
+                )
+                segment["timings_ms"]["queue"] = round(
+                    (time.perf_counter() - queue_started) * 1000,
+                    1,
                 )
                 if not queue_result["ok"]:
                     reason = queue_result["error"]
@@ -807,6 +1077,7 @@ def slice_only(video_path, **_slice_options):
                             "completeness_score": getattr(
                                 result, "completeness_score", None
                             ),
+                            "confidence": getattr(result, "confidence", None),
                             "burst_ratio": _slice_options.get(
                                 "burst_ratio", BURST_RATIO
                             ),
@@ -841,6 +1112,7 @@ def slice_only(video_path, **_slice_options):
                     None,
                     upload_status="not_queued",
                 )
+                segment["timings_ms"] = dict(candidate_timings)
             segment["judge_status"] = "judge_failed"
             segment["judge_error"] = str(e)
             segment["quality_reason"] = str(e)
@@ -854,6 +1126,8 @@ def slice_only(video_path, **_slice_options):
             segment["upload_status"] = "not_queued"
             segments.append(segment)
             delete_slice_upload_metadata(cleanup_path)
+
+    output_slices, segments = _ordered_pipeline_results(output_slices, segments)
 
     if total_slices and not output_slices and not segments:
         _log_slice_only_summary(
@@ -998,6 +1272,11 @@ def build_segment_record(
     judge_status = "keep"
     judge_error = ""
     quality_score = None
+    completeness_score = None
+    confidence = None
+    duplicate_of = ""
+    duplicate_reason = ""
+    dedupe_key = ""
     quality_reason = ""
     title = Path(slice_path).stem
     description = ""
@@ -1008,6 +1287,13 @@ def build_segment_record(
         judge_status = analysis.judge_status or ("keep" if analysis.retain_recommendation else "drop")
         judge_error = analysis.judge_error
         quality_score = analysis.quality_score
+        completeness_score = getattr(analysis, "completeness_score", None)
+        confidence = getattr(analysis, "confidence", None)
+        duplicate_of = str(getattr(analysis, "duplicate_of", "") or "")
+        duplicate_reason = str(
+            getattr(analysis, "duplicate_reason", "") or ""
+        )
+        dedupe_key = str(getattr(analysis, "_dedupe_key", "") or "")
         quality_reason = analysis.quality_reason
         title = analysis.title
         description = analysis.description
@@ -1016,7 +1302,7 @@ def build_segment_record(
         if trim is not None:
             mimo_trim_start = float(trim.trim_start)
             mimo_trim_end = float(trim.trim_end)
-        if trim is not None and judge_status == "keep":
+        if trim is not None and judge_status in {"keep", "review"}:
             start = (
                 float(analysis.source_start)
                 if analysis.source_start is not None
@@ -1045,6 +1331,11 @@ def build_segment_record(
         "judge_status": judge_status,
         "judge_error": judge_error,
         "quality_score": quality_score,
+        "completeness_score": completeness_score,
+        "confidence": confidence,
+        "duplicate_of": duplicate_of,
+        "duplicate_reason": duplicate_reason,
+        "_dedupe_key": dedupe_key,
         "quality_reason": quality_reason,
         "title": title,
         "description": description,

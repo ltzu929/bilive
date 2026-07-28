@@ -32,8 +32,9 @@ Pi 不执行 ffmpeg、faster-whisper、MiMo、字幕烧录或上传。切片页�
 ```text
 弹幕密度 -> 候选范围 -> MiMo 全模态判断
   -> drop：删除候选
-  -> keep：单段粗剪 -> faster-whisper 字幕 -> 一次 ffmpeg 粗剪+烧录 -> 入上传队列
-  -> MiMo/Whisper/渲染/元数据/队列失败：保留人工复核
+  -> keep：0..N 个聊天片段 -> 本地质量闸门与去重
+           -> faster-whisper 字幕 -> 一次 ffmpeg 粗剪+烧录 -> 入上传队列
+  -> 分数不足或 MiMo/Whisper/渲染/元数据/队列失败：保留人工复核
 ```
 
 MiMo 输入候选视频、窗口弹幕、主播名和候选时长。视频以临时 720p H.264/AAC 分析副本 Base64 传输；`MIMO_API_KEY` 默认从项目本地 `.secrets/env` 读取，也可由进程环境变量覆盖，不写入 git、日志或公共配置。
@@ -42,12 +43,15 @@ MiMo 输入候选视频、窗口弹幕、主播名和候选时长。视频以临
 
 ## 切片工作台
 
-`/tasks` 是主要使用入口，界面按 `UP 主 -> 直播场次 -> 候选片段` 组织审核队列：
+`/tasks` 是主要使用入口，界面按 `UP 主 -> 直播场次 -> 候选片段` 组织桌面审核工作台：
 
-- 左侧审核队列按 UP 主分组，仍可用房间和状态筛选；点击录播后加载该场直播的候选片段。
-- 中间是源录播预览和连续弹幕密度图。密度图用于导航和边界辅助，蓝色区间表示推荐保留片段，红色虚线表示需要复核的失败片段。
-- 右侧是人工确认面板，可编辑标题、简介、标签和入/出点；点击“保留片段”才会写 `.upload.json` 并进入 SQLite 投稿队列。
-- 底部“投稿流水线”复用上传队列状态，显示待上传、处理中、已发布和失败计数。它只读取 `/api/upload-dashboard`，不会执行切片、ASR、LLM 或投稿。
+- 左侧队列按 UP 主分组，可用房间和状态筛选；桌面窄宽度下可收起为抽屉。
+- 中间是源录播预览、连续弹幕密度图和候选导航。密度图支持定位视频与拖拽入点/出点。
+- 右侧审核检查器集中编辑标题、简介、标签、边界和字幕样式；技术错误默认折叠，只显示可执行的恢复建议。
+- “通过并生成成片”会创建 Windows `finalize_segment` 任务。只有 ASR、字幕渲染、上传元数据和 SQLite 入队全部成功，片段才进入投稿队列。
+- 投稿队列和发布表现属于次级工作区；它们只读 dashboard/SQLite 状态，不会在 Pi 上运行重任务。
+
+审核快捷键：`J/K` 切换候选，空格播放/暂停，`I/O` 以当前播放点设置入点/出点，`Ctrl+Enter` 通过并生成成片。输入框聚焦时不会触发快捷键。
 
 自动流程仍然 fail-closed：只有满足自动入队条件的 MiMo keep 片段才会进入上传队列；人工复核保留的片段必须显式确认后才投稿。
 
@@ -105,6 +109,8 @@ Set-BiliveSecret MIMO_API_KEY "<your-key>"
 - `BILIVE_CONFIG`、`BILIVE_VIDEOS_DIR`、`BILIVE_LOG_DIR`。
 - `BILIVE_DB_PATH`、`BILIVE_COOKIE_FILE`。
 
+生产切片默认使用带时间戳的弹幕上下文、MiMo 请求并发和本地严格质量闸门。阈值、ASR batch、边界吸附和并发配置见 [`bilive-server.toml`](bilive-server.toml)；真实凭据不得写入该文件。
+
 ## 单机 Windows 录制
 
 单机模式在同一台 Windows 上再跑本地 blrec 录制，与重处理环境隔离。blrec 依赖旧版 Python，用独立的 `.venv-recorder`（Python 3.10）：
@@ -152,11 +158,11 @@ blrec 通过环境变量 `BLREC_API_KEY` 读取密钥，密钥不会出现在进
                                            -> <job>.failed.json
 ```
 
-动作支持 `retry_judge` 和 `render_segment`。重复提交会复用仍在 pending/processing 的同一任务。上传和投稿是两个可恢复阶段，CDN 上传成功后，投稿重试复用 `remote_filename`，不会重复上传视频字节。
+重任务动作支持 `finalize_segment`、`retry_judge`、`render_segment` 和 `reburn_subtitles`。重复提交会复用仍在 pending/processing 的同一任务。上传和投稿是两个可恢复阶段，CDN 上传成功后，投稿重试复用 `remote_filename`，不会重复上传视频字节。
 
 ## Fail-closed
 
-自动入队要求 MiMo 明确 `keep`、有效单段粗剪区间、非空 ASR、有效段级时间戳、字幕烧录成功、元数据成功和 SQLite 入队成功。任一步失败都保留候选供人工复核；只有 MiMo 明确 `drop` 才删除候选。
+自动入队要求 MiMo 明确 `keep`、质量分/完整度/置信度均达到本地阈值、有效粗剪区间、非空 ASR、有效段级时间戳、字幕烧录成功、元数据成功和 SQLite 入队成功。分数不足、重复候选或任一技术步骤失败都保留供人工复核；只有 MiMo 明确 `drop` 才删除候选。
 
 更完整的部署、恢复和模型说明见 [运维手册](docs/operations.md)、[架构文档](docs/architecture.md) 和 [模型运行时](docs/model-runtime.md)。
 

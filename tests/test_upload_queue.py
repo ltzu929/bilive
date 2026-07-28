@@ -11,6 +11,7 @@ from src.db.conn import (
     mark_upload_published,
     migrate_upload_queue,
     recover_upload_queue,
+    requeue_failed_upload,
     schedule_upload_retry,
 )
 
@@ -157,6 +158,39 @@ def test_recover_upload_queue_restores_correct_phase(tmp_path):
     recovered_publish = get_upload_item("publishing.mp4", db_path)
     assert recovered_publish["status"] == "uploaded"
     assert recovered_publish["remote_filename"] == "remote-publishing"
+
+
+def test_requeue_failed_upload_resumes_correct_phase(tmp_path):
+    db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
+    insert_upload_queue("fresh.mp4", db_path=db_path)
+    mark_upload_failed("fresh.mp4", "failed upload", db_path=db_path, now=100)
+
+    fresh = requeue_failed_upload("fresh.mp4", db_path=db_path)
+
+    assert fresh["status"] == "queued"
+    assert fresh["attempts"] == 0
+    assert fresh["last_error"] == ""
+
+    insert_upload_queue("published-bytes.mp4", db_path=db_path)
+    claim_next_upload(db_path, now=101)
+    mark_upload_complete(
+        "published-bytes.mp4",
+        "remote-name",
+        db_path=db_path,
+        now=102,
+    )
+    mark_upload_failed(
+        "published-bytes.mp4",
+        "failed publish",
+        db_path=db_path,
+        now=103,
+    )
+
+    resumed = requeue_failed_upload("published-bytes.mp4", db_path=db_path)
+
+    assert resumed["status"] == "uploaded"
+    assert resumed["remote_filename"] == "remote-name"
 
 
 def test_queue_counts_include_each_state(tmp_path):

@@ -13,7 +13,7 @@ from src.burn.task_history import write_task_history
 from src.config import MIN_VIDEO_SIZE
 from src.config.server_config import VIDEOS_DIR
 from src.log.logger import scan_log
-from src.server.action_jobs import process_action_jobs
+from src.server.action_jobs import count_pending_action_jobs, process_action_jobs
 MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
 
 from src.server.worker_lock import (
@@ -172,6 +172,36 @@ def process_pending_videos(videos_dir: str | Path | None = None) -> int:
     return _process_pending_root(root)
 
 
+def process_pending_until_quiet(
+    videos_dir: str | Path | None = None,
+    *,
+    quiet_checks: int = 10,
+    quiet_delay: float = 0.1,
+) -> int:
+    """Drain work created while a one-shot worker is already running."""
+    root = Path(videos_dir or VIDEOS_DIR).expanduser().resolve()
+    if not root.is_dir():
+        scan_log.warning(f"Videos dir not found: {root}")
+        return 0
+
+    total = 0
+    quiet = 0
+    required_quiet = max(1, int(quiet_checks))
+    while quiet < required_quiet:
+        processed = _process_pending_root(root)
+        total += processed
+        pending = count_pending_action_jobs(root) + len(
+            list(root.rglob("*.mp4.pending"))
+        )
+        if processed > 0 or pending > 0:
+            quiet = 0
+            continue
+        quiet += 1
+        if quiet < required_quiet:
+            time.sleep(max(0.0, float(quiet_delay)))
+    return total
+
+
 def _process_pending_root(root: Path) -> int:
     recover_processing_markers(root)
     processed = process_action_jobs(root)
@@ -314,7 +344,7 @@ def main(argv=None) -> int:
     try:
         with WorkerProcessLock(lock_path):
             if args.once:
-                count = process_pending_videos(args.videos_dir)
+                count = process_pending_until_quiet(args.videos_dir)
                 scan_log.info(f"One-shot worker complete. Processed {count} video(s).")
                 return 0
             run_watcher(interval=args.interval, videos_dir=args.videos_dir)

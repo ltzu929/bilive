@@ -13,7 +13,13 @@ def slice_video(*args, **kwargs):
         slice_video as implementation,
     )
 
-    return implementation(*args, **kwargs)
+    result = implementation(*args, **kwargs)
+    output_path = args[1] if len(args) > 1 else kwargs.get("output_path")
+    if output_path and (
+        not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0
+    ):
+        raise RuntimeError("ffmpeg slicer produced no media")
+    return result
 
 
 @dataclass
@@ -275,18 +281,21 @@ def extract_danmaku_text(
     xml_path: str,
     start: float,
     end: float,
-    max_chars: int = 500,
-    with_timestamps: bool = False,
+    max_chars: int = 4000,
+    with_timestamps: bool = True,
+    focus_start: float | None = None,
+    focus_end: float | None = None,
 ) -> str:
     """Extract danmaku messages within a time window from a Bilibili XML file.
 
-    When ``with_timestamps`` is False (default), messages are joined by spaces
+    When ``with_timestamps`` is False, messages are joined by spaces
     and, if too long, truncated to the last ``max_chars`` characters.
 
-    When ``with_timestamps`` is True, each message becomes a ``[mm:ss] text``
-    line so the LLM sees the full chronological timeline. If the timeline
-    exceeds ``max_chars``, lines are dropped from the middle (keeping the head
-    and tail) so both the opening and the climax stay visible.
+    By default each message becomes a ``[mm:ss] text`` line. If the timeline
+    exceeds ``max_chars``, 25/50/25 percent of the available budget is reserved
+    for the opening, the density focus, and the ending. Callers should pass the
+    absolute density-core range as ``focus_start``/``focus_end``. Without an
+    explicit focus, the middle tenth of the requested window is used.
     """
     if not os.path.exists(xml_path):
         return ""
@@ -318,8 +327,107 @@ def extract_danmaku_text(
         return result
 
     messages.sort(key=lambda item: item[0])
-    lines = [f"{_format_timeline_mark(ts)} {text}" for ts, text in messages]
-    return _truncate_timeline_middle(lines, max_chars)
+    if focus_start is None or focus_end is None or focus_end <= focus_start:
+        midpoint = (float(start) + float(end)) / 2.0
+        half_focus = max(1.0, (float(end) - float(start)) * 0.05)
+        focus_start = midpoint - half_focus
+        focus_end = midpoint + half_focus
+    return _truncate_timeline_around_focus(
+        messages,
+        max_chars,
+        float(focus_start),
+        float(focus_end),
+    )
+
+
+def _truncate_timeline_around_focus(
+    messages: list[tuple[float, str]],
+    max_chars: int,
+    focus_start: float,
+    focus_end: float,
+) -> str:
+    """Keep chronological head/focus/tail evidence within ``max_chars``."""
+    lines = [
+        (timestamp, f"{_format_timeline_mark(timestamp)} {text}")
+        for timestamp, text in messages
+    ]
+    full = "\n".join(line for _, line in lines)
+    if len(full) <= max_chars:
+        return full
+    if max_chars <= 0:
+        return ""
+
+    head = [line for timestamp, line in lines if timestamp < focus_start]
+    focus = [
+        line
+        for timestamp, line in lines
+        if focus_start <= timestamp <= focus_end
+    ]
+    tail = [line for timestamp, line in lines if timestamp > focus_end]
+
+    # Sparse focus windows still need a useful middle sample.
+    if not focus and lines:
+        midpoint = (focus_start + focus_end) / 2.0
+        nearest_index = min(
+            range(len(lines)),
+            key=lambda index: abs(lines[index][0] - midpoint),
+        )
+        focus = [lines[nearest_index][1]]
+        head = [line for _, line in lines[:nearest_index]]
+        tail = [line for _, line in lines[nearest_index + 1 :]]
+
+    marker = "…(省略)…"
+    marker_budget = 2 * (len(marker) + 2)
+    content_budget = max(1, max_chars - marker_budget)
+    head_lines = _take_timeline_lines(
+        head,
+        max(1, int(content_budget * 0.25)),
+        from_end=False,
+    )
+    focus_lines = _take_timeline_lines(
+        focus,
+        max(1, int(content_budget * 0.50)),
+        from_end=False,
+    )
+    tail_lines = _take_timeline_lines(
+        tail,
+        max(1, content_budget - int(content_budget * 0.75)),
+        from_end=True,
+    )
+
+    parts = [
+        "\n".join(part)
+        for part in (head_lines, focus_lines, tail_lines)
+        if part
+    ]
+    if not parts:
+        return full[:max_chars]
+    result = f"\n{marker}\n".join(parts)
+    return result[:max_chars]
+
+
+def _take_timeline_lines(
+    lines: list[str],
+    budget: int,
+    *,
+    from_end: bool,
+) -> list[str]:
+    """Take complete chronological lines from one side within a char budget."""
+    selected: list[str] = []
+    used = 0
+    source = reversed(lines) if from_end else iter(lines)
+    for line in source:
+        addition = len(line) + (1 if selected else 0)
+        if used + addition > budget:
+            break
+        selected.append(line)
+        used += addition
+    if from_end:
+        selected.reverse()
+    if not selected and lines and budget > 0:
+        line = lines[-1] if from_end else lines[0]
+        selected = [line[:budget]]
+    return selected
 
 
 def _truncate_timeline_middle(lines: list[str], max_chars: int) -> str:

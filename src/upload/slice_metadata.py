@@ -21,6 +21,7 @@ SLICE_FEATURE_FIELDS = (
     "title",
     "quality_score",
     "completeness_score",
+    "confidence",
     "burst_ratio",
     "burst_context",
     "lag_seconds",

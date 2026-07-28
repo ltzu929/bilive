@@ -12,11 +12,19 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from src.config import (
+    WHISPER_BATCH_SIZE,
+    WHISPER_CPU_THREADS,
+    WHISPER_VAD_FILTER,
+    WHISPER_VAD_MIN_SILENCE_MS,
+    WHISPER_VAD_SPEECH_PAD_MS,
+)
 from src.log.logger import scan_log
 
 
 _whisper_model = None
-_whisper_model_key: tuple[str, str, str] | None = None
+_whisper_batch_pipeline = None
+_whisper_model_key: tuple[str, str, str, int] | None = None
 
 _EXCITED_WORDS = re.compile(r"哈哈|好棒|太强了|厉害|牛逼|太好了|开心|666|绝了")
 _FILLER_WORDS = re.compile(r"嗯|额|然后|就是|那个|这个|一个|的话|对吧")
@@ -111,6 +119,11 @@ def transcribe_audio_whisper(
     device: str = "cpu",
     engine: str = "faster-whisper",
     compute_type: str | None = None,
+    batch_size: int = WHISPER_BATCH_SIZE,
+    cpu_threads: int = WHISPER_CPU_THREADS,
+    vad_filter: bool = WHISPER_VAD_FILTER,
+    vad_min_silence_ms: int = WHISPER_VAD_MIN_SILENCE_MS,
+    vad_speech_pad_ms: int = WHISPER_VAD_SPEECH_PAD_MS,
 ) -> dict[str, Any]:
     if engine != "faster-whisper":
         raise ValueError("Only faster-whisper is supported")
@@ -119,26 +132,72 @@ def transcribe_audio_whisper(
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise RuntimeError("faster-whisper is not installed") from exc
+    try:
+        from faster_whisper import BatchedInferencePipeline
+    except ImportError:
+        BatchedInferencePipeline = None
 
-    global _whisper_model, _whisper_model_key
+    global _whisper_batch_pipeline, _whisper_model, _whisper_model_key
     resolved_compute_type = compute_type or ("int8" if device == "cpu" else "float16")
-    model_key = (model_size, device, resolved_compute_type)
+    resolved_cpu_threads = max(1, int(cpu_threads))
+    resolved_batch_size = max(1, int(batch_size))
+    model_key = (model_size, device, resolved_compute_type, resolved_cpu_threads)
+    vad_parameters = {
+        "min_silence_duration_ms": max(0, int(vad_min_silence_ms)),
+        "speech_pad_ms": max(0, int(vad_speech_pad_ms)),
+    }
     try:
         if _whisper_model is None or _whisper_model_key != model_key:
             _whisper_model = WhisperModel(
                 model_size,
                 device=device,
                 compute_type=resolved_compute_type,
+                cpu_threads=resolved_cpu_threads,
             )
             _whisper_model_key = model_key
-        segment_iter, info = _whisper_model.transcribe(audio_path, language="zh")
+            _whisper_batch_pipeline = (
+                BatchedInferencePipeline(_whisper_model)
+                if BatchedInferencePipeline is not None
+                else None
+            )
+
+        transcription_options = {
+            "language": "zh",
+            "vad_filter": bool(vad_filter),
+            "vad_parameters": vad_parameters if vad_filter else None,
+            "without_timestamps": False,
+        }
+        if _whisper_batch_pipeline is not None:
+            try:
+                segment_iter, info = _whisper_batch_pipeline.transcribe(
+                    audio_path,
+                    batch_size=resolved_batch_size,
+                    **transcription_options,
+                )
+                raw_segments = list(segment_iter)
+            except Exception as batch_exc:
+                scan_log.warning(
+                    "Batched faster-whisper transcription failed; "
+                    f"falling back to sequential mode: {batch_exc}"
+                )
+                segment_iter, info = _whisper_model.transcribe(
+                    audio_path,
+                    **transcription_options,
+                )
+                raw_segments = list(segment_iter)
+        else:
+            segment_iter, info = _whisper_model.transcribe(
+                audio_path,
+                **transcription_options,
+            )
+            raw_segments = list(segment_iter)
         segments = [
             {
                 "start": float(segment.start),
                 "end": float(segment.end),
                 "text": normalize_transcript(segment.text),
             }
-            for segment in segment_iter
+            for segment in raw_segments
         ]
         return {
             "transcript": format_transcript_segments(segments),
@@ -234,7 +293,8 @@ def release_gpu_memory(delay: float = 3.0) -> None:
 
 
 def unload_asr_models() -> None:
-    global _whisper_model, _whisper_model_key
+    global _whisper_batch_pipeline, _whisper_model, _whisper_model_key
+    _whisper_batch_pipeline = None
     _whisper_model = None
     _whisper_model_key = None
     release_gpu_memory()

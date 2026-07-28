@@ -41,6 +41,16 @@ def test_lists_generated_slices_and_derives_feedback_path(tmp_path):
     assert slices[0].feedback_path.endswith("_feedback.json")
 
 
+def test_resolve_media_accepts_blrec_duplicate_source_suffix(tmp_path):
+    videos = tmp_path / "Videos"
+    source = videos / "22384516" / "22384516_20260630-12-55-25_(1).mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"source")
+    store = DashboardFileStore(videos)
+
+    assert store.resolve_media(store._encode_path(source)) == source
+
+
 def test_feedback_round_trip_is_limited_to_videos_root(tmp_path):
     videos = tmp_path / "Videos"
     room = videos / "8792912"

@@ -471,7 +471,6 @@ async def test_segment_action_apis_update_segment_sidecar(
         retried = await client.post("/api/segments/seg1/retry-judge")
         rendered = await client.post("/api/segments/seg1/render")
         retry_job = await client.get(retried.json()["status_url"])
-        render_job = await client.get(rendered.json()["status_url"])
 
     assert keep.status_code == 200
     assert keep.json()["judge_status"] == "manual_keep"
@@ -481,13 +480,99 @@ async def test_segment_action_apis_update_segment_sidecar(
     assert retried.status_code == 200
     assert retried.json()["status"] == "accepted"
     assert retried.json()["job"]["action"] == "retry_judge"
-    assert rendered.status_code == 200
-    assert rendered.json()["status"] == "accepted"
-    assert rendered.json()["job"]["action"] == "render_segment"
+    assert rendered.status_code == 409
+    assert "active action" in rendered.json()["detail"]
     assert heavy_calls == []
 
     assert retry_job.json()["status"] == "pending"
-    assert render_job.json()["status"] == "pending"
+
+
+@pytest.mark.anyio
+async def test_segment_finalize_api_persists_edits_then_queues_windows_job(
+    videos_root,
+    dashboard_client,
+):
+    source = _write_source_workbench_fixture(videos_root)
+    triggers = []
+
+    async with dashboard_client(
+        videos_root,
+        remote_worker_trigger=lambda pending: triggers.append(pending)
+        or {"status": "accepted", "pid": 2235},
+    ) as client:
+        response = await client.post(
+            "/api/segments/seg1/finalize",
+            json={
+                "title": "人工审核标题",
+                "description": "人工审核简介",
+                "tags": ["直播", "切片"],
+                "start": 12.5,
+                "end": 42.0,
+                "subtitle_style": {"font_size": 26, "margin_v": 80},
+            },
+        )
+        job_response = await client.get(response.json()["status_url"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["job_id"] == body["job"]["job_id"]
+    assert body["job"]["action"] == "finalize_segment"
+    assert body["job"]["execution_target"] == "windows"
+    assert body["status_url"] == f"/api/jobs/{body['job_id']}"
+    assert body["worker_trigger"] == {"status": "accepted", "pid": 2235}
+    assert body["segment"]["title"] == "人工审核标题"
+    assert body["segment"]["start_seconds"] == 12.5
+    assert body["segment"]["end_seconds"] == 42.0
+    assert body["segment"]["subtitle_style"]["font_size"] == 26
+    assert body["segment"]["action_state"]["status"] == "pending"
+    assert body["segment"]["action_state"]["job_id"] == body["job_id"]
+    assert job_response.json()["status"] == "pending"
+    assert triggers == [1]
+    assert not (source.parent / ".bilive-artifacts").exists()
+
+    history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
+    segment = history["segments"][0]
+    assert segment["title"] == "人工审核标题"
+    assert segment["upload_status"] == "not_queued"
+    assert segment["action_state"]["status"] == "pending"
+    assert segment["artifacts"]["raw_candidate"]["rel_path"].startswith(
+        "22384516/.bilive-artifacts/"
+    )
+
+
+@pytest.mark.anyio
+async def test_segment_finalize_api_reuses_active_job_and_validates_style(
+    videos_root,
+    dashboard_client,
+):
+    _write_source_workbench_fixture(videos_root)
+
+    async with dashboard_client(
+        videos_root,
+        remote_worker_trigger=lambda _pending: {"status": "accepted"},
+    ) as client:
+        first = await client.post("/api/segments/seg1/finalize", json={})
+        second = await client.post(
+            "/api/segments/seg1/finalize",
+            json={"title": "更新后的标题"},
+        )
+        invalid = await client.post(
+            "/api/segments/seg1/finalize",
+            json={"subtitle_style": "large"},
+        )
+        invalid_range = await client.post(
+            "/api/segments/seg1/finalize",
+            json={"start": "later", "end": 30},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert "active action" in second.json()["detail"]
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"] == "subtitle_style must be an object"
+    assert invalid_range.status_code == 400
+    assert invalid_range.json()["detail"] == "start_seconds must be numeric"
 
 
 @pytest.mark.anyio

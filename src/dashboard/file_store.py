@@ -12,7 +12,9 @@ from src.dashboard.schemas import VALID_DECISIONS, RoomItem, SliceItem
 
 
 SLICE_NAME_RE = re.compile(r"^(?P<start>\d+(?:\.\d+)?)s_(?P<source>.+)\.(mp4|flv)$")
-SOURCE_NAME_RE = re.compile(r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}\.mp4$")
+SOURCE_NAME_RE = re.compile(
+    r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}(?:_\(\d+\))?\.mp4$"
+)
 
 
 class DashboardFileStore:

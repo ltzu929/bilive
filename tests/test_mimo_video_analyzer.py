@@ -1,5 +1,8 @@
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
+import time
 
 from src.autoslice.analysis_result import AnalysisResult, TrimSuggestion
 
@@ -44,6 +47,36 @@ def test_encode_video_for_mimo_retries_and_cleans_temp_dir(tmp_path):
     assert not temp_dir.exists()
 
 
+def test_encode_video_for_mimo_honors_encode_parallelism(tmp_path):
+    from src.autoslice.mllm_sdk.mimo_video import encode_video_for_mimo
+
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"video")
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_run(command, **kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        Path(command[-1]).write_bytes(b"encoded")
+        with lock:
+            active -= 1
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(encode_video_for_mimo, source, run=fake_run)
+            for _ in range(2)
+        ]
+        for future in futures:
+            assert future.result().base64_bytes > 0
+
+    assert max_active == 1
+
+
 def test_server_config_exports_mimo_settings():
     from src.config import server_config
 
@@ -53,6 +86,15 @@ def test_server_config_exports_mimo_settings():
     assert server_config.MIMO_MEDIA_RESOLUTION == "default"
     assert server_config.MIMO_TIMEOUT == 180.0
     assert server_config.MIMO_MAX_BASE64_BYTES == 48_000_000
+    assert server_config.MIMO_REQUEST_PARALLELISM == 3
+    assert server_config.MIMO_PARALLELISM == 3
+    assert server_config.MIMO_ENCODE_PARALLELISM == 1
+    assert server_config.DANMAKU_TIMELINE is True
+    assert server_config.DANMAKU_MAX_CHARS == 4000
+    assert server_config.MIN_QUALITY_SCORE == 0.8
+    assert server_config.MIN_COMPLETENESS_SCORE == 0.8
+    assert server_config.MIN_CONFIDENCE == 0.8
+    assert server_config.TRIM_ASR_PADDING_SECONDS == 6.0
 
 
 def test_encode_video_for_mimo_raises_when_retry_exceeds_limit(tmp_path):
@@ -96,9 +138,10 @@ def test_judge_candidate_with_mimo_requests_structured_video_json(monkeypatch):
                 {
                     "content": (
                         '{"decision":"keep","reason":"strong moment",'
-                        '"title":"Clip title","description":"Clip desc",'
-                        '"tags":["live","highlight"],"quality_score":0.82,'
-                        '"trim_start":2.0,"trim_end":8.0}'
+                            '"title":"Clip title","description":"Clip desc",'
+                            '"tags":["live","highlight"],"quality_score":0.82,'
+                            '"completeness_score":0.84,"confidence":0.86,'
+                            '"trim_start":2.0,"trim_end":8.0}'
                     )
                 },
             )()
@@ -300,6 +343,8 @@ def test_mimo_payload_missing_required_fields_or_types_fails_closed():
         "description": "Description",
         "tags": ["live"],
         "quality_score": 0.8,
+        "completeness_score": 0.8,
+        "confidence": 0.8,
         "trim_start": 1,
         "trim_end": 10,
     }
@@ -307,8 +352,6 @@ def test_mimo_payload_missing_required_fields_or_types_fails_closed():
         {key: value for key, value in base.items() if key != "description"},
         {**base, "reason": ""},
         {**base, "tags": "live"},
-        {**base, "quality_score": "high"},
-        {**base, "quality_score": 1.5},
     ]
 
     for payload in invalid_payloads:
@@ -319,6 +362,39 @@ def test_mimo_payload_missing_required_fields_or_types_fails_closed():
         )
         assert result.judge_status == "judge_failed"
         assert result.judge_error
+
+
+def test_mimo_keep_with_missing_or_invalid_scores_routes_to_review():
+    from src.autoslice.mllm_sdk.mimo_video import _analysis_from_mimo_dict
+
+    base = {
+        "decision": "keep",
+        "reason": "good moment",
+        "title": "Clip",
+        "description": "Description",
+        "tags": ["live"],
+        "quality_score": 0.9,
+        "completeness_score": 0.9,
+        "confidence": 0.9,
+        "trim_start": 1,
+        "trim_end": 10,
+    }
+    invalid_payloads = [
+        {key: value for key, value in base.items() if key != "confidence"},
+        {**base, "quality_score": "high"},
+        {**base, "completeness_score": 1.5},
+        {**base, "confidence": float("nan")},
+    ]
+
+    for payload in invalid_payloads:
+        result = _analysis_from_mimo_dict(
+            payload,
+            artist="artist",
+            model="mimo-v2.5",
+        )
+        assert result.judge_status == "review"
+        assert result.retain_recommendation is False
+        assert "quality gate requires review" in result.judge_error
 
 
 def test_judge_candidate_with_mimo_fails_closed_on_empty_choices(monkeypatch):
