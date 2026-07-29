@@ -17,6 +17,7 @@ DATA_BASE_FILE = os.environ.get(
 )
 
 UPLOAD_STATUSES = (
+    "staged",
     "queued",
     "uploading",
     "uploaded",
@@ -185,6 +186,78 @@ def insert_upload_queue(
     except sqlite3.IntegrityError:
         logger.warning("insert_upload_queue skipped duplicate video_path=%s", video_path)
         return False
+
+
+def stage_upload_queue(
+    video_path: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Create an upload row that consumers cannot claim yet."""
+    path = str(video_path)
+    now = time.time()
+    with connect(db_path) as db:
+        item = _fetch_item(db, path)
+        if item is None:
+            db.execute(
+                """
+                insert into upload_queue (
+                    video_path, locked, status, remote_filename, attempts,
+                    next_attempt_at, last_error, bvid, updated_at
+                ) values (?, 0, 'staged', '', 0, 0, '', '', ?)
+                """,
+                (path, now),
+            )
+            item = _fetch_item(db, path)
+            assert item is not None
+            item["created"] = True
+            return item
+        if str(item.get("status") or "") == "failed":
+            db.execute(
+                """
+                update upload_queue
+                set status = 'staged',
+                    locked = 0,
+                    attempts = 0,
+                    next_attempt_at = 0,
+                    last_error = '',
+                    updated_at = ?
+                where video_path = ? and status = 'failed'
+                """,
+                (now, path),
+            )
+            item = _fetch_item(db, path)
+        assert item is not None
+        item["created"] = False
+        return item
+
+
+def activate_staged_upload(
+    video_path: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Expose a staged row after its segment state is durably complete."""
+    path = str(video_path)
+    now = time.time()
+    with connect(db_path) as db:
+        item = _fetch_item(db, path)
+        if item is None:
+            return None
+        if str(item.get("status") or "") == "staged":
+            next_status = (
+                "uploaded"
+                if str(item.get("remote_filename") or "").strip()
+                else "queued"
+            )
+            db.execute(
+                """
+                update upload_queue
+                set status = ?, locked = 0, updated_at = ?
+                where video_path = ? and status = 'staged'
+                """,
+                (next_status, now, path),
+            )
+            item = _fetch_item(db, path)
+        return item
 
 
 def requeue_failed_upload(

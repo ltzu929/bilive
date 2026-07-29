@@ -104,7 +104,16 @@ def read_action_job(videos_root: str | Path, job_id: str) -> dict[str, Any]:
 
 def count_pending_action_jobs(videos_root: str | Path) -> int:
     root = jobs_dir(videos_root)
-    return len(list(root.glob("*.pending.json"))) if root.is_dir() else 0
+    if not root.is_dir():
+        return 0
+    count = 0
+    for path in root.glob("*.pending.json"):
+        try:
+            _read_pending_job(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        count += 1
+    return count
 
 
 def claim_next_action_job(videos_root: str | Path) -> tuple[Path, dict[str, Any]] | None:
@@ -115,8 +124,9 @@ def claim_next_action_job(videos_root: str | Path) -> tuple[Path, dict[str, Any]
         candidates = []
         for path in root.glob("*.pending.json"):
             try:
-                job = _read_json(path)
-            except (OSError, ValueError, json.JSONDecodeError):
+                job = _read_pending_job(path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                _quarantine_invalid_pending(path, exc)
                 continue
             candidates.append(
                 (
@@ -240,12 +250,43 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
     if job["action"] == "reburn_subtitles":
         return reburn_segment_subtitles(videos_root, job["segment_id"])
     if job["action"] == "finalize_segment":
+        payload = dict(job.get("payload") or {})
+        payload["_job_id"] = str(job.get("job_id") or "")
         return finalize_segment(
             videos_root,
             job["segment_id"],
-            payload=dict(job.get("payload") or {}),
+            payload=payload,
         )
     raise ValueError(f"Unsupported action job: {job['action']}")
+
+
+def _quarantine_invalid_pending(path: Path, exc: Exception) -> None:
+    """Move an unreadable pending file out of the claimable queue."""
+    invalid = path.with_name(path.name.replace(".pending.json", ".invalid.json"))
+    try:
+        os.replace(path, invalid)
+    except OSError:
+        return
+    try:
+        invalid.with_suffix(f"{invalid.suffix}.error").write_text(
+            f"{type(exc).__name__}: {exc}",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _read_pending_job(path: Path) -> dict[str, Any]:
+    job = _read_json(path)
+    expected_job_id = path.name.removesuffix(".pending.json")
+    if (
+        str(job.get("job_id") or "") != expected_job_id
+        or not JOB_ID_RE.fullmatch(expected_job_id)
+        or str(job.get("action") or "") not in SUPPORTED_ACTIONS
+        or not str(job.get("segment_id") or "").strip()
+    ):
+        raise ValueError("pending action job has invalid or inconsistent fields")
+    return job
 
 
 def _finish_job(

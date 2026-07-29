@@ -236,11 +236,17 @@ def test_finalize_action_dispatches_to_source_workbench(tmp_path, monkeypatch):
 
     result = action_jobs._execute_action_job(
         videos,
-        {"action": "finalize_segment", "segment_id": "segment-1"},
+        {
+            "job_id": "a" * 32,
+            "action": "finalize_segment",
+            "segment_id": "segment-1",
+        },
     )
 
     assert result["upload_status"] == "queued"
-    assert calls == [(videos, "segment-1", {})]
+    assert calls == [
+        (videos, "segment-1", {"_job_id": "a" * 32})
+    ]
 
 
 @pytest.mark.parametrize(
@@ -294,6 +300,31 @@ def test_claim_uses_creation_order_not_random_job_id(tmp_path):
 
     assert claimed is not None
     assert claimed[1]["segment_id"] == "earlier"
+
+
+def test_invalid_pending_job_is_not_counted_and_is_quarantined(tmp_path):
+    videos = tmp_path / "Videos"
+    jobs = videos / ".bilive-jobs"
+    jobs.mkdir(parents=True)
+    invalid = jobs / f"{'a' * 32}.pending.json"
+    invalid.write_text("{not-json", encoding="utf-8")
+
+    assert action_jobs.count_pending_action_jobs(videos) == 0
+    assert action_jobs.claim_next_action_job(videos) is None
+    assert not invalid.exists()
+    assert (jobs / f"{'a' * 32}.invalid.json").exists()
+
+
+def test_structurally_invalid_pending_job_is_also_quarantined(tmp_path):
+    videos = tmp_path / "Videos"
+    jobs = videos / ".bilive-jobs"
+    jobs.mkdir(parents=True)
+    invalid = jobs / f"{'c' * 32}.pending.json"
+    invalid.write_text("{}", encoding="utf-8")
+
+    assert action_jobs.count_pending_action_jobs(videos) == 0
+    assert action_jobs.claim_next_action_job(videos) is None
+    assert (jobs / f"{'c' * 32}.invalid.json").exists()
 
 
 def test_job_files_are_valid_json_after_concurrent_enqueue(tmp_path):

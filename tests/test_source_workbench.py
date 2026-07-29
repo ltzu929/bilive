@@ -254,6 +254,12 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
         output_path.write_bytes(b"final")
         return SimpleNamespace(burned=True, message="ok")
 
+    def fake_activate(path):
+        persisted = source_workbench._read_segment(videos, "seg_failed")[2]
+        assert persisted["action_state"]["status"] == "done"
+        assert persisted["upload_status"] == "queued"
+        return {"video_path": path, "status": "queued"}
+
     monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
     monkeypatch.setattr(source_workbench, "transcribe_segment_audio", fake_asr)
     monkeypatch.setattr(source_workbench, "burn_final_subtitles", fake_burn)
@@ -264,8 +270,14 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
     )
     monkeypatch.setattr(
         source_workbench,
-        "insert_upload_queue",
-        lambda path: calls["queue"].append(path) or True,
+        "stage_upload_queue",
+        lambda path: calls["queue"].append(path)
+        or {"status": "staged", "created": True},
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "activate_staged_upload",
+        fake_activate,
     )
 
     prepared = source_workbench.prepare_segment_finalize(
@@ -281,8 +293,29 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
         },
     )
     assert prepared["upload_status"] == "not_queued"
+    job_id = "a" * 32
+    source_workbench.record_segment_action_state(
+        videos,
+        "seg_failed",
+        status="pending",
+        job_id=job_id,
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "prepare_segment_finalize",
+        lambda *_args, **_kwargs: pytest.fail(
+            "revision-guarded jobs must not re-apply prepared edits"
+        ),
+    )
 
-    updated = source_workbench.finalize_segment(videos, "seg_failed")
+    updated = source_workbench.finalize_segment(
+        videos,
+        "seg_failed",
+        {
+            "_expected_revision": prepared["revision"],
+            "_job_id": job_id,
+        },
+    )
 
     artifacts = updated["artifacts"]
     raw = videos / artifacts["raw_candidate"]["rel_path"]
@@ -312,6 +345,50 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
     assert calls["asr"] == 1
     assert calls["queue"] == [str(final)]
     assert calls["metadata"][0][1]["title"] == "人工确认标题"
+
+
+def test_finalize_recovery_accepts_revision_bumped_by_same_validated_job(
+    tmp_path,
+    monkeypatch,
+):
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos)
+    prepared = source_workbench.prepare_segment_finalize(
+        videos,
+        "seg_failed",
+        {"title": "prepared"},
+    )
+    job_id = "b" * 32
+    source_workbench.record_segment_action_state(
+        videos,
+        "seg_failed",
+        status="pending",
+        job_id=job_id,
+    )
+
+    class Interrupted(BaseException):
+        pass
+
+    monkeypatch.setattr(
+        source_workbench,
+        "record_segment_action_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(Interrupted()),
+    )
+    payload = {
+        "_expected_revision": prepared["revision"],
+        "_job_id": job_id,
+    }
+    with pytest.raises(Interrupted):
+        source_workbench.finalize_segment(videos, "seg_failed", payload)
+
+    source_workbench._mutate_segment(
+        videos,
+        "seg_failed",
+        lambda _root, _source, segment: segment,
+    )
+
+    with pytest.raises(Interrupted):
+        source_workbench.finalize_segment(videos, "seg_failed", payload)
 
 
 def test_finalize_retry_reuses_raw_and_asr_after_subtitle_failure(
@@ -346,8 +423,14 @@ def test_finalize_retry_reuses_raw_and_asr_after_subtitle_failure(
     monkeypatch.setattr(source_workbench, "write_slice_upload_metadata", lambda *a, **k: None)
     monkeypatch.setattr(
         source_workbench,
-        "insert_upload_queue",
-        lambda _path: calls.__setitem__("queue", calls["queue"] + 1) or True,
+        "stage_upload_queue",
+        lambda _path: calls.__setitem__("queue", calls["queue"] + 1)
+        or {"status": "staged", "created": True},
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "activate_staged_upload",
+        lambda path: {"video_path": path, "status": "queued"},
     )
 
     source_workbench.prepare_segment_finalize(videos, "seg_failed", {})
@@ -400,7 +483,7 @@ def test_finalize_honors_skip_upload_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(source_workbench, "write_slice_upload_metadata", lambda *a, **k: None)
     monkeypatch.setattr(
         source_workbench,
-        "insert_upload_queue",
+        "stage_upload_queue",
         lambda _path: pytest.fail("skip mode must not insert an upload row"),
     )
 
@@ -465,7 +548,7 @@ def test_finalize_metadata_failure_is_fail_closed_and_recoverable(
     )
     monkeypatch.setattr(
         source_workbench,
-        "insert_upload_queue",
+        "stage_upload_queue",
         lambda _path: pytest.fail("metadata failure must not queue the output"),
     )
 

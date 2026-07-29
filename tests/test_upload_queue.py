@@ -1,19 +1,36 @@
 import sqlite3
 
 from src.db.conn import (
+    activate_staged_upload,
     claim_next_upload,
     get_upload_item,
     get_upload_queue_counts,
     insert_upload_queue,
+    stage_upload_queue,
     list_upload_queue,
     mark_upload_complete,
     mark_upload_failed,
     mark_upload_published,
     migrate_upload_queue,
+    peek_next_upload,
     recover_upload_queue,
     requeue_failed_upload,
     schedule_upload_retry,
 )
+
+
+def test_staged_upload_is_invisible_until_activation(tmp_path):
+    db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
+
+    staged = stage_upload_queue("clip.mp4", db_path=db_path)
+
+    assert staged["status"] == "staged"
+    assert peek_next_upload(db_path) is None
+    activated = activate_staged_upload("clip.mp4", db_path=db_path)
+    assert activated is not None
+    assert activated["status"] == "queued"
+    assert peek_next_upload(db_path)["video_path"] == "clip.mp4"
 
 
 def create_legacy_queue(db_path, rows):

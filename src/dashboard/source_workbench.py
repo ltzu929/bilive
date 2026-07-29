@@ -23,10 +23,12 @@ from src.burn.task_history import lock_task_history, read_task_history
 from src.dashboard.task_state import build_task_inventory, resolve_task_id
 from src.dashboard.errors import SegmentStateConflict
 from src.db.conn import (
+    activate_staged_upload,
     delete_upload_queue,
     get_upload_item,
     insert_upload_queue,
     requeue_failed_upload,
+    stage_upload_queue,
 )
 from src.upload.slice_metadata import (
     delete_slice_upload_metadata,
@@ -393,16 +395,42 @@ def finalize_segment(
     timings: dict[str, int] = {}
     finalize_payload = dict(payload or {})
     expected_revision = finalize_payload.pop("_expected_revision", None)
+    job_id = str(finalize_payload.pop("_job_id", "") or "")
     if expected_revision is not None:
         _root, _source, current = _read_segment(videos_root, segment_id)
-        if int(_float(current.get("revision"))) != int(_float(expected_revision)):
+        current_revision = int(_float(current.get("revision")))
+        same_recovered_job = bool(
+            job_id
+            and str(current.get("_finalize_job_id") or "") == job_id
+            and int(_float(current.get("_finalize_expected_revision")))
+            == int(_float(expected_revision))
+        )
+        if current_revision != int(_float(expected_revision)) and not same_recovered_job:
             raise SegmentStateConflict(
                 "片段在任务入队后已被修改；请刷新后重新生成成片"
             )
-    prepared = prepare_segment_finalize(
-        videos_root,
-        segment_id,
-        finalize_payload,
+        if job_id and not same_recovered_job:
+            def mark_revision_validated(
+                _root_path: Path,
+                _source_path: Path,
+                segment: dict[str, Any],
+            ) -> dict[str, Any]:
+                segment["_finalize_job_id"] = job_id
+                segment["_finalize_expected_revision"] = int(
+                    _float(expected_revision)
+                )
+                return segment
+
+            current = _mutate_segment(
+                videos_root,
+                segment_id,
+                mark_revision_validated,
+                bump_revision=False,
+            )
+    prepared = (
+        current
+        if expected_revision is not None
+        else prepare_segment_finalize(videos_root, segment_id, finalize_payload)
     )
     record_segment_action_state(
         videos_root,
@@ -592,8 +620,31 @@ def finalize_segment(
 
     stage_started = time.perf_counter()
     try:
-        queue_result = _queue_final_output(final_path)
-        upload_status = str(queue_result["status"])
+        if os.environ.get("BILIVE_SKIP_UPLOAD_QUEUE", "").strip() == "1":
+            queue_result = {"status": "skipped", "created": False}
+        else:
+            queue_result = stage_upload_queue(str(final_path))
+            queue_status = str(queue_result.get("status") or "")
+            if queue_status not in {
+                "staged",
+                "queued",
+                "uploading",
+                "uploaded",
+                "publishing",
+                "published",
+            }:
+                raise RuntimeError(f"upload row cannot be staged from {queue_status}")
+        queue_status = str(queue_result.get("status") or "")
+        if queue_status == "skipped":
+            upload_status = "skipped"
+        elif queue_status == "staged":
+            upload_status = (
+                "uploaded"
+                if str(queue_result.get("remote_filename") or "").strip()
+                else "queued"
+            )
+        else:
+            upload_status = queue_status
     except Exception as exc:
         _fail_finalize(
             videos_root,
@@ -633,11 +684,20 @@ def finalize_segment(
         return current
 
     try:
-        return _mutate_segment(videos_root, segment_id, succeed)
+        completed = _mutate_segment(videos_root, segment_id, succeed)
     except Exception:
         if bool(queue_result.get("created")):
             delete_upload_queue(str(final_path))
         raise
+
+    # Staged rows are invisible to the consumer. Activation happens only after
+    # the segment has durably recorded done/queued. A recovered action can
+    # safely activate the same existing row.
+    if str(queue_result.get("status") or "") == "staged":
+        activated = activate_staged_upload(str(final_path))
+        if activated is None:
+            raise RuntimeError("staged upload row disappeared before activation")
+    return completed
 
 
 def drop_segment(
