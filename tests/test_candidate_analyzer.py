@@ -9,6 +9,9 @@ def _mimo_keep(trim_start=0.0, trim_end=10.0, *, title="Good clip"):
         description="A useful livestream highlight.",
         tags=["live", "highlight"],
         retain_recommendation=True,
+        quality_score=0.9,
+        completeness_score=0.9,
+        confidence=0.9,
         quality_reason="video, audio, and danmaku all support keeping it",
         judge_status="keep",
         suggested_trim=TrimSuggestion(
@@ -106,6 +109,7 @@ def test_analyze_candidate_drops_before_whisper(monkeypatch):
 def test_analyze_candidate_keeps_then_runs_whisper_on_mimo_trim(monkeypatch):
     from src.autoslice import candidate_analyzer
 
+    monkeypatch.setattr(candidate_analyzer, "SNAP_TRIM_TO_SEGMENTS", False)
     audio_calls = []
     monkeypatch.setattr(
         candidate_analyzer,
@@ -299,6 +303,8 @@ def test_unload_candidate_models_releases_configured_models(monkeypatch):
 def test_analyze_candidate_clips_runs_asr_for_each_mimo_clip(monkeypatch):
     from src.autoslice import candidate_analyzer
 
+    monkeypatch.setattr(candidate_analyzer, "SNAP_TRIM_TO_SEGMENTS", False)
+
     monkeypatch.setattr(
         candidate_analyzer,
         "judge_candidate_clips_with_mimo",
@@ -413,10 +419,10 @@ def test_analyze_candidate_snap_reuses_candidate_asr(monkeypatch):
     )
 
     assert result.judge_status == "keep"
-    # Only one ASR pass over the whole candidate (start 0, full duration).
+    # Only one ASR pass over the trim plus six seconds of bounded padding.
     assert len(audio_calls) == 1
     assert audio_calls[0]["start_seconds"] == 0.0
-    assert audio_calls[0]["duration_seconds"] == 20.0
+    assert audio_calls[0]["duration_seconds"] == 15.4
     # trim snapped to 3.0/9.0 -> source range reflects the snapped trim.
     assert result.suggested_trim.trim_start == 3.0
     assert result.suggested_trim.trim_end == 9.0
@@ -424,3 +430,38 @@ def test_analyze_candidate_snap_reuses_candidate_asr(monkeypatch):
     assert result.source_end == 109.0
     # transcript reused from candidate ASR, offset into the trim window.
     assert result.transcript == "seg two"
+
+
+def test_quality_gate_routes_low_or_missing_scores_to_review_before_asr(monkeypatch):
+    from src.autoslice import candidate_analyzer
+
+    low = _mimo_keep(trim_start=2.0, trim_end=12.0)
+    low.completeness_score = 0.79
+    low.confidence = 0.0
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_with_mimo",
+        lambda **kwargs: low,
+    )
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "analyze_audio",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("ASR must not run for quality-gated review")
+        ),
+    )
+
+    result = candidate_analyzer.analyze_candidate(
+        "clip.mp4",
+        "artist",
+        "danmaku",
+        candidate_start=100.0,
+        candidate_duration=20.0,
+    )
+
+    assert result.judge_status == "review"
+    assert result.retain_recommendation is False
+    assert result.source_start == 102.0
+    assert result.source_end == 112.0
+    assert "completeness_score=0.79" in result.judge_error
+    assert "confidence=0.00" in result.judge_error

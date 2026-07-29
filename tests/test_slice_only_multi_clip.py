@@ -27,8 +27,8 @@ def _clip(title, start, end):
         judge_status="keep",
         quality_score=0.9,
         clip_type="chat",
-        completeness_score=0.8,
-        confidence=0.7,
+        completeness_score=0.9,
+        confidence=0.9,
         suggested_trim=TrimSuggestion(start, end, "clip"),
         transcript="有效字幕",
         transcript_segments=[TranscriptSegment(0.0, 1.0, "有效字幕")],
@@ -99,7 +99,72 @@ def test_slice_only_outputs_multiple_mimo_clips(monkeypatch, tmp_path):
     assert len(burned) == 2
 
 
-def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(monkeypatch, tmp_path):
+def test_slice_only_quality_review_never_renders_or_queues(monkeypatch, tmp_path):
+    from src.burn import slice_only as slice_module
+    from src.autoslice.danmaku_slice import GeneratedSlice
+
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
+    room = tmp_path / "Videos" / "123"
+    room.mkdir(parents=True)
+    source = _write_source(room)
+    candidate = room / "0s_123_20260624-10-00-00.mp4"
+    candidate.write_bytes(b"candidate")
+    review = _clip("Needs review", 10.0, 40.0)
+    review.judge_status = "review"
+    review.retain_recommendation = False
+    review.judge_error = "Automatic publish quality gate requires review"
+
+    monkeypatch.setattr(slice_module, "MIN_VIDEO_SIZE", 1)
+    monkeypatch.setattr(
+        slice_module,
+        "slice_video_by_danmaku",
+        lambda *args, **kwargs: [
+            GeneratedSlice(str(candidate), 0.0, 10.0, 0.0, 240.0, 240.0, 2)
+        ],
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "extract_danmaku_text",
+        lambda *args, **kwargs: "弹幕",
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "analyze_candidate_clips",
+        lambda *args, **kwargs: [review],
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "burn_subtitles_from_analysis",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("review must not render")
+        ),
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "insert_upload_queue",
+        lambda path: (_ for _ in ()).throw(
+            AssertionError("review must not enter upload queue")
+        ),
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "get_video_info",
+        lambda path: ("title", "主播", "date"),
+    )
+
+    result = slice_module.slice_only(str(source), burst_context=120)
+
+    assert result["status"] == "done"
+    assert result["slice_count"] == 0
+    assert result["segments"][0]["judge_status"] == "review"
+    assert result["segments"][0]["upload_status"] == "not_queued"
+    assert candidate.exists()
+
+
+def test_slice_only_streams_ready_mimo_results_and_returns_deterministic_order(
+    monkeypatch,
+    tmp_path,
+):
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice
 
@@ -118,7 +183,7 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
         "slice_video_by_danmaku",
         lambda *args, **kwargs: [
             GeneratedSlice(str(candidate_a), 0.0, 10.0, 0.0, 240.0, 240.0, 2),
-            GeneratedSlice(str(candidate_b), 100.0, 110.0, 100.0, 340.0, 240.0, 3),
+            GeneratedSlice(str(candidate_b), 400.0, 410.0, 400.0, 640.0, 240.0, 3),
         ],
     )
     monkeypatch.setattr(slice_module, "extract_danmaku_text", lambda *args, **kwargs: "弹幕")
@@ -127,6 +192,8 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
     second_request_started = threading.Event()
     active_requests = 0
     max_active_requests = 0
+    release_first_request = threading.Event()
+    first_request_finished = threading.Event()
 
     def fake_judge(video_path, *args, **kwargs):
         nonlocal active_requests, max_active_requests
@@ -136,14 +203,21 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
             if active_requests >= 2:
                 second_request_started.set()
         second_request_started.wait(0.2)
+        if Path(video_path) == candidate_a:
+            release_first_request.wait(2.0)
+            first_request_finished.set()
         with lock:
             active_requests -= 1
         title = "Clip A" if Path(video_path) == candidate_a else "Clip B"
         return [_clip(title, 10.0, 40.0)]
 
     finalized_titles = []
+    finalized_while_first_pending = []
 
     def fake_finalize(results, *args, **kwargs):
+        if results[0].title == "Clip B":
+            finalized_while_first_pending.append(not first_request_finished.is_set())
+            release_first_request.set()
         finalized_titles.extend(result.title for result in results)
         return results
 
@@ -167,9 +241,137 @@ def test_slice_only_submits_mimo_candidates_concurrently_but_finalizes_in_order(
 
     assert result["status"] == "done"
     assert max_active_requests >= 2
-    assert finalized_titles == ["Clip A", "Clip B"]
-    assert burned_titles == ["Clip A", "Clip B"]
+    assert finalized_while_first_pending == [True]
+    assert set(finalized_titles) == {"Clip A", "Clip B"}
+    assert set(burned_titles) == {"Clip A", "Clip B"}
     assert [segment["title"] for segment in result["segments"]] == ["Clip A", "Clip B"]
+
+
+def test_slice_only_routes_lower_scored_cross_candidate_duplicate_to_review(
+    monkeypatch,
+    tmp_path,
+):
+    from src.burn import slice_only as slice_module
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.danmaku_slice import GeneratedSlice
+
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
+    room = tmp_path / "Videos" / "123"
+    room.mkdir(parents=True)
+    source = _write_source(room)
+    candidate_a = room / "0s_123_20260624-10-00-00.mp4"
+    candidate_b = room / "100s_123_20260624-10-00-00.mp4"
+    candidate_a.write_bytes(b"candidate a")
+    candidate_b.write_bytes(b"candidate b")
+
+    monkeypatch.setattr(slice_module, "MIN_VIDEO_SIZE", 1)
+    monkeypatch.setattr(
+        slice_module,
+        "slice_video_by_danmaku",
+        lambda *args, **kwargs: [
+            GeneratedSlice(str(candidate_a), 0.0, 10.0, 0.0, 240.0, 240.0, 2),
+            GeneratedSlice(str(candidate_b), 100.0, 110.0, 100.0, 340.0, 240.0, 3),
+        ],
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "extract_danmaku_text",
+        lambda *args, **kwargs: "弹幕",
+    )
+
+    def fake_judge(video_path, *args, **kwargs):
+        if Path(video_path) == candidate_a:
+            result = _clip("同一个弹幕问题的回应", 100.0, 150.0)
+            score = 0.85
+        else:
+            result = _clip("同一个弹幕问题回应", 5.0, 55.0)
+            score = 0.95
+        result.topic_summary = "主播回应同一个弹幕问题"
+        result.quality_score = score
+        result.completeness_score = score
+        result.confidence = score
+        return [result]
+
+    burned = []
+
+    def fake_burn(video_path, analysis, *, output_path=None, style=None):
+        Path(output_path).write_bytes(b"rendered")
+        burned.append(analysis.title)
+        return type("Burn", (), {"burned": True, "message": "ok"})()
+
+    queued = []
+    monkeypatch.setattr(slice_module, "judge_candidate_clips_with_mimo", fake_judge)
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "analyze_audio",
+        lambda *args, **kwargs: {
+            "transcript": "完整回应",
+            # Winner raw trim 5-55 is snapped to 4-56, changing its segment id.
+            "segments": [{"start": 4.0, "end": 56.0, "text": "完整回应"}],
+        },
+    )
+    monkeypatch.setattr(slice_module, "burn_subtitles_from_analysis", fake_burn)
+    monkeypatch.setattr(
+        slice_module,
+        "write_slice_upload_metadata",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        slice_module,
+        "insert_upload_queue",
+        lambda path: queued.append(path) or True,
+    )
+    monkeypatch.setattr(slice_module, "get_upload_item", lambda path: None)
+    monkeypatch.setattr(
+        slice_module,
+        "get_video_info",
+        lambda path: ("title", "主播", "date"),
+    )
+    monkeypatch.setattr(slice_module, "unload_candidate_models", lambda: None)
+
+    result = slice_module.slice_only(str(source), mimo_request_parallelism=2)
+
+    assert result["slice_count"] == 1
+    loser, winner = result["segments"]
+    assert loser["judge_status"] == "review"
+    assert loser["duplicate_of"] == winner["segment_id"]
+    assert "higher-scored clip" in loser["duplicate_reason"]
+    assert winner["judge_status"] == "keep"
+    assert winner["start_seconds"] == 104.0
+    assert winner["end_seconds"] == 156.0
+    assert burned == ["同一个弹幕问题回应"]
+    assert len(queued) == 1
+
+
+def test_dedupe_excludes_high_composite_clip_that_fails_one_quality_gate():
+    from src.burn import slice_only as slice_module
+    from src.autoslice.danmaku_slice import GeneratedSlice
+
+    candidate_a = GeneratedSlice("a.mp4", 0.0, 10.0, 0.0, 240.0, 240.0, 2)
+    candidate_b = GeneratedSlice("b.mp4", 100.0, 110.0, 100.0, 340.0, 240.0, 3)
+    failing = _clip("同一主题高综合分", 100.0, 150.0)
+    failing.topic_summary = "同一主题"
+    failing.quality_score = 1.0
+    failing.completeness_score = 1.0
+    failing.confidence = 0.79
+    eligible = _clip("同一主题合格片", 5.0, 55.0)
+    eligible.topic_summary = "同一主题"
+    eligible.quality_score = 0.85
+    eligible.completeness_score = 0.85
+    eligible.confidence = 0.85
+
+    slice_module._mark_cross_candidate_duplicates(
+        [
+            (1, candidate_a, {"results": [failing]}),
+            (2, candidate_b, {"results": [eligible]}),
+        ],
+        "source.mp4",
+    )
+
+    assert failing.judge_status == "review"
+    assert "confidence=0.79" in failing.judge_error
+    assert eligible.judge_status == "keep"
+    assert not hasattr(eligible, "duplicate_of")
 
 
 def test_slice_only_parallel_mimo_does_not_run_full_asr_analyzer_in_workers(monkeypatch, tmp_path):
@@ -252,7 +454,7 @@ def test_slice_only_parallel_mimo_does_not_run_full_asr_analyzer_in_workers(monk
     assert max_active_requests >= 2
     assert all(thread_id != main_thread for thread_id in judge_threads)
     assert finalize_threads == [main_thread, main_thread]
-    assert burned_titles == ["Clip A", "Clip B"]
+    assert set(burned_titles) == {"Clip A", "Clip B"}
     assert [segment["title"] for segment in result["segments"]] == ["Clip A", "Clip B"]
 
 

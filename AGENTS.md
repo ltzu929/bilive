@@ -6,7 +6,7 @@
 - Windows 只通过 `start_pipeline.ps1` 启动生产处理链路。
 - Worker API 只监听 `127.0.0.1:2235`。
 - 切片、ASR、LLM、字幕和上传不得在 Pi 执行。
-- Pi 的 retry/render API 只能原子写入 `.bilive-jobs` 并远程触发 Windows。
+- Pi 的 finalize/retry/render/reburn API 只能校验并原子写入 `.bilive-jobs`，再远程触发 Windows；不得在 dashboard 进程执行 ASR、ffmpeg 或上传。
 - 录制继续写 `/mnt/win/bilive/Videos`，不得改写到 Pi SD 卡。
 - Windows 夜间关机和次日 SMB 恢复是正常运行场景，保留恢复 timer。
 
@@ -17,6 +17,7 @@
 - 上传队列必须保持 `video_path` 唯一约束。
 - 投稿重试必须复用 CDN `remote_filename`。
 - 依赖检查失败时必须保留 pending 任务。
+- 自动成片的质量阈值、ASR、字幕、元数据或入队任一步失败时必须保留候选供人工复核。
 - 只读状态接口不得执行迁移、建表或数据修复。
 
 ## 媒体与凭据

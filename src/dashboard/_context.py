@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict
 from fastapi import HTTPException, Request
 
 from src.dashboard.file_store import DashboardFileStore
-from src.server.action_jobs import enqueue_action_job
+from src.server.action_jobs import enqueue_action_job, find_active_segment_job
 from src.dashboard.remote_worker import (
     remote_worker_status,
     stop_remote_worker,
@@ -87,15 +87,30 @@ class DashboardContext:
             task_id=task_id,
         )
 
-    def queue_segment_action(self, action: str, segment_id: str) -> Dict[str, Any]:
+    def queue_segment_action(
+        self,
+        action: str,
+        segment_id: str,
+        *,
+        payload: Dict[str, Any] | None = None,
+        after_enqueue: Callable[[Dict[str, Any]], Any] | None = None,
+    ) -> Dict[str, Any]:
         result = enqueue_action_job(
             self.store.videos_root,
             action=action,
             segment_id=segment_id,
+            payload=payload,
         )
-        result["status_url"] = f"/api/jobs/{result['job']['job_id']}"
+        job_id = result["job"]["job_id"]
+        result["job_id"] = job_id
+        result["status_url"] = f"/api/jobs/{job_id}"
+        if after_enqueue is not None:
+            after_enqueue(result)
         result["worker_trigger"] = self.trigger_worker(1)
         return result
+
+    def active_segment_job(self, segment_id: str) -> Dict[str, Any] | None:
+        return find_active_segment_job(self.store.videos_root, segment_id)
 
 
 def _validated_slice_options(payload: Dict[str, Any] | None) -> dict[str, Any] | None:

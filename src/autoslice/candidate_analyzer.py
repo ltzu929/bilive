@@ -17,10 +17,14 @@ from src.autoslice.mllm_sdk.mimo_video import (
     judge_candidate_with_mimo,
 )
 from src.config import (
+    MIN_COMPLETENESS_SCORE,
+    MIN_CONFIDENCE,
+    MIN_QUALITY_SCORE,
     MULTI_MODAL_UNLOAD_AUDIO_MODEL,
     MULTI_MODAL_WHISPER_MODEL,
     SNAP_TRIM_TO_SEGMENTS,
     SNAP_TRIM_TOLERANCE,
+    TRIM_ASR_PADDING_SECONDS,
     WHISPER_COMPUTE_TYPE,
     WHISPER_DEVICE,
 )
@@ -74,6 +78,16 @@ def analyze_candidate_clip_results(
         if result.judge_status == "judge_failed":
             analyzed.append(result)
             continue
+        if result.judge_status == "review":
+            _annotate_ranges(
+                result,
+                candidate_start,
+                candidate_end,
+                duration,
+                include_trim=True,
+            )
+            analyzed.append(result)
+            continue
         if result.judge_status == "drop" or not result.retain_recommendation:
             result.judge_status = "drop"
             result.retain_recommendation = False
@@ -92,6 +106,16 @@ def analyze_candidate_clip_results(
         if trim_error:
             result.suggested_trim = None
             analyzed.append(_failed_result(artist, trim_error, base=result))
+            continue
+        if route_below_quality_gate_to_review(result):
+            _annotate_ranges(
+                result,
+                candidate_start,
+                candidate_end,
+                duration,
+                include_trim=True,
+            )
+            analyzed.append(result)
             continue
 
         trim = result.suggested_trim
@@ -187,6 +211,15 @@ def analyze_candidate(
     if trim_error:
         result.suggested_trim = None
         return _failed_result(artist, trim_error, base=result)
+    if route_below_quality_gate_to_review(result):
+        _annotate_ranges(
+            result,
+            candidate_start,
+            candidate_end,
+            duration,
+            include_trim=True,
+        )
+        return result
 
     trim = result.suggested_trim
     assert trim is not None
@@ -212,6 +245,48 @@ def unload_candidate_models() -> None:
     unload_asr_models()
 
 
+def route_below_quality_gate_to_review(result: AnalysisResult) -> str:
+    """Route uncertain MiMo keeps to review before ASR or upload work.
+
+    Returns the review reason when the gate rejects automatic publishing,
+    otherwise an empty string. Explicit MiMo drops and judge failures are left
+    unchanged.
+    """
+    if result.judge_status != "keep" or not result.retain_recommendation:
+        return ""
+
+    required = (
+        ("quality_score", result.quality_score, MIN_QUALITY_SCORE),
+        (
+            "completeness_score",
+            result.completeness_score,
+            MIN_COMPLETENESS_SCORE,
+        ),
+        ("confidence", result.confidence, MIN_CONFIDENCE),
+    )
+    failed: list[str] = []
+    for name, value, minimum in required:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            failed.append(f"{name}=missing (minimum {minimum:.2f})")
+            continue
+        if not math.isfinite(numeric) or numeric < float(minimum):
+            rendered = "missing" if not math.isfinite(numeric) else f"{numeric:.2f}"
+            failed.append(f"{name}={rendered} (minimum {minimum:.2f})")
+
+    if not failed:
+        return ""
+
+    reason = "Automatic publish quality gate requires review: " + ", ".join(failed)
+    prior_reason = str(result.quality_reason or "").strip()
+    result.judge_status = "review"
+    result.retain_recommendation = False
+    result.judge_error = reason
+    result.quality_reason = f"{prior_reason}; {reason}" if prior_reason else reason
+    return reason
+
+
 def _run_asr(video_path: str, start_seconds: float, duration_seconds: float) -> dict:
     return analyze_audio(
         video_path,
@@ -230,25 +305,39 @@ def _transcribe_for_trim(
 ) -> tuple[str, str, list[TranscriptSegment]]:
     """Run ASR for the current trim, returning (error, transcript, segments).
 
-    When ``SNAP_TRIM_TO_SEGMENTS`` is enabled, ASR runs once over the whole
-    candidate; the trim endpoints are snapped to the nearest sentence
-    boundaries and the candidate transcript is reused for the trimmed window
-    (avoiding a second ASR pass). Snapping is only accepted when the snapped
-    trim still passes ``_validate_trim`` and yields a usable transcript;
-    otherwise it falls back to a normal ASR pass over the original trim.
-    On success ``result.suggested_trim`` reflects the (possibly snapped) trim.
+    When ``SNAP_TRIM_TO_SEGMENTS`` is enabled, ASR runs over only the requested
+    trim plus a bounded padding window. Endpoints are snapped to nearby speech
+    segment boundaries and that same transcript is reused for subtitles.
+    Snapping is accepted only when the updated trim remains valid.
     """
     trim = result.suggested_trim
     assert trim is not None
 
     if SNAP_TRIM_TO_SEGMENTS:
+        padding = max(0.0, float(TRIM_ASR_PADDING_SECONDS))
+        window_start = max(0.0, float(trim.trim_start) - padding)
+        window_end = float(trim.trim_end) + padding
+        if duration > 0:
+            window_end = min(float(duration), window_end)
         try:
-            candidate_audio = _run_asr(video_path, 0.0, float(duration))
+            window_audio = _run_asr(
+                video_path,
+                window_start,
+                max(0.0, window_end - window_start),
+            )
         except Exception as exc:
             return f"ASR failed: {exc}", "", []
-        candidate_segments = _valid_transcript_segments(
-            candidate_audio.get("segments")
+        window_segments = _valid_transcript_segments(
+            window_audio.get("segments")
         )
+        candidate_segments = [
+            TranscriptSegment(
+                start=segment.start + window_start,
+                end=segment.end + window_start,
+                text=segment.text,
+            )
+            for segment in window_segments
+        ]
         if candidate_segments:
             snapped = snap_trim_to_segments(
                 trim, candidate_segments, SNAP_TRIM_TOLERANCE
@@ -264,7 +353,7 @@ def _transcribe_for_trim(
             )
             if transcript and segments:
                 return "", transcript, segments
-        # Candidate ASR produced nothing reusable; fall back to trimmed ASR.
+        # The padded ASR produced nothing reusable; fall back to the exact trim.
 
     try:
         audio = _run_asr(
@@ -436,7 +525,7 @@ def _failed_result(
     segments: list[TranscriptSegment] | None = None,
     base: AnalysisResult | None = None,
 ) -> AnalysisResult:
-    return AnalysisResult(
+    failed = AnalysisResult(
         title=(base.title if base and base.title else f"{artist} candidate"),
         description=(
             base.description if base and base.description else "Pending manual review"
@@ -457,3 +546,8 @@ def _failed_result(
         transcript=transcript,
         transcript_segments=list(segments or []),
     )
+    if base is not None:
+        for attribute in ("_dedupe_key", "duplicate_of", "duplicate_reason"):
+            if hasattr(base, attribute):
+                setattr(failed, attribute, getattr(base, attribute))
+    return failed

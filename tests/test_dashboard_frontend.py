@@ -54,8 +54,8 @@ def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
     assert "由 Windows 环境管理" in texts["js"]
     assert 'aria-label="切片工作台"' in texts["html"]
     assert "?????" not in texts["html"]
-    assert 'src="/app.js?v=20260709-1"' in texts["html"]
-    assert 'href="/styles.css?v=20260709-1"' in texts["html"]
+    assert 'src="/app.js?v=20260728-1"' in texts["html"]
+    assert 'href="/styles.css?v=20260728-1"' in texts["html"]
 
     for contract in [
         "activateCurrentView",
@@ -311,16 +311,19 @@ def test_frontend_slice_workbench_refresh_contract():
         assert css_contract in texts["css"]
 
 
-def test_frontend_review_workspace_expands_instead_of_first_screen_clamp():
+def test_frontend_desktop_first_three_pane_layout_contract():
     text = FRONTEND_CSS.read_text(encoding="utf-8")
 
-    assert "Desktop review workbench should expand" in text
+    assert "desktop-first review workbench" in text
     assert "height: 540px;" not in text
     assert "height: 132px;" not in text
     assert "max-height: 330px;" not in text
-    assert "grid-template-columns: 280px minmax(560px, 1fr) 320px;" in text
+    assert "grid-template-columns: 280px minmax(520px, 1fr) 340px;" in text
     assert "min-height: 680px;" in text
-    assert "height: 108px;" in text
+    assert "position: sticky;" in text
+    assert "@media (max-width: 1320px) and (min-width: 901px)" in text
+    assert "body.source-queue-open .source-list-panel" in text
+    assert "@media (max-width: 900px)" in text
 
 
 def test_source_recording_refresh_ignores_stale_responses():
@@ -432,7 +435,8 @@ def test_frontend_worker_trigger_contract():
     assert "start_pipeline.ps1" in text
     assert "pollActionJob" in text
     assert "status_url" in text
-    assert "动作执行失败" in text
+    assert "处理等待超过 15 分钟" in text
+    assert "structured.recovery_action" in text
     assert "Windows 重任务节点" in texts["html"]
     assert "Windows 重任务节点" in text
     assert "PC worker" not in texts["html"]
@@ -468,10 +472,86 @@ def test_frontend_keyboard_shortcuts_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")
 
     assert 'document.addEventListener("keydown"' in text
-    for key in ['"k"', '"d"', '"r"', '"j"', '"l"']:
+    for key in ['"k"', '"d"', '"j"', '" "', '"i"', '"o"', '"enter"']:
         assert key in text
     for guard in ["activeElement", "INPUT", "TEXTAREA"]:
         assert guard in text
-    assert "saveFeedback" in text
-    assert "filteredSlices" in text
-    assert "previewVideo" in text
+    for behavior in [
+        "selectRelativeSegment(1)",
+        "selectRelativeSegment(-1)",
+        "toggleSourcePreviewPlayback",
+        'setRangeBoundaryFromPlayhead("start")',
+        'setRangeBoundaryFromPlayhead("end")',
+        "finalizeCurrentSegment",
+        "scheduleDropCurrentSegment",
+        "active?.isContentEditable",
+    ]:
+        assert behavior in text
+
+
+def test_frontend_review_inspector_and_finalize_contract():
+    texts = _frontend_texts()
+
+    for element_id in [
+        "segment-tab-content",
+        "segment-tab-subtitles",
+        "segment-tab-technical",
+        "segment-content-panel",
+        "segment-subtitles-panel",
+        "segment-technical-panel",
+        "segment-failure-summary",
+        "segment-recovery-hint",
+        "segment-raw-error",
+        "workbench-live-region",
+        "action-toast",
+        "action-toast-undo",
+    ]:
+        assert f'id="{element_id}"' in texts["html"]
+
+    assert 'role="tablist"' in texts["html"]
+    assert 'role="tabpanel"' in texts["html"]
+    assert "通过并生成成片" in texts["html"]
+    assert "<pre id=\"segment-raw-error\"" in texts["html"]
+    assert "查看原始错误与命令" in texts["html"]
+
+    for js_contract in [
+        "collectFinalizePayload",
+        "`/api/segments/${encodeURIComponent(segmentId)}/finalize`",
+        "result.status_url",
+        "pollActionJob(result.status_url)",
+        "attempt < 450",
+        "job.failure || {}",
+        "structured.summary || fallback.summary",
+            "structured.recovery_action",
+            "structured.technical_details",
+            "error.technicalDetails",
+            "resumeSelectedSegmentAction",
+            "advanceAfterDecision",
+        "humanizeFailure",
+        "setInspectorTab",
+    ]:
+        assert js_contract in texts["js"]
+    assert "manualKeepFallback" not in texts["js"]
+    assert "[404, 405, 501]" not in texts["js"]
+
+    for css_contract in [
+        ".inspector-tabs",
+        ".review-inspector-body",
+        ".inspector-action-bar",
+        ".inspector-primary-action",
+        ".technical-raw-details pre",
+        ".failure-explanation",
+    ]:
+        assert css_contract in texts["css"]
+
+
+def test_frontend_safe_drop_undo_and_secondary_surfaces_contract():
+    texts = _frontend_texts()
+
+    assert "window.setTimeout(async () =>" in texts["js"]
+    assert "}, 5000);" in texts["js"]
+    assert "undoPendingDrop" in texts["js"]
+    assert 'showActionToast("将在 5 秒后丢弃当前候选", { undo: true })' in texts["js"]
+    assert "secondary-operations" in texts["html"]
+    assert texts["html"].count("secondary-disclosure") >= 4
+    assert ".secondary-operations" in texts["css"]

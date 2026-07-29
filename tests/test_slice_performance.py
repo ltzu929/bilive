@@ -22,11 +22,29 @@ def test_slice_performance_available_false_when_absent(tmp_path):
     db_path = tmp_path / "missing.db"
     # No migration → table absent → available() must be False (no build).
     assert conn.slice_performance_available(db_path) is False
+    assert not db_path.exists()
 
 
 def test_get_slice_performance_returns_empty_when_table_absent(tmp_path):
     db_path = tmp_path / "missing.db"
     assert conn.get_slice_performance(db_path) == []
+    assert not db_path.exists()
+
+
+def test_migrate_slice_performance_adds_confidence_to_existing_table(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    with conn.connect(db_path) as db:
+        db.execute(
+            "create table slice_performance (bvid text primary key, title text)"
+        )
+
+    conn.migrate_slice_performance(db_path)
+    with conn.connect(db_path) as db:
+        columns = {
+            row["name"] for row in db.execute("pragma table_info(slice_performance)")
+        }
+
+    assert "confidence" in columns
 
 
 def test_upsert_partial_columns_do_not_clobber(tmp_path):
@@ -91,6 +109,7 @@ def test_mark_upload_published_snapshots_features(tmp_path):
     features = {
         "title": "highlight",
         "quality_score": 0.9,
+        "confidence": 0.88,
         "lag_seconds": 3.0,
         "burst_ratio": 2.5,
         "danmaku_count": 42,
@@ -105,6 +124,7 @@ def test_mark_upload_published_snapshots_features(tmp_path):
     assert row["bvid"] == "BVabc"
     assert row["title"] == "highlight"
     assert row["quality_score"] == 0.9
+    assert row["confidence"] == 0.88
     assert row["danmaku_count"] == 42
     assert row["video_path"] == video_path
     assert row["collected_at"] == 100.0
@@ -135,6 +155,7 @@ def test_feature_sidecar_roundtrip(tmp_path):
         {
             "title": "t",
             "quality_score": 0.7,
+            "confidence": 0.83,
             "danmaku_count": None,  # None is dropped
             "unknown": "ignored",  # not in SLICE_FEATURE_FIELDS
         },
@@ -142,7 +163,7 @@ def test_feature_sidecar_roundtrip(tmp_path):
     assert slice_metadata.slice_features_path(video).is_file()
 
     data = slice_metadata.read_slice_features(video)
-    assert data == {"title": "t", "quality_score": 0.7}
+    assert data == {"title": "t", "quality_score": 0.7, "confidence": 0.83}
 
     slice_metadata.delete_slice_features(video)
     assert slice_metadata.read_slice_features(video) is None

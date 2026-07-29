@@ -16,6 +16,7 @@ from openai import OpenAI
 from src.autoslice.analysis_result import AnalysisResult, TrimSuggestion
 from src.config import (
     MIMO_BASE_URL,
+    MIMO_ENCODE_PARALLELISM,
     MIMO_FPS,
     MIMO_MAX_BASE64_BYTES,
     MIMO_MEDIA_RESOLUTION,
@@ -52,6 +53,7 @@ class EncodedMimoVideo:
 
 
 _status_lock = threading.Lock()
+_encode_semaphore = threading.BoundedSemaphore(max(1, MIMO_ENCODE_PARALLELISM))
 _status: dict[str, Any] = {
     "status": "idle",
     "provider": MIMO_MODEL,
@@ -84,44 +86,45 @@ def encode_video_for_mimo(
 ) -> EncodedMimoVideo:
     """Return a Base64 data URL for a temporary 720p H.264/AAC copy."""
 
-    attempts = [
-        ("900k", "96k"),
-        ("450k", "64k"),
-    ]
-    last_size = 0
-    with temporary_directory(prefix="bilive_mimo_") as temp_dir:
-        temp_root = Path(temp_dir)
-        for index, (video_bitrate, audio_bitrate) in enumerate(attempts, start=1):
-            output = temp_root / f"analysis_{index}.mp4"
-            command = _ffmpeg_analysis_copy_command(
-                video_path,
-                output,
-                video_bitrate=video_bitrate,
-                audio_bitrate=audio_bitrate,
-            )
-            run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=3600,
-            )
-            encoded = base64.b64encode(output.read_bytes())
-            last_size = len(encoded)
-            if last_size <= int(max_base64_bytes):
-                return EncodedMimoVideo(
-                    url=f"data:video/mp4;base64,{encoded.decode('ascii')}",
-                    base64_bytes=last_size,
+    with _encode_semaphore:
+        attempts = [
+            ("900k", "96k"),
+            ("450k", "64k"),
+        ]
+        last_size = 0
+        with temporary_directory(prefix="bilive_mimo_") as temp_dir:
+            temp_root = Path(temp_dir)
+            for index, (video_bitrate, audio_bitrate) in enumerate(attempts, start=1):
+                output = temp_root / f"analysis_{index}.mp4"
+                command = _ffmpeg_analysis_copy_command(
+                    video_path,
+                    output,
+                    video_bitrate=video_bitrate,
+                    audio_bitrate=audio_bitrate,
                 )
-            scan_log.warning(
-                "MiMo analysis copy base64 payload is too large "
-                f"({last_size} bytes), retrying with lower bitrate"
-            )
-    raise MimoVideoTooLarge(
-        "MiMo base64 payload exceeds "
-        f"{int(max_base64_bytes)} bytes after retry (last={last_size})"
-    )
+                run(
+                    command,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=3600,
+                )
+                encoded = base64.b64encode(output.read_bytes())
+                last_size = len(encoded)
+                if last_size <= int(max_base64_bytes):
+                    return EncodedMimoVideo(
+                        url=f"data:video/mp4;base64,{encoded.decode('ascii')}",
+                        base64_bytes=last_size,
+                    )
+                scan_log.warning(
+                    "MiMo analysis copy base64 payload is too large "
+                    f"({last_size} bytes), retrying with lower bitrate"
+                )
+        raise MimoVideoTooLarge(
+            "MiMo base64 payload exceeds "
+            f"{int(max_base64_bytes)} bytes after retry (last={last_size})"
+        )
 
 
 def _ffmpeg_analysis_copy_command(
@@ -390,7 +393,6 @@ def _analysis_from_mimo_dict(
         "title",
         "description",
         "tags",
-        "quality_score",
         "trim_start",
         "trim_end",
     }
@@ -454,20 +456,23 @@ def _analysis_from_mimo_dict(
             model=model,
         )
 
-    try:
-        quality_score = float(data.get("quality_score"))
-    except (TypeError, ValueError):
-        return _failed_result(
-            artist,
-            "MiMo response quality_score must be numeric",
-            model=model,
+    quality_score, quality_issue = _strict_score(data, "quality_score")
+    completeness_score = 0.0
+    confidence = 0.0
+    score_issues = [quality_issue] if quality_issue else []
+    if retain:
+        completeness_score, completeness_issue = _strict_score(
+            data,
+            "completeness_score",
         )
-    if not math.isfinite(quality_score) or not 0.0 <= quality_score <= 1.0:
-        return _failed_result(
-            artist,
-            "MiMo response quality_score must be between 0 and 1",
-            model=model,
+        confidence, confidence_issue = _strict_score(data, "confidence")
+        score_issues.extend(
+            issue
+            for issue in (completeness_issue, confidence_issue)
+            if issue
         )
+    elif quality_issue:
+        return _failed_result(artist, quality_issue, model=model)
 
     trim = None
     if retain:
@@ -494,7 +499,7 @@ def _analysis_from_mimo_dict(
             model=model,
         )
 
-    return AnalysisResult(
+    result = AnalysisResult(
         title=title_value.strip(),
         description=description_value.strip(),
         tags=[tag.strip() for tag in tags if tag.strip()],
@@ -505,7 +510,19 @@ def _analysis_from_mimo_dict(
         judge_error="",
         suggested_trim=trim,
         model_name=model,
+        completeness_score=completeness_score,
+        confidence=confidence,
     )
+    if retain and score_issues:
+        review_reason = (
+            "Automatic publish quality gate requires review: "
+            + ", ".join(score_issues)
+        )
+        result.judge_status = "review"
+        result.retain_recommendation = False
+        result.judge_error = review_reason
+        result.quality_reason = f"{reason}; {review_reason}"
+    return result
 
 
 def _analysis_list_from_mimo_dict(
@@ -517,7 +534,7 @@ def _analysis_list_from_mimo_dict(
     clips = data.get("clips")
     if clips is None:
         single = _analysis_from_mimo_dict(data, artist=artist, model=model)
-        if single.judge_status == "keep":
+        if single.judge_status in {"keep", "review"}:
             return MimoClipResults([single])
         if single.judge_status == "judge_failed":
             return MimoClipResults([single])
@@ -551,29 +568,29 @@ def _analysis_list_from_mimo_dict(
             )
             continue
         result = _analysis_from_mimo_dict(clip, artist=artist, model=model)
-        if result.judge_status == "keep":
+        if result.judge_status in {"keep", "review"}:
             result.clip_type = str(clip.get("clip_type") or "").strip()
             result.topic_summary = str(clip.get("topic_summary") or "").strip()
             result.why_viewer_would_watch = str(
                 clip.get("why_viewer_would_watch") or ""
             ).strip()
-            result.completeness_score = _bounded_float(
-                clip.get("completeness_score"),
-                default=0.0,
-            )
-            result.confidence = _bounded_float(clip.get("confidence"), default=0.0)
             results.append(result)
     return results
 
 
-def _bounded_float(value: Any, *, default: float) -> float:
+def _strict_score(data: dict[str, Any], field: str) -> tuple[float, str]:
+    if field not in data or data.get(field) is None:
+        return 0.0, f"{field}=missing"
+    value = data.get(field)
+    if isinstance(value, bool):
+        return 0.0, f"{field}=invalid"
     try:
         parsed = float(value)
     except (TypeError, ValueError):
-        return default
-    if not math.isfinite(parsed):
-        return default
-    return max(0.0, min(1.0, parsed))
+        return 0.0, f"{field}=invalid"
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        return 0.0, f"{field}=out_of_range"
+    return parsed, ""
 
 
 def _usage_to_dict(usage: Any) -> dict[str, Any]:

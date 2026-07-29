@@ -12,7 +12,7 @@ def test_watcher_once_processes_pending_and_exits(monkeypatch):
         calls.append(videos_dir)
         return 2
 
-    monkeypatch.setattr(watcher, "process_pending_videos", fake_process_pending)
+    monkeypatch.setattr(watcher, "process_pending_until_quiet", fake_process_pending)
 
     assert watcher.main(["--once", "--videos-dir", "D:/alldata/pi/bilive/Videos"]) == 0
     assert calls == ["D:/alldata/pi/bilive/Videos"]
@@ -244,6 +244,31 @@ def test_watcher_processes_action_jobs_without_video_markers(monkeypatch, tmp_pa
 
     assert watcher.process_pending_videos(videos) == 1
     assert calls == [videos.resolve()]
+
+
+def test_one_shot_drain_rescans_after_processing_existing_work(
+    monkeypatch,
+    tmp_path,
+):
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    passes = iter((1, 1, 0, 0))
+    calls = []
+    monkeypatch.setattr(
+        watcher,
+        "_process_pending_root",
+        lambda root: calls.append(root) or next(passes),
+    )
+    monkeypatch.setattr(watcher, "count_pending_action_jobs", lambda _root: 0)
+
+    processed = watcher.process_pending_until_quiet(
+        videos,
+        quiet_checks=2,
+        quiet_delay=0,
+    )
+
+    assert processed == 2
+    assert len(calls) == 4
 
 
 def test_process_pending_videos_does_not_start_legacy_managed_llm(monkeypatch, tmp_path):

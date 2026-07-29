@@ -34,8 +34,9 @@ burst_merge_gap = 5
 burst_top_n = 3
 # 弹幕相对真实爆点的滞后补偿（秒），切窗锚点前移；0 表示不补偿
 burst_lag_seconds = 0.0
-# 送 MiMo 的弹幕是否带 [mm:ss] 完整时间轴（true 时超长从中间丢弃保留头尾）
-danmaku_timeline = false
+# 送 MiMo 的弹幕带 [mm:ss] 时间轴；超长时保留开头、爆点附近和结尾
+danmaku_timeline = true
+danmaku_max_chars = 4000
 
 [slice.llm_judge]
 provider = "managed-llama-server"
@@ -58,6 +59,11 @@ whisper_model = "large-v3"
 whisper_engine = "faster-whisper"
 whisper_device = "cpu"
 whisper_compute_type = "int8"
+whisper_batch_size = 8
+whisper_cpu_threads = 8
+whisper_vad_filter = true
+whisper_vad_min_silence_ms = 2000
+whisper_vad_speech_pad_ms = 400
 unload_audio_model_after_analysis = true
 
 [slice.mimo]
@@ -67,13 +73,22 @@ fps = 1.0
 media_resolution = "default"
 timeout = 180
 max_base64_bytes = 48000000
+# 兼容旧 parallelism；请求并发与本地编码并发分开配置
+request_parallelism = 3
+encode_parallelism = 1
+
+[slice.quality]
+# 严格自动投稿闸门；任一分数缺失或低于阈值时仅保留人工复核
+min_quality_score = 0.80
+min_completeness_score = 0.80
+min_confidence = 0.80
 
 [slice.analysis]
 write_analysis_json = true
-# 将 MiMo 的 trim 端点吸附到附近 ASR 句子边界（默认关；开启会多一遍候选级 ASR）
-snap_trim_to_segments = false
-# 吸附容差（秒）：trim 端点在此范围内才会对齐到句子边界
-snap_trim_tolerance = 2.0
+# 仅转写 MiMo trim 前后的小窗口，并把端点吸附到附近句子边界
+snap_trim_to_segments = true
+snap_trim_tolerance = 3.0
+trim_asr_padding_seconds = 6.0
 
 [slice.edit]
 enable_edit_instruction = true

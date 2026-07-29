@@ -17,6 +17,7 @@ DATA_BASE_FILE = os.environ.get(
 )
 
 UPLOAD_STATUSES = (
+    "staged",
     "queued",
     "uploading",
     "uploaded",
@@ -185,6 +186,109 @@ def insert_upload_queue(
     except sqlite3.IntegrityError:
         logger.warning("insert_upload_queue skipped duplicate video_path=%s", video_path)
         return False
+
+
+def stage_upload_queue(
+    video_path: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Create an upload row that consumers cannot claim yet."""
+    path = str(video_path)
+    now = time.time()
+    with connect(db_path) as db:
+        item = _fetch_item(db, path)
+        if item is None:
+            db.execute(
+                """
+                insert into upload_queue (
+                    video_path, locked, status, remote_filename, attempts,
+                    next_attempt_at, last_error, bvid, updated_at
+                ) values (?, 0, 'staged', '', 0, 0, '', '', ?)
+                """,
+                (path, now),
+            )
+            item = _fetch_item(db, path)
+            assert item is not None
+            item["created"] = True
+            return item
+        if str(item.get("status") or "") == "failed":
+            db.execute(
+                """
+                update upload_queue
+                set status = 'staged',
+                    locked = 0,
+                    attempts = 0,
+                    next_attempt_at = 0,
+                    last_error = '',
+                    updated_at = ?
+                where video_path = ? and status = 'failed'
+                """,
+                (now, path),
+            )
+            item = _fetch_item(db, path)
+        assert item is not None
+        item["created"] = False
+        return item
+
+
+def activate_staged_upload(
+    video_path: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Expose a staged row after its segment state is durably complete."""
+    path = str(video_path)
+    now = time.time()
+    with connect(db_path) as db:
+        item = _fetch_item(db, path)
+        if item is None:
+            return None
+        if str(item.get("status") or "") == "staged":
+            next_status = (
+                "uploaded"
+                if str(item.get("remote_filename") or "").strip()
+                else "queued"
+            )
+            db.execute(
+                """
+                update upload_queue
+                set status = ?, locked = 0, updated_at = ?
+                where video_path = ? and status = 'staged'
+                """,
+                (next_status, now, path),
+            )
+            item = _fetch_item(db, path)
+        return item
+
+
+def requeue_failed_upload(
+    video_path: str,
+    db_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Make an explicitly failed item eligible again without re-uploading CDN bytes."""
+    updated_at = time.time()
+    with connect(db_path) as db:
+        item = _fetch_item(db, video_path)
+        if item is None or str(item.get("status") or "") != "failed":
+            return item
+        next_status = (
+            "uploaded"
+            if str(item.get("remote_filename") or "").strip()
+            else "queued"
+        )
+        db.execute(
+            """
+            update upload_queue
+            set status = ?,
+                locked = 0,
+                attempts = 0,
+                next_attempt_at = 0,
+                last_error = '',
+                updated_at = ?
+            where video_path = ? and status = 'failed'
+            """,
+            (next_status, updated_at, str(video_path)),
+        )
+        return _fetch_item(db, video_path)
 
 
 def peek_next_upload(
@@ -578,6 +682,7 @@ SLICE_PERFORMANCE_COLUMNS = (
     "title",
     "quality_score",
     "completeness_score",
+    "confidence",
     "burst_ratio",
     "burst_context",
     "lag_seconds",
@@ -608,6 +713,7 @@ def migrate_slice_performance(db_path: str | Path | None = None) -> None:
                 title text default '',
                 quality_score real,
                 completeness_score real,
+                confidence real,
                 burst_ratio real,
                 burst_context real,
                 lag_seconds real,
@@ -626,11 +732,22 @@ def migrate_slice_performance(db_path: str | Path | None = None) -> None:
             )
             """
         )
+        existing = {
+            str(row["name"])
+            for row in db.execute("pragma table_info(slice_performance)")
+        }
+        if "confidence" not in existing:
+            db.execute(
+                "alter table slice_performance add column confidence real"
+            )
 
 
 def slice_performance_available(db_path: str | Path | None = None) -> bool:
+    path = Path(_database_path(db_path))
+    if not path.is_file():
+        return False
     try:
-        with connect(db_path) as db:
+        with connect(path) as db:
             row = db.execute(
                 "select name from sqlite_master "
                 "where type = 'table' and name = 'slice_performance'"
@@ -689,8 +806,11 @@ def get_slice_performance(
     Returns an empty list when the table is absent (read-only callers must not
     trigger migration).
     """
+    path = Path(_database_path(db_path))
+    if not path.is_file():
+        return []
     try:
-        with connect(db_path) as db:
+        with connect(path) as db:
             rows = db.execute(
                 "select * from slice_performance "
                 "order by coalesce(view, 0) desc, coalesce(collected_at, 0) desc"

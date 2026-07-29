@@ -4,7 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bilive Studio · 切片工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260709-1" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%231f6feb'/%3E%3Cpath d='M19 14h16c10 0 15 4 15 12 0 5-2 8-6 10 5 2 7 6 7 12 0 9-6 14-17 14H19V14zm12 19h4c4 0 6-2 6-5s-2-5-6-5h-4v10zm0 20h5c4 0 7-2 7-6s-3-6-7-6h-5v12z' fill='white'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/styles.css?v=20260728-1" />
     <script src="/cache-reset.js"></script>
   </head>
   <body>
@@ -51,25 +55,31 @@
                 <span id="task-state-label">等待任务</span>
               </span>
             </div>
-            <p>Bilive Studio / 自动切片 / 任务详情</p>
+            <p>审核候选、校准边界并生成可投稿成片</p>
           </div>
           <div class="toolbar-controls review-command-bar">
             <span id="worker-badge" class="worker-badge worker-idle" title="Windows 重任务节点状态">
               Windows 重任务节点：检测中
             </span>
+            <button id="source-queue-toggle" class="btn-secondary queue-drawer-toggle" type="button" aria-controls="source-queue-panel" aria-expanded="false">录播队列</button>
             <button id="refresh-button" class="btn-secondary" type="button">刷新</button>
-            <button id="stop-slice-button" class="btn-danger" type="button" disabled>停止</button>
-            <button id="start-selected-slice-button" class="btn-secondary" type="button" disabled>切当前录播</button>
-            <button id="start-slice-button" class="btn-primary" type="button">启动切片</button>
+            <button id="stop-slice-button" class="btn-danger" type="button" disabled>停止任务</button>
+            <button id="start-selected-slice-button" class="btn-secondary" type="button" disabled>处理当前录播</button>
+            <button id="start-slice-button" class="btn-primary" type="button">启动待处理任务</button>
           </div>
         </header>
 
         <section class="page workbench-refresh-surface">
-          <div id="error" class="error hidden"></div>
+          <div id="error" class="error hidden" role="alert"></div>
+          <div id="workbench-live-region" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+          <div id="action-toast" class="action-toast hidden" role="status" aria-live="polite">
+            <span id="action-toast-message"></span>
+            <button id="action-toast-undo" class="btn-secondary btn-compact hidden" type="button">撤销</button>
+          </div>
 
-          <section id="slice-progress-panel" class="overview-card progress-panel" aria-live="polite">
+          <section id="slice-progress-panel" class="overview-card progress-panel compact-status-strip" aria-live="polite">
             <div class="overview-file">
-              <div class="eyebrow">当前处理文件</div>
+              <div class="eyebrow">当前任务</div>
               <div id="slice-progress-source" class="current-file">-</div>
               <div id="slice-progress-file" class="file-meta">-</div>
               <div id="slice-progress-message" class="file-meta">暂无切片任务</div>
@@ -84,11 +94,14 @@
               </div>
             </div>
 
-            <section id="slice-diagnostics-panel" class="diagnostics-panel" aria-live="polite">
+            <details id="slice-diagnostics-panel" class="diagnostics-panel secondary-disclosure">
+              <summary>
+                <span>处理诊断</span>
+                <span id="slice-progress-title" class="phase-badge">空闲</span>
+              </summary>
               <div class="diagnostics-header">
                 <div>
                   <span class="diagnostics-title">处理流程</span>
-                  <span id="slice-progress-title" class="phase-badge">空闲</span>
                 </div>
                 <div class="diagnostics-meta">
                   <span id="slice-diagnostics-source">-</span>
@@ -98,7 +111,7 @@
               <div id="slice-diagnostics-list" class="diagnostics-list">
                 <div class="diagnostic-empty">正在加载诊断信息</div>
               </div>
-            </section>
+            </details>
 
             <div class="overview-stats workbench-signals" aria-label="工作台信号">
               <div class="stat-card">
@@ -120,21 +133,21 @@
             </div>
           </section>
 
-          <section id="failure-inbox-panel" class="failure-inbox-panel panel" aria-label="失败收件箱">
-            <div class="panel-header">
+          <details id="failure-inbox-panel" class="failure-inbox-panel panel secondary-disclosure" aria-label="失败收件箱">
+            <summary class="panel-header">
               <div class="panel-title">
-                <strong>失败收件箱</strong>
+                <strong>需要处理</strong>
                 <span id="failure-inbox-count">0 个待处理问题</span>
               </div>
-              <span class="panel-meta">按阻塞程度排序，点击定位到精修上下文</span>
-            </div>
+              <span class="panel-meta">展开查看失败与恢复建议</span>
+            </summary>
             <div id="failure-inbox-list" class="failure-inbox-list panel-body">
               <div class="task-empty">当前没有需要处理的失败项</div>
             </div>
-          </section>
+          </details>
 
           <div class="review-workspace workbench source-workbench">
-            <section class="review-queue panel source-list-panel" aria-label="UP 主队列">
+            <section id="source-queue-panel" class="review-queue panel source-list-panel" aria-label="UP 主队列">
               <div class="panel-header">
                 <div class="panel-title">
                   <strong>UP 主队列</strong>
@@ -200,6 +213,8 @@
                     <div class="meta-chip"><span>峰值倍率</span><strong id="burst-ratio">-</strong></div>
                     <div class="meta-chip"><span>弹幕数</span><strong id="danmaku-count">-</strong></div>
                     <div class="meta-chip"><span>质量分</span><strong id="quality-score">-</strong></div>
+                    <div class="meta-chip"><span>完整度</span><strong id="completeness-score">-</strong></div>
+                    <div class="meta-chip"><span>置信度</span><strong id="confidence-score">-</strong></div>
                   </div>
                   <div class="segment-strip-card" aria-label="候选片段导航">
                     <div class="segment-strip-header">
@@ -217,98 +232,125 @@
               </div>
             </section>
 
-            <section id="segment-panel" class="review-panel panel segment-panel" aria-label="人工判断">
-              <div class="panel-header">
+            <section id="segment-panel" class="review-panel panel segment-panel" aria-label="候选审核">
+              <div class="panel-header review-inspector-header">
                 <div class="panel-title">
-                  <strong>人工判断</strong>
-                  <span>审核当前候选片段</span>
+                  <strong>审核检查器</strong>
+                  <span>确认内容与边界后生成成片</span>
                 </div>
-                <span id="segment-status" class="panel-meta status-pill">-</span>
+                <span id="segment-status" class="panel-meta status-pill" aria-live="polite">-</span>
               </div>
-              <div class="panel-body feedback-body">
-                <div class="review-summary">
-                  <span class="review-symbol">AI</span>
-                  <div>
-                    <strong>模型判断结果</strong>
-                    <span>结合峰值弹幕、转录内容与片段质量进行人工复核</span>
-                  </div>
-                </div>
 
-                <label class="field">
-                  <span>标题</span>
-                  <input id="segment-title" type="text" />
-                </label>
-                <label class="field">
-                  <span>描述</span>
-                  <textarea id="segment-description" rows="3"></textarea>
-                </label>
-                <label class="field tag-input">
-                  <span>标签</span>
-                  <input id="segment-tags" type="text" placeholder="直播切片, 聊天, 弹幕互动" />
-                </label>
-                <label class="field">
-                  <span>判断原因</span>
-                  <textarea id="quality-reason" rows="5"></textarea>
-                </label>
-                <div class="range-field">
-                  <span>裁剪区间</span>
-                  <div class="range-row">
-                    <label class="field"><span>入点</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
-                    <label class="field"><span>出点</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
+              <div class="inspector-tabs" role="tablist" aria-label="审核信息">
+                <button id="segment-tab-content" class="inspector-tab active" type="button" role="tab" aria-selected="true" aria-controls="segment-content-panel" data-inspector-tab="content">内容</button>
+                <button id="segment-tab-subtitles" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="segment-subtitles-panel" data-inspector-tab="subtitles">字幕</button>
+                <button id="segment-tab-technical" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="segment-technical-panel" data-inspector-tab="technical">技术详情</button>
+              </div>
+
+              <div class="panel-body feedback-body review-inspector-body">
+                <section id="segment-content-panel" class="inspector-tab-panel" role="tabpanel" aria-labelledby="segment-tab-content" data-inspector-panel="content">
+                  <div class="review-summary">
+                    <span class="review-symbol">AI</span>
+                    <div>
+                      <strong>模型建议</strong>
+                      <span>结合转录、弹幕峰值和质量分人工复核</span>
+                    </div>
                   </div>
+
+                  <label class="field">
+                    <span>标题</span>
+                    <input id="segment-title" type="text" autocomplete="off" />
+                  </label>
+                  <label class="field">
+                    <span>描述</span>
+                    <textarea id="segment-description" rows="3"></textarea>
+                  </label>
+                  <label class="field tag-input">
+                    <span>标签</span>
+                    <input id="segment-tags" type="text" autocomplete="off" placeholder="直播切片, 聊天, 弹幕互动" />
+                  </label>
+                  <label class="field">
+                    <span>判断原因</span>
+                    <textarea id="quality-reason" rows="4"></textarea>
+                  </label>
+                  <div class="range-field">
+                    <span>裁剪区间</span>
+                    <div class="range-row">
+                      <label class="field"><span>入点</span><input id="manual-start" type="number" min="0" step="0.1" /></label>
+                      <label class="field"><span>出点</span><input id="manual-end" type="number" min="0" step="0.1" /></label>
+                    </div>
+                  </div>
+                  <div id="range-draft-status" class="range-draft-status">区间未修改</div>
+                </section>
+
+                <section id="segment-subtitles-panel" class="inspector-tab-panel hidden" role="tabpanel" aria-labelledby="segment-tab-subtitles" data-inspector-panel="subtitles">
+                  <div class="review-note">字幕样式会随“通过并生成成片”一起提交，也可单独保存后重烧。</div>
+                  <div id="subtitle-style-panel" class="subtitle-style">
+                    <div class="subtitle-style-grid">
+                      <label class="field"><span>字号</span><input id="subtitle-font-size" type="number" min="8" step="1" placeholder="20" /></label>
+                      <label class="field"><span>底边距</span><input id="subtitle-margin-v" type="number" min="0" step="1" placeholder="60" /></label>
+                      <label class="field">
+                        <span>位置</span>
+                        <select id="subtitle-alignment">
+                          <option value="">默认</option>
+                          <option value="1">左下</option>
+                          <option value="2">底部居中</option>
+                          <option value="3">右下</option>
+                          <option value="5">左上</option>
+                          <option value="8">顶部居中</option>
+                        </select>
+                      </label>
+                      <label class="field"><span>描边</span><input id="subtitle-outline" type="number" min="0" step="0.5" placeholder="默认" /></label>
+                    </div>
+                    <div class="segment-actions subtitle-actions">
+                      <button id="subtitle-save-button" class="btn-secondary" type="button">保存字幕样式</button>
+                      <button id="subtitle-reburn-button" class="render-button" type="button">重新烧录字幕</button>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="segment-technical-panel" class="inspector-tab-panel hidden" role="tabpanel" aria-labelledby="segment-tab-technical" data-inspector-panel="technical">
+                  <div class="failure-explanation">
+                    <strong id="segment-failure-summary">当前没有技术故障</strong>
+                    <span id="segment-recovery-hint">如需重新处理，可使用下方修复动作。</span>
+                  </div>
+                  <details class="technical-raw-details">
+                    <summary>查看原始错误与命令</summary>
+                    <pre id="segment-raw-error">无</pre>
+                  </details>
+                  <details class="repair-menu">
+                    <summary>修复与高级操作</summary>
+                    <div class="segment-actions repair-actions">
+                      <button id="segment-save-render-button" type="button">保存边界并重渲染</button>
+                      <button id="segment-retry-button" type="button">重新分析</button>
+                      <button id="segment-render-button" class="render-button" type="button">重新渲染片段</button>
+                    </div>
+                  </details>
+                </section>
+              </div>
+
+              <div class="inspector-action-bar">
+                <span class="shortcut-hint">J/K 切换 · 空格播放 · I/O 定边界</span>
+                <div class="inspector-secondary-actions">
+                  <button id="save-button" class="btn-secondary" type="button">保存边界</button>
+                  <button id="segment-drop-button" class="btn-drop" type="button">丢弃</button>
                 </div>
-                <div class="review-note">
-                  修改区间后可直接保存并重新渲染，无需重新分析整段录播。
-                </div>
-                <div id="range-draft-status" class="range-draft-status">区间未修改</div>
-                <div class="segment-actions decision-actions">
-                  <button id="segment-keep-button" class="btn-keep" type="button">保留片段</button>
-                  <button id="segment-drop-button" class="btn-drop" type="button">丢弃片段</button>
-                  <button id="save-button" type="button">保存区间</button>
-                  <button id="segment-save-render-button" type="button">保存并重渲染</button>
-                  <button id="segment-retry-button" type="button">重新分析</button>
-                  <button id="segment-render-button" class="render-button" type="button">重新渲染片段</button>
-                </div>
-                <details class="subtitle-style" id="subtitle-style-panel">
-                  <summary>字幕样式</summary>
-                  <div class="subtitle-style-grid">
-                    <label class="field"><span>字号</span><input id="subtitle-font-size" type="number" min="8" step="1" placeholder="20" /></label>
-                    <label class="field"><span>底边距</span><input id="subtitle-margin-v" type="number" min="0" step="1" placeholder="60" /></label>
-                    <label class="field">
-                      <span>位置</span>
-                      <select id="subtitle-alignment">
-                        <option value="">默认</option>
-                        <option value="1">左下</option>
-                        <option value="2">底部居中</option>
-                        <option value="3">右下</option>
-                        <option value="5">左上</option>
-                        <option value="8">顶部居中</option>
-                      </select>
-                    </label>
-                    <label class="field"><span>描边</span><input id="subtitle-outline" type="number" min="0" step="0.5" placeholder="默认" /></label>
-                  </div>
-                  <div class="review-note">
-                    先保存样式，再点击“重新烧录字幕”让 Windows Worker 用当前样式重烧候选。
-                  </div>
-                  <div class="segment-actions">
-                    <button id="subtitle-save-button" type="button">保存字幕样式</button>
-                    <button id="subtitle-reburn-button" class="render-button" type="button">重新烧录字幕</button>
-                  </div>
-                </details>
+                <button id="segment-keep-button" class="btn-keep inspector-primary-action" type="button">通过并生成成片</button>
               </div>
             </section>
           </div>
 
-          <section id="publish-panel" class="publish-panel panel" aria-label="投稿流水线">
-            <div class="panel-header">
+          <section class="secondary-operations" aria-label="次要管理面板">
+          <details id="publish-panel" class="publish-panel panel secondary-disclosure" aria-label="投稿流水线">
+            <summary class="panel-header">
               <div class="panel-title">
                 <strong>投稿流水线</strong>
                 <span id="publish-queue-count">0 个项目</span>
               </div>
-              <div class="publish-actions">
-                <button id="publish-refresh-button" class="btn-secondary btn-compact" type="button">刷新</button>
-                <button id="publish-wake-button" class="btn-primary btn-compact" type="button">唤醒上传节点</button>
-              </div>
+            </summary>
+            <div class="publish-actions secondary-panel-actions">
+              <button id="publish-refresh-button" class="btn-secondary btn-compact" type="button">刷新</button>
+              <button id="publish-wake-button" class="btn-primary btn-compact" type="button">唤醒上传节点</button>
             </div>
             <div class="publish-overview" aria-label="投稿状态统计">
               <div class="publish-metric"><span>待上传</span><strong id="publish-count-queued">0</strong></div>
@@ -319,34 +361,35 @@
             <div id="publish-queue-list" class="publish-queue-compact panel-body">
               <div class="task-empty">正在读取投稿队列</div>
             </div>
-          </section>
+          </details>
 
-          <section id="performance-panel" class="publish-panel panel" aria-label="切片表现">
-            <div class="panel-header">
+          <details id="performance-panel" class="publish-panel panel secondary-disclosure" aria-label="切片表现">
+            <summary class="panel-header">
               <div class="panel-title">
                 <strong>切片表现</strong>
                 <span id="performance-count">0 个切片</span>
               </div>
-              <div class="publish-actions">
-                <button id="performance-refresh-button" class="btn-secondary btn-compact" type="button">刷新</button>
-              </div>
+            </summary>
+            <div class="publish-actions secondary-panel-actions">
+              <button id="performance-refresh-button" class="btn-secondary btn-compact" type="button">刷新</button>
             </div>
             <div id="performance-body" class="panel-body">
               <div class="task-empty">正在读取切片表现</div>
             </div>
-          </section>
+          </details>
 
-          <section id="task-panel" class="task-panel" aria-live="polite">
-            <div class="task-header">
+          <details id="task-panel" class="task-panel secondary-disclosure" aria-live="polite">
+            <summary class="task-header">
               <div>
                 <span class="task-title">运行任务详情</span>
                 <span id="task-count" class="task-count">0 items</span>
               </div>
-              <button id="task-toggle" class="task-toggle" type="button" aria-expanded="true">折叠</button>
-            </div>
+              <span id="task-toggle" class="task-toggle" aria-hidden="true">展开</span>
+            </summary>
             <div id="task-list" class="task-list">
               <div class="task-empty">正在加载任务状态</div>
             </div>
+          </details>
           </section>
 
           <div class="legacy-slice-hidden hidden" aria-hidden="true">
@@ -429,6 +472,6 @@
         </div>
       </main>
     </div>
-    <script src="/app.js?v=20260709-1"></script>
+    <script src="/app.js?v=20260728-1"></script>
   </body>
 </html>
