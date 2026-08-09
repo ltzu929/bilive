@@ -1,5 +1,20 @@
 # 运维手册
 
+## Native Angular entry points
+
+Use the single Tailnet entry `https://ubuntu.tail699f46.ts.net:2233/tasks` for
+the recorder shell. Open the native Studio pages from its menu or directly:
+
+- `/studio/slices` — three-column slice review workbench;
+- `/studio/uploads` — upload/publish queue status;
+- `/studio/settings` — browser preferences and read-only pipeline settings.
+
+The old `/studio-proxy/*` iframe path and the static dashboard files no longer
+exist. Studio API and media requests use same-origin `/studio-api/*`; only the
+recorder process serves public HTTP, while dashboard port `2234` remains
+internal. After deployment, hard-refresh once to activate the new Angular
+service-worker manifest.
+
 ## Windows 首次安装
 
 ```powershell
@@ -128,8 +143,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 在 Tailnet 中优先从统一入口
 `https://ubuntu.tail699f46.ts.net:2233/tasks` 打开原生 Angular 录播控制台。
 切片、上传和工作台设置位于 `/studio/slices`、`/studio/uploads`、
-`/studio/settings`；迁移期间旧工作台通过同源 `/studio-proxy/*` 由录播端
-代理到本机 `2234`，浏览器不需要再暴露第二个 Tailnet 端口。
+`/studio/settings`。浏览器通过同源 `/studio-api/*` 网关访问本机 `2234/api/*`，
+不再暴露旧 iframe 或第二个 Tailnet 端口。
 
 ```bash
 sudo tailscale serve --bg --yes --https=2233 http://127.0.0.1:2233

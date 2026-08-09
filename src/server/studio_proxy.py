@@ -1,10 +1,10 @@
-"""Proxy the legacy Bilive Studio page through the recorder origin.
+"""Expose the Windows Studio API through the recorder origin.
 
-The native blrec shell is served on port 2233, while the existing Studio
-workbench remains a Windows/Pi dashboard on port 2234 during the migration.
-Keeping this bridge at the recorder origin avoids exposing a second Tailscale
-port and lets the Angular shell load the legacy workbench without cross-origin
-requests.
+The recorder UI is served by blrec on port 2233, while the slice, upload and
+settings APIs remain in the Windows dashboard on port 2234.  This gateway is
+deliberately narrow: only requests under ``/studio-api`` are forwarded.  The
+recorder's own ``/api`` and ``/api/v1`` routes therefore remain untouched and
+there is no referer or iframe compatibility path to maintain.
 """
 
 from __future__ import annotations
@@ -45,30 +45,26 @@ def _path_with_query(scope: Scope) -> str:
     return path
 
 
-def is_studio_proxy_request(scope: Scope, prefix: str = "/studio-proxy") -> bool:
-    """Return whether an HTTP request belongs to the embedded workbench."""
+def is_studio_api_request(scope: Scope, prefix: str = "/studio-api") -> bool:
+    """Return whether an HTTP request belongs to the Studio API gateway."""
     if scope.get("type") != "http":
         return False
+    normalized = prefix.rstrip("/") or "/studio-api"
     path = scope.get("path", "")
-    if path == prefix or path.startswith(f"{prefix}/"):
-        return True
-    referer = _header_map(scope).get("referer", "")
-    referer_path = urlsplit(referer).path
-    if referer_path == prefix or referer_path.startswith(f"{prefix}/"):
-        return True
-    # Native Angular studio pages keep their API/media requests same-origin
-    # with the recorder shell. Route those requests to the dashboard service
-    # by referer while leaving recorder-native pages such as /tasks untouched.
-    return referer_path == "/studio" or referer_path.startswith("/studio/")
+    return path == normalized or path.startswith(f"{normalized}/")
 
 
-def upstream_path(scope: Scope, *, prefix: str = "/studio-proxy") -> str:
-    """Map the public proxy path to the dashboard path, retaining the query."""
+def upstream_path(scope: Scope, *, prefix: str = "/studio-api") -> str:
+    """Map ``/studio-api/foo`` to dashboard ``/api/foo``."""
+    normalized = prefix.rstrip("/") or "/studio-api"
     path = scope.get("path", "/") or "/"
-    if path == prefix:
-        path = "/"
-    elif path.startswith(f"{prefix}/"):
-        path = path[len(prefix) :]
+    if path == normalized:
+        suffix = ""
+    elif path.startswith(f"{normalized}/"):
+        suffix = path[len(normalized) :]
+    else:
+        raise ValueError(f"path is outside Studio API prefix: {path}")
+    path = f"/api{suffix or ''}"
     query = scope.get("query_string", b"")
     if query:
         return f"{path}?{query.decode('latin-1')}"
@@ -131,14 +127,14 @@ def _response_headers(
             continue
         if lower_name == "location":
             location = raw_value.decode("latin-1")
-            if location.startswith("/") and not location.startswith(f"{prefix}/"):
-                location = f"{prefix}{location}"
+            if location.startswith("/api"):
+                location = f"{prefix}{location[4:]}"
             raw_value = location.encode("latin-1")
         yield raw_name, raw_value
 
 
-class StudioProxyMiddleware:
-    """Forward only the embedded Studio traffic to the dashboard service."""
+class StudioApiMiddleware:
+    """Forward only the explicit Studio API/media namespace."""
 
     def __init__(
         self,
@@ -155,12 +151,12 @@ class StudioProxyMiddleware:
         ).rstrip("/")
         self._prefix = (
             prefix
-            or os.environ.get("BILIVE_STUDIO_PROXY_PREFIX")
-            or "/studio-proxy"
+            or os.environ.get("BILIVE_STUDIO_API_PREFIX")
+            or "/studio-api"
         ).rstrip("/")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if not is_studio_proxy_request(scope, self._prefix):
+        if not is_studio_api_request(scope, self._prefix):
             await self._app(scope, receive, send)
             return
         if scope.get("type") != "http":
@@ -205,4 +201,4 @@ class StudioProxyMiddleware:
             await _send_error(send, 502, f"Studio dashboard unavailable: {exc}")
 
 
-__all__ = ["StudioProxyMiddleware", "is_studio_proxy_request", "upstream_path"]
+__all__ = ["StudioApiMiddleware", "is_studio_api_request", "upstream_path"]

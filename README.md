@@ -1,5 +1,17 @@
 # Bilive
 
+## Native Angular Studio
+
+The production browser entry is the upstream Angular/ng-zorro shell served by
+blrec on port `2233`.  `/studio/slices`, `/studio/uploads`, and
+`/studio/settings` are native Angular routes; the former static dashboard and
+iframe/injection navigation have been removed.
+
+The browser calls the Windows dashboard through the explicit same-origin
+`/studio-api/*` gateway.  The gateway maps to internal `2234/api/*` routes and
+never proxies recorder-native `/api` or `/api/v1` requests.  Port `2234` remains
+an API-only internal service and is not a second public entry point.
+
 Bilive 是自维护的 B 站直播录制、切片分析、字幕处理和投稿队列项目。Pi 负责连续录制与局域网仪表盘，Windows 负责所有重型处理。
 
 ## 生产边界
@@ -15,7 +27,8 @@ Bilive 是自维护的 B 站直播录制、切片分析、字幕处理和投稿�
 Pi 不执行 ffmpeg、faster-whisper、MiMo、字幕烧录或上传。切片页面写入 `Videos/*.mp4.pending` 或 `Videos/.bilive-jobs/*.pending.json`，再通过 SSH 触发 Windows Worker API。
 
 浏览器统一从 `2233` 的原生 blrec Angular 外壳进入；迁移期间切片、上传和设置页面
-通过 `/studio-proxy/*` 同源代理到 `2234`，因此公开入口只需要 Tailscale Serve `2233`。
+通过 `/studio-api/*` 同源网关访问内部 `2234/api/*`，因此公开入口只需要
+Tailscale Serve `2233`；`2234` 仅提供 API，不再托管页面。
 `2234` 仍是 Pi 上的内部 dashboard 服务，不应作为第二个公网入口。
 
 打开切片页面时，Pi 通过 SSH 按需启动 Windows Worker API；任务和上传全部空闲 15 分钟后自动退出。计划任务直接使用 `pythonw.exe`，不会显示命令行窗口。

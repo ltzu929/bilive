@@ -149,9 +149,9 @@ def create_app(
     return app
 
 
-api = create_app(
-    static_dir=os.environ.get(
-        "BILIVE_DASHBOARD_STATIC",
-        str(Path(__file__).resolve().parents[2] / "frontend"),
-    )
-)
+# The production dashboard is API-only.  The native Angular application is
+# packaged and served by blrec on port 2233; the recorder-origin gateway
+# forwards its `/studio-api/*` calls here.  ``create_app(static_dir=...)`` is
+# retained for isolated test tooling and local experiments, but no legacy
+# static directory is mounted in the service process.
+api = create_app()

@@ -401,14 +401,10 @@ async def test_dashboard_secondary_pages_and_runtime_apis(
         },
     )
 
-    async with dashboard_client(videos_root, static_dir=Path("frontend")) as client:
-        uploads_page = await client.get("/uploads")
-        settings_page = await client.get("/settings")
+    async with dashboard_client(videos_root) as client:
         uploads = await client.get("/api/upload-dashboard")
         settings = await client.get("/api/dashboard-settings")
 
-    assert uploads_page.status_code == 200
-    assert settings_page.status_code == 200
     assert uploads.json()["items"][0]["name"] == "clip.mp4"
     assert settings.json()["mimo"]["model"] == "mimo-v2.5"
 
@@ -1127,19 +1123,6 @@ async def test_slice_diagnostics_api_replaces_stale_running_progress_with_pendin
     assert payload["source_name"] == ""
     assert payload["items"][0]["id"] == "queue"
     assert payload["items"][0]["message"] == "等待本机 PC 切片 worker 处理"
-
-
-@pytest.mark.anyio
-async def test_tasks_route_serves_static_frontend(tmp_path, dashboard_client):
-    frontend = tmp_path / "frontend"
-    frontend.mkdir()
-    (frontend / "index.html").write_text("<main id=\"app\"></main>", encoding="utf-8")
-
-    async with dashboard_client(tmp_path / "Videos", static_dir=frontend) as client:
-        response = await client.get("/tasks")
-
-    assert response.status_code == 200
-    assert "id=\"app\"" in response.text
 
 
 @pytest.mark.anyio

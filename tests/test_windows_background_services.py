@@ -1,18 +1,9 @@
-import hashlib
-import json
 import os
 from pathlib import Path
 
 import pytest
 
 from src.server.dashboard_server import configure_dashboard_environment
-from src.server.recorder_navigation import (
-    DEFAULT_REPOSITORY_URL,
-    INJECTION_END,
-    INJECTION_START,
-    main as recorder_navigation_main,
-    patch_blrec_webapp_navigation,
-)
 from src.server.recorder_server import (
     configure_recorder_environment,
     persistent_settings_payload,
@@ -79,106 +70,12 @@ def test_persistent_settings_payload_removes_runtime_cookie():
     assert payload["version"] == "1.0"
 
 
-def test_recorder_app_uses_native_blrec_shell_and_proxy_without_injection():
+def test_recorder_app_uses_native_blrec_shell_and_api_gateway_without_injection():
     text = Path("src/server/recorder_app.py").read_text(encoding="utf-8")
 
     assert "from blrec.web import app as blrec_app" in text
-    assert "StudioProxyMiddleware(blrec_app)" in text
+    assert "StudioApiMiddleware(blrec_app)" in text
     assert "patch_installed_blrec_navigation" not in text
-
-
-def test_recorder_navigation_patches_index_and_service_worker_once(tmp_path):
-    webapp = tmp_path / "webapp"
-    webapp.mkdir()
-    index = webapp / "index.html"
-    manifest = webapp / "ngsw.json"
-    index.write_text(
-        '<html>\r\n<body><app-root></app-root>\r\n'
-        '<a id="slice-dashboard-link" href="http://192.168.31.157:2234/tasks">'
-        "legacy</a>\r\n</body></html>\r\n",
-        encoding="utf-8",
-    )
-    manifest.write_text(
-        json.dumps({"timestamp": 1, "hashTable": {"/index.html": "old"}}),
-        encoding="utf-8",
-    )
-
-    assert patch_blrec_webapp_navigation(webapp) is True
-
-    patched_index = index.read_bytes()
-    patched_text = patched_index.decode("utf-8")
-    patched_manifest = json.loads(manifest.read_text(encoding="utf-8"))
-    assert patched_text.count(INJECTION_START) == 1
-    assert patched_text.count(INJECTION_END) == 1
-    assert 'tasks: { label: "切片"' in patched_text
-    assert 'uploads: { label: "上传"' in patched_text
-    assert 'label: "工作台设置"' in patched_text
-    assert 'content: "录播设置"' in patched_text
-    assert "data-bilive-studio-nav" in patched_text
-    assert f'const projectRepositoryUrl = "{DEFAULT_REPOSITORY_URL}";' in patched_text
-    assert 'const blrecRepositoryUrl = "https://github.com/acgnhiki/blrec";' in patched_text
-    assert 'a[href="${blrecRepositoryUrl}"]' in patched_text
-    assert 'link.setAttribute("aria-label", "Bilive 项目仓库")' in patched_text
-    assert 'link.href = `/tasks?studio=${mode}`' in patched_text
-    assert "link.dataset.biliveStudioView = mode" in patched_text
-    assert 'event.target.closest("[data-bilive-studio-view]")' in patched_text
-    assert "event.stopImmediatePropagation()" in patched_text
-    assert 'icon.src = `/bilive-${definition.icon}.svg`' in patched_text
-    assert "grid-template-columns: 16px minmax(0, 1fr)" in patched_text
-    assert "column-gap: 10px" in patched_text
-    assert "li.ant-menu-item > i.anticon" in patched_text
-    assert 'const studioStorageKey = "bilive-studio-view"' in patched_text
-    assert "sessionStorage.setItem(studioStorageKey, mode)" in patched_text
-    assert "sessionStorage.removeItem(studioStorageKey)" in patched_text
-    assert "new MutationObserver" not in patched_text
-    assert "`${location.protocol}//${location.hostname}:${dashboardPort}`" in patched_text
-    assert "`/${definition.path}?embed=blrec`" in patched_text
-    assert "192.168.31.157" not in patched_text
-    assert "slice-dashboard-link" not in patched_text
-    assert b"\r\n" not in patched_index
-    assert patched_manifest["hashTable"]["/index.html"] == hashlib.sha1(
-        patched_index
-    ).hexdigest()
-    assert patched_manifest["timestamp"] > 1
-    for icon_name in ("scissor", "upload", "setting"):
-        icon_path = webapp / f"bilive-{icon_name}.svg"
-        assert icon_path.is_file()
-        assert "<svg" in icon_path.read_text(encoding="utf-8")
-
-    index_snapshot = index.read_bytes()
-    manifest_snapshot = manifest.read_bytes()
-    assert patch_blrec_webapp_navigation(webapp) is False
-    assert index.read_bytes() == index_snapshot
-    assert manifest.read_bytes() == manifest_snapshot
-
-
-def test_recorder_navigation_cli_patches_explicit_webapp(tmp_path, capsys):
-    webapp = tmp_path / "webapp"
-    webapp.mkdir()
-    (webapp / "index.html").write_text(
-        "<html><body><app-root></app-root></body></html>",
-        encoding="utf-8",
-    )
-    (webapp / "ngsw.json").write_text(
-        json.dumps({"timestamp": 1, "hashTable": {"/index.html": "old"}}),
-        encoding="utf-8",
-    )
-
-    assert recorder_navigation_main(
-        [
-            "--webapp-dir",
-            str(webapp),
-            "--dashboard-port",
-            "3234",
-            "--repository-url",
-            "https://github.com/example/project.git",
-        ]
-    ) == 0
-
-    assert capsys.readouterr().out.strip() == "updated"
-    patched = (webapp / "index.html").read_text(encoding="utf-8")
-    assert "const dashboardPort = 3234;" in patched
-    assert 'const projectRepositoryUrl = "https://github.com/example/project";' in patched
 
 
 def test_dashboard_environment_keeps_upload_disabled(tmp_path, monkeypatch):

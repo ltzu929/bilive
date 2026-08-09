@@ -1,5 +1,17 @@
 # 架构
 
+## Native Angular Studio boundary
+
+The page layer is now the upstream blrec Angular/ng-zorro application. The
+slice, upload, and Studio settings routes are native Angular pages and share
+the original shell, menu, router, service worker, and Ant Design components.
+The old static dashboard, iframe bridge, and navigation injection are removed.
+
+The only cross-process browser boundary is `2233/studio-api/*` on the recorder
+origin. `StudioApiMiddleware` maps that namespace to the internal dashboard
+`2234/api/*` namespace. It is an explicit path gateway with no referer
+fallback, so recorder-native `/api` and `/api/v1` routes remain owned by blrec.
+
 ## 运行边界
 
 Bilive 分为 Pi 轻服务和 Windows 重任务：
@@ -31,9 +43,9 @@ Bilive 分为 Pi 轻服务和 Windows 重任务：
 ## 前端迁移边界
 
 录播端 `2233` 直接提供上游 blrec 的原生 Angular/ng-zorro 外壳。切片、上传和
-工作台设置的路由已经进入 Angular 菜单；页面迁移完成前，旧 dashboard 通过
-`/studio-proxy/*` 同源代理到 `2234`，因此 API、媒体预览和相对资源仍保持原有
-路径语义。代理只处理带该前缀或来自嵌入页面的请求，不改变录制端其他路由。
+工作台设置的路由已经进入 Angular 菜单。浏览器只通过显式 `/studio-api/*`
+同源网关访问内部 `2234/api/*`；不再存在旧 dashboard、iframe、注入脚本或
+referer 兜底，因此录制端其他 `/api` 路由不会被改变。
 
 原生录制控制台和切片工作台使用不同的数据源：
 

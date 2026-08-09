@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from src.server.recorder_server import install_secret_cookie, read_secret_cookie
-from src.server.studio_proxy import StudioProxyMiddleware
+from src.server.studio_proxy import StudioApiMiddleware
 
 
 cookie_path = Path(os.environ.get("BILIVE_RECORDER_COOKIE_FILE", ""))
@@ -19,9 +19,10 @@ if install_secret_cookie(cookie):
 
 from blrec.web import app as blrec_app  # noqa: E402
 
-# Keep the dashboard workbench reachable through the same recorder origin
-# while its UI is being migrated into the native Angular application.
-app = StudioProxyMiddleware(blrec_app)
+# Keep only the Studio API and media routes reachable through the recorder
+# origin.  The page itself is always the native Angular application shipped by
+# blrec; the Windows dashboard no longer contributes an iframe or static UI.
+app = StudioApiMiddleware(blrec_app)
 
 
 __all__ = ("app",)
