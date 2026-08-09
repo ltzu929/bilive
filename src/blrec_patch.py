@@ -66,7 +66,11 @@ def _patched_source(original: bytes) -> bytes:
 
 def patch_blrec_source(source_path: Path, installed_version: str) -> bool:
     """Patch a known blrec source file and return whether it changed."""
-    if installed_version != EXPECTED_BLREC_VERSION:
+    # The Bilive wheel carries a local PEP 440 version suffix so deployments
+    # cannot accidentally fall back to the unmodified upstream webapp.  The
+    # FPS patch still targets the same beta.4 source payload.
+    base_version = installed_version.split("+", 1)[0]
+    if base_version != EXPECTED_BLREC_VERSION:
         raise PatchError(
             f"unsupported blrec version {installed_version!r}; "
             f"expected {EXPECTED_BLREC_VERSION!r}"

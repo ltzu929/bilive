@@ -17,7 +17,7 @@ SETTINGS_FILE="${BILIVE_SETTINGS_FILE:-$PROJECT_DIR/settings.toml}"
     --requirement "$PROJECT_DIR/requirements/pi.txt"
 "$PYTHON_BIN" -m pip install \
     --disable-pip-version-check \
-    "$PROJECT_DIR/wheel/blrec-2.0.0b4-py3-none-any.whl"
+    "$PROJECT_DIR/wheel/blrec-2.0.0b4+bilive.1-py3-none-any.whl"
 "$PYTHON_BIN" -m pip uninstall --yes pydantic-settings sse-starlette
 "$PYTHON_BIN" -m pip check
 

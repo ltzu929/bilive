@@ -9,6 +9,14 @@ const ICONS = {
 
 const embedShell = new URLSearchParams(window.location.search).get("embed");
 const isBlrecEmbed = embedShell === "blrec";
+const studioProxyPrefix = window.location.pathname.startsWith("/studio-proxy")
+  ? "/studio-proxy"
+  : "";
+
+function studioPath(path) {
+  if (!studioProxyPrefix || !path.startsWith("/")) return path;
+  return `${studioProxyPrefix}${path}`;
+}
 
 if (isBlrecEmbed) {
   document.body.classList.add("blrec-embed");
@@ -22,6 +30,7 @@ document.querySelectorAll("[data-recorder-link]").forEach((element) => {
   recorderUrl.search = "";
   recorderUrl.hash = "";
   element.href = recorderUrl.toString();
+  if (studioProxyPrefix) element.target = "_top";
 });
 
 document.querySelectorAll(".nav-icon[data-icon]").forEach((element) => {
@@ -176,13 +185,13 @@ const elements = {
 
 function mediaUrl(item) {
   if (item.name.toLowerCase().endsWith(".flv")) {
-    return `/api/preview/${encodeURIComponent(item.media_id)}`;
+    return studioPath(`/api/preview/${encodeURIComponent(item.media_id)}`);
   }
-  return `/api/media/${encodeURIComponent(item.media_id)}`;
+  return studioPath(`/api/media/${encodeURIComponent(item.media_id)}`);
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(studioPath(path), {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -2321,14 +2330,18 @@ function replayPreview() {
 let uploadDashboardState = { items: [], queue_counts: {}, worker: {} };
 
 function currentViewName() {
-  if (window.location.pathname.startsWith("/uploads")) return "uploads";
-  if (window.location.pathname.startsWith("/settings")) return "settings";
+  const path = studioProxyPrefix
+    ? window.location.pathname.slice(studioProxyPrefix.length) || "/"
+    : window.location.pathname;
+  if (path.startsWith("/uploads")) return "uploads";
+  if (path.startsWith("/settings")) return "settings";
   return "tasks";
 }
 
 function workspacePath(view) {
   const path = view === "tasks" ? "/tasks" : `/${view}`;
-  return isBlrecEmbed ? `${path}?embed=blrec` : path;
+  const target = studioPath(path);
+  return isBlrecEmbed ? `${target}?embed=blrec` : target;
 }
 
 function activateCurrentView() {
@@ -2341,6 +2354,15 @@ function activateCurrentView() {
   });
   document.body.dataset.view = view;
   return view;
+}
+
+for (const link of document.querySelectorAll(".nav-item[data-view]")) {
+  link.addEventListener("click", (event) => {
+    if (!studioProxyPrefix) return;
+    event.preventDefault();
+    window.history.pushState({}, "", workspacePath(link.dataset.view || "tasks"));
+    activateCurrentView();
+  });
 }
 
 function uploadStatusPresentation(status) {

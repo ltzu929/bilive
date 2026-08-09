@@ -19,8 +19,9 @@ def test_frontend_media_url_contract():
     text = FRONTEND_JS.read_text(encoding="utf-8")
 
     assert 'item.name.toLowerCase().endsWith(".flv")' in text
-    assert "return `/api/preview/${encodeURIComponent(item.media_id)}`;" in text
-    assert "return `/api/media/${encodeURIComponent(item.media_id)}`;" in text
+    assert "return studioPath(`/api/preview/${encodeURIComponent(item.media_id)}`);" in text
+    assert "return studioPath(`/api/media/${encodeURIComponent(item.media_id)}`);" in text
+    assert "fetch(studioPath(path)" in text
     assert "elements.previewVideo.src = mediaUrl(item);" in text
 
 
@@ -83,7 +84,9 @@ def test_frontend_blrec_embed_contract():
         'document.body.dataset.shell = "blrec"',
         "new URL(window.location.href)",
         'recorderUrl.port = "2233"',
-        'return isBlrecEmbed ? `${path}?embed=blrec` : path;',
+        'const studioProxyPrefix = window.location.pathname.startsWith("/studio-proxy")',
+        'const target = studioPath(path);',
+        'return isBlrecEmbed ? `${target}?embed=blrec` : target;',
         'workspacePath("uploads")',
     ]:
         assert js_contract in texts["js"]

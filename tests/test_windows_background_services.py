@@ -79,6 +79,14 @@ def test_persistent_settings_payload_removes_runtime_cookie():
     assert payload["version"] == "1.0"
 
 
+def test_recorder_app_uses_native_blrec_shell_and_proxy_without_injection():
+    text = Path("src/server/recorder_app.py").read_text(encoding="utf-8")
+
+    assert "from blrec.web import app as blrec_app" in text
+    assert "StudioProxyMiddleware(blrec_app)" in text
+    assert "patch_installed_blrec_navigation" not in text
+
+
 def test_recorder_navigation_patches_index_and_service_worker_once(tmp_path):
     webapp = tmp_path / "webapp"
     webapp.mkdir()
