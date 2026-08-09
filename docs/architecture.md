@@ -35,6 +35,15 @@ Bilive 分为 Pi 轻服务和 Windows 重任务：
 `/studio-proxy/*` 同源代理到 `2234`，因此 API、媒体预览和相对资源仍保持原有
 路径语义。代理只处理带该前缀或来自嵌入页面的请求，不改变录制端其他路由。
 
+原生录制控制台和切片工作台使用不同的数据源：
+
+- `/tasks` 使用 blrec 的 `/api/v1/tasks/data`，展示 `settings.toml` 中的录制任务。
+- `/studio/slices` 使用 bilive dashboard 的 `/api/source-recordings`，展示已经
+  落盘的源录播及其切片候选。
+
+录制任务启动采用并发加载。单个房间的弹幕 WebSocket 或 B 站 API 限流重试时，不能
+  阻塞其他已配置房间进入原生任务列表；这不会删除或迁移 `Videos/` 中的历史文件。
+
 ## 数据流
 
 ```text
