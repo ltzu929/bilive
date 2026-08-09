@@ -28,6 +28,8 @@ def test_frontend_navigation_contract():
     text = FRONTEND_HTML.read_text(encoding="utf-8")
 
     assert text.count('href="http://127.0.0.1:2234/tasks"') == 0
+    assert "192.168.31.157" not in text
+    assert 'href="/tasks" data-recorder-link' in text
     assert 'href="/tasks" data-view="tasks" aria-label="切片工作台"' in text
     assert 'href="/uploads"' in text
     assert 'href="/settings"' in text
@@ -54,8 +56,8 @@ def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
     assert "由 Windows 环境管理" in texts["js"]
     assert 'aria-label="切片工作台"' in texts["html"]
     assert "?????" not in texts["html"]
-    assert 'src="/app.js?v=20260728-1"' in texts["html"]
-    assert 'href="/styles.css?v=20260728-1"' in texts["html"]
+    assert 'src="/app.js?v=20260729-2"' in texts["html"]
+    assert 'href="/styles.css?v=20260729-2"' in texts["html"]
 
     for contract in [
         "activateCurrentView",
@@ -69,6 +71,36 @@ def test_frontend_secondary_pages_and_scrollable_review_queue_contract():
     assert ".source-list-panel" in texts["css"]
     assert "overflow-y: auto;" in texts["css"]
     assert "scrollbar-gutter: stable;" in texts["css"]
+
+
+def test_frontend_blrec_embed_contract():
+    texts = _frontend_texts()
+
+    for js_contract in [
+        'new URLSearchParams(window.location.search).get("embed")',
+        'embedShell === "blrec"',
+        'document.body.classList.add("blrec-embed")',
+        'document.body.dataset.shell = "blrec"',
+        "new URL(window.location.href)",
+        'recorderUrl.port = "2233"',
+        'return isBlrecEmbed ? `${path}?embed=blrec` : path;',
+        'workspacePath("uploads")',
+    ]:
+        assert js_contract in texts["js"]
+
+    for css_contract in [
+        "/* blrec embedded shell */",
+        "body.blrec-embed",
+        ".blrec-embed .sidebar",
+        "display: none;",
+        "--primary: #1890ff;",
+        "--bg: #f0f2f5;",
+        "border-radius: 4px;",
+    ]:
+        assert css_contract in texts["css"]
+
+    assert ".review-inspector-body {\n  display: block;\n  width: 100%;" in texts["css"]
+    assert ".inspector-tab-panel {\n  display: grid;\n  width: 100%;" in texts["css"]
 
 
 def test_frontend_dashboard_dom_contract():

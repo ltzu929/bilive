@@ -1,0 +1,243 @@
+<!-- bilive-studio-navigation:start -->
+<style id="bilive-studio-navigation-style">
+  nav.sidebar-menu li.ant-menu-item {
+    display: grid !important;
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 10px;
+  }
+  nav.sidebar-menu li.ant-menu-item > i.anticon,
+  [data-bilive-studio-nav] > .bilive-studio-icon {
+    display: inline-flex;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 0 !important;
+    justify-self: center;
+  }
+  [data-bilive-studio-nav] > .bilive-studio-icon {
+    object-fit: contain;
+    opacity: 0.65;
+  }
+  nav.sidebar-menu li.ant-menu-item > span {
+    min-width: 0;
+    margin: 0 !important;
+  }
+  [data-bilive-studio-nav] a {
+    color: inherit;
+  }
+  nav.sidebar-menu a[href="/settings"] {
+    font-size: 0;
+  }
+  nav.sidebar-menu a[href="/settings"]::after {
+    content: "录播设置";
+    font-size: 14px;
+  }
+  .main-content.bilive-studio-active {
+    position: relative;
+    overflow: hidden !important;
+    padding: 0 !important;
+  }
+  .main-content.bilive-studio-active > :not(#bilive-studio-frame) {
+    display: none !important;
+  }
+  #bilive-studio-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #f0f2f5;
+  }
+</style>
+<script id="bilive-studio-navigation-script">
+(() => {
+  const dashboardPort = __DASHBOARD_PORT__;
+  const projectRepositoryUrl = "__PROJECT_REPOSITORY_URL__";
+  const blrecRepositoryUrl = "https://github.com/acgnhiki/blrec";
+  const workspace = {
+    tasks: { label: "切片", title: "切片工作台", icon: "scissor", path: "tasks" },
+    uploads: { label: "上传", title: "上传中心", icon: "upload", path: "uploads" },
+    settings: {
+      label: "工作台设置",
+      title: "Bilive Studio 设置",
+      icon: "setting",
+      path: "settings",
+    },
+  };
+  const studioStorageKey = "bilive-studio-view";
+  const requestedStudioView = new URLSearchParams(location.search).get("studio");
+  if (Object.prototype.hasOwnProperty.call(workspace, requestedStudioView)) {
+    sessionStorage.setItem(studioStorageKey, requestedStudioView);
+  }
+  function copyAngularScope(source, target) {
+    if (!source) return;
+    for (const name of source.getAttributeNames()) {
+      if (name.startsWith("_ngcontent-")) target.setAttribute(name, "");
+    }
+  }
+
+  function currentStudioView() {
+    const stored = sessionStorage.getItem(studioStorageKey);
+    return Object.prototype.hasOwnProperty.call(workspace, stored)
+      ? stored
+      : "";
+  }
+
+  function buildNavigationItem(mode, referenceItem) {
+    const definition = workspace[mode];
+    const item = document.createElement("li");
+    item.className = "ant-menu-item";
+    item.dataset.biliveStudioNav = mode;
+    item.style.paddingLeft = referenceItem.style.paddingLeft || "24px";
+    item.title = definition.title;
+    copyAngularScope(referenceItem, item);
+
+    const icon = document.createElement("img");
+    icon.className = "bilive-studio-icon";
+    icon.src = `/bilive-${definition.icon}.svg`;
+    icon.setAttribute("aria-hidden", "true");
+    copyAngularScope(referenceItem.querySelector("i"), icon);
+
+    const label = document.createElement("span");
+    copyAngularScope(referenceItem.querySelector("span"), label);
+
+    const link = document.createElement("a");
+    link.href = `/tasks?studio=${mode}`;
+    link.textContent = definition.label;
+    link.title = definition.title;
+    link.setAttribute("aria-label", definition.title);
+    link.dataset.biliveStudioView = mode;
+    copyAngularScope(referenceItem.querySelector("a"), link);
+
+    label.appendChild(link);
+    item.append(icon, label);
+    return item;
+  }
+
+  function syncWorkspaceFrame(mode) {
+    const content = document.querySelector(".main-content.ant-layout-content");
+    if (!content) return;
+
+    let frame = document.getElementById("bilive-studio-frame");
+    if (!mode) {
+      content.classList.remove("bilive-studio-active");
+      frame?.remove();
+      return;
+    }
+
+    const definition = workspace[mode];
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.id = "bilive-studio-frame";
+      frame.setAttribute("loading", "eager");
+      content.appendChild(frame);
+    }
+    frame.title = definition.title;
+    const target =
+      `${location.protocol}//${location.hostname}:${dashboardPort}` +
+      `/${definition.path}?embed=blrec`;
+    if (frame.src !== target) frame.src = target;
+    frame.dataset.view = mode;
+    content.classList.add("bilive-studio-active");
+  }
+
+  function syncProjectRepositoryLink() {
+    for (const link of document.querySelectorAll(`a[href="${blrecRepositoryUrl}"]`)) {
+      link.href = projectRepositoryUrl;
+      link.title = "Bilive 项目仓库";
+      link.setAttribute("aria-label", "Bilive 项目仓库");
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
+  }
+
+  function mountNavigation() {
+    syncProjectRepositoryLink();
+    const menu = document.querySelector("nav.sidebar-menu ul.ant-menu");
+    if (!menu) return;
+
+    const nativeLinks = new Map(
+      Array.from(menu.querySelectorAll("li.ant-menu-item a[href]")).map((link) => [
+        link.getAttribute("href"),
+        link,
+      ]),
+    );
+    const taskLink = nativeLinks.get("/tasks");
+    const recorderSettingsLink = nativeLinks.get("/settings");
+    const aboutLink = nativeLinks.get("/about");
+    const taskItem = taskLink?.closest("li.ant-menu-item");
+    const recorderSettingsItem = recorderSettingsLink?.closest("li.ant-menu-item");
+    const aboutItem = aboutLink?.closest("li.ant-menu-item");
+    if (!taskItem || !recorderSettingsItem || !aboutItem) return;
+
+    for (const link of nativeLinks.values()) {
+      if (link.dataset.biliveStudioNative) continue;
+      link.dataset.biliveStudioNative = "true";
+      link.addEventListener("click", () => {
+        sessionStorage.removeItem(studioStorageKey);
+        syncWorkspaceFrame("");
+      });
+    }
+
+    if (recorderSettingsLink.title !== "录播设置") {
+      recorderSettingsLink.title = "录播设置";
+    }
+    if (recorderSettingsLink.getAttribute("aria-label") !== "录播设置") {
+      recorderSettingsLink.setAttribute("aria-label", "录播设置");
+    }
+
+    let taskStudioItem = menu.querySelector('[data-bilive-studio-nav="tasks"]');
+    if (!taskStudioItem) {
+      taskStudioItem = buildNavigationItem("tasks", taskItem);
+      taskItem.insertAdjacentElement("afterend", taskStudioItem);
+    }
+
+    let uploadStudioItem = menu.querySelector('[data-bilive-studio-nav="uploads"]');
+    if (!uploadStudioItem) {
+      uploadStudioItem = buildNavigationItem("uploads", taskItem);
+      taskStudioItem.insertAdjacentElement("afterend", uploadStudioItem);
+    }
+
+    let settingsStudioItem = menu.querySelector(
+      '[data-bilive-studio-nav="settings"]',
+    );
+    if (!settingsStudioItem) {
+      settingsStudioItem = buildNavigationItem("settings", taskItem);
+      recorderSettingsItem.insertAdjacentElement("afterend", settingsStudioItem);
+    }
+
+    const mode = currentStudioView();
+    for (const item of menu.querySelectorAll("li.ant-menu-item")) {
+      const studioMode = item.dataset.biliveStudioNav || "";
+      if (studioMode) {
+        item.classList.toggle("ant-menu-item-selected", studioMode === mode);
+      } else if (mode) {
+        item.classList.remove("ant-menu-item-selected");
+      }
+    }
+    syncWorkspaceFrame(mode);
+  }
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const link =
+        event.target instanceof Element
+          ? event.target.closest("[data-bilive-studio-view]")
+          : null;
+      const mode = link?.dataset.biliveStudioView || "";
+      if (!Object.prototype.hasOwnProperty.call(workspace, mode)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      sessionStorage.setItem(studioStorageKey, mode);
+      mountNavigation();
+    },
+    true,
+  );
+
+  mountNavigation();
+  window.setInterval(mountNavigation, 1000);
+  window.addEventListener("popstate", mountNavigation);
+})();
+</script>
+<!-- bilive-studio-navigation:end -->

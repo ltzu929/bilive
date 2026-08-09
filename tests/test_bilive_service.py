@@ -41,7 +41,11 @@ def test_wrapper_waits_for_share_and_stops_recorder_when_it_disappears():
     assert 'VmRSS' in text
     assert 'export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"' in text
     assert 'export BLREC_API_KEY="$RECORD_KEY"' in text
+    assert 'export BILIVE_RECORDER_COOKIE_FILE=' in text
+    assert "-m src.server.recorder_server" in text
+    assert '--videos-dir "$BILIVE_VIDEOS_DIR"' in text
     assert '--api-key "$RECORD_KEY"' not in text
+    assert "-m blrec" not in text
     assert "python -m src.agent.scanner" not in text
 
 

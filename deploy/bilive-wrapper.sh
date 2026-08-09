@@ -19,6 +19,7 @@ RSS_LOG_SECONDS="${BILIVE_RSS_LOG_SECONDS:-300}"
 
 export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$PROJECT_DIR/Videos}"
 export BILIVE_LOG_DIR="${BILIVE_LOG_DIR:-$PROJECT_DIR/logs}"
+export BILIVE_RECORDER_COOKIE_FILE="${BILIVE_RECORDER_COOKIE_FILE:-${BILIVE_COOKIE_FILE:-$PROJECT_DIR/.secrets/bilibili.cookie}}"
 export PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 BLREC_PID=""
@@ -92,10 +93,11 @@ while true; do
     BLREC_PORT="${BLREC_PORT:-2233}"
     log "[INFO] Windows SMB share is ready; starting blrec on ${BLREC_HOST}:${BLREC_PORT}"
 
-    "$PYTHON_BIN" -m blrec \
+    "$PYTHON_BIN" -m src.server.recorder_server \
         --host "$BLREC_HOST" \
         --port "$BLREC_PORT" \
-        -c "$SETTINGS_FILE" &
+        --videos-dir "$BILIVE_VIDEOS_DIR" \
+        --console &
     BLREC_PID=$!
     last_rss_log=0
 
