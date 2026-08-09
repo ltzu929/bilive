@@ -12,6 +12,8 @@ HEALTHCHECK_SECONDS="${BILIVE_HEALTHCHECK_SECONDS:-15}"
 PROBE_TIMEOUT_SECONDS="${BILIVE_PROBE_TIMEOUT_SECONDS:-5}"
 CONNECT_TIMEOUT_SECONDS="${BILIVE_CONNECT_TIMEOUT_SECONDS:-3}"
 STOP_TIMEOUT_SECONDS="${BILIVE_STOP_TIMEOUT_SECONDS:-20}"
+DASHBOARD_HOST="${BILIVE_DASHBOARD_HOST:-127.0.0.1}"
+DASHBOARD_PORT="${BILIVE_DASHBOARD_PORT:-2234}"
 
 export BILIVE_VIDEOS_DIR="${BILIVE_VIDEOS_DIR:-$PROJECT_DIR/Videos}"
 export PYTHONDONTWRITEBYTECODE=1
@@ -81,8 +83,10 @@ while true; do
         continue
     fi
 
-    log "[INFO] Starting bilive dashboard on 0.0.0.0:2234"
-    "$PYTHON_BIN" -m uvicorn src.dashboard.app:api --host 0.0.0.0 --port 2234 &
+    log "[INFO] Starting bilive dashboard on ${DASHBOARD_HOST}:${DASHBOARD_PORT}"
+    "$PYTHON_BIN" -m uvicorn src.dashboard.app:api \
+        --host "$DASHBOARD_HOST" \
+        --port "$DASHBOARD_PORT" &
     DASHBOARD_PID=$!
 
     while kill -0 "$DASHBOARD_PID" 2>/dev/null; do

@@ -18,8 +18,8 @@ Bilive 是自维护的 B 站直播录制、切片分析、字幕处理和投稿�
 
 | 节点 | 服务 | 地址 | 责任 |
 |---|---|---|---|
-| Pi | `bilive.service` | `0.0.0.0:2233` | blrec 录制 |
-| Pi | `bilive-dashboard.service` | `0.0.0.0:2234` | 切片页面、任务落盘、远程触发 |
+| Pi | `bilive.service` | `127.0.0.1:2233` | blrec 录制，由 Tailscale Serve 对外提供入口 |
+| Pi | `bilive-dashboard.service` | `127.0.0.1:2234` | 内部切片 API、任务落盘、远程触发 |
 | Pi | `bilive-smb-recover.timer` | 每 15 秒 | SMB 和 Pi 服务恢复 |
 | Windows | `BiliveWorkerApi` | 按需 `127.0.0.1:2235` | worker 管理、预检、上传消费者 |
 | 云端 | `mimo-v2.5` | Xiaomi MiMo API | 候选视频全模态判断和粗剪建议 |
@@ -30,6 +30,8 @@ Pi 不执行 ffmpeg、faster-whisper、MiMo、字幕烧录或上传。切片页�
 通过 `/studio-api/*` 同源网关访问内部 `2234/api/*`，因此公开入口只需要
 Tailscale Serve `2233`；`2234` 仅提供 API，不再托管页面。
 `2234` 仍是 Pi 上的内部 dashboard 服务，不应作为第二个公网入口。
+两个 Pi 服务都只监听 localhost，避免 SMB 恢复重启时与 Tailscale Serve
+占用的 Tailnet 端口发生绑定冲突。
 
 打开切片页面时，Pi 通过 SSH 按需启动 Windows Worker API；任务和上传全部空闲 15 分钟后自动退出。计划任务直接使用 `pythonw.exe`，不会显示命令行窗口。
 

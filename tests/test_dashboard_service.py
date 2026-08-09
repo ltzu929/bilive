@@ -35,8 +35,10 @@ def test_dashboard_wrapper_waits_for_smb_and_uses_local_python():
     assert "set +a" in text
     assert 'PYTHON_BIN="${BILIVE_PYTHON_BIN:-/home/ubuntu/miniforge/envs/bilive/bin/python}"' in text
     assert "-m uvicorn src.dashboard.app:api" in text
-    assert "--host 0.0.0.0" in text
-    assert "--port 2234" in text
+    assert 'DASHBOARD_HOST="${BILIVE_DASHBOARD_HOST:-127.0.0.1}"' in text
+    assert 'DASHBOARD_PORT="${BILIVE_DASHBOARD_PORT:-2234}"' in text
+    assert '--host "$DASHBOARD_HOST"' in text
+    assert '--port "$DASHBOARD_PORT"' in text
     assert 'kill -TERM "$DASHBOARD_PID"' in text
     assert 'kill -KILL "$DASHBOARD_PID"' in text
 

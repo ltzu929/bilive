@@ -89,7 +89,10 @@ while true; do
         continue
     fi
 
-    BLREC_HOST="${BLREC_HOST:-0.0.0.0}"
+    # Tailscale Serve owns the Tailnet address and forwards to localhost.
+    # Binding the application to 0.0.0.0 can race with tailscaled after an
+    # SMB-triggered restart and leave the recorder in a restart loop.
+    BLREC_HOST="${BLREC_HOST:-127.0.0.1}"
     BLREC_PORT="${BLREC_PORT:-2233}"
     log "[INFO] Windows SMB share is ready; starting blrec on ${BLREC_HOST}:${BLREC_PORT}"
 

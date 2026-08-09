@@ -152,6 +152,9 @@ sudo tailscale serve --bg --yes --https=2233 http://127.0.0.1:2233
 
 `2234` 仍由 `bilive-dashboard.service` 提供内部代理目标；如需排障，
 可在 Pi 本机访问 `http://127.0.0.1:2234/tasks`，不应把它作为公开入口。
+`bilive.service` 与 `bilive-dashboard.service` 必须分别监听
+`127.0.0.1:2233` 和 `127.0.0.1:2234`。Tailscale Serve 已占用 Tailnet
+地址上的同名端口，绑定 `0.0.0.0` 会在 SMB 恢复重启后造成端口冲突和循环退出。
 
 `/tasks` 与 `/studio/slices` 是两个不同的数据视图：
 
