@@ -36,3 +36,32 @@ def test_studio_proxy_does_not_capture_native_recorder_requests():
     scope = _scope("/api/tasks")
 
     assert not is_studio_proxy_request(scope)
+
+
+def test_native_studio_referer_routes_dashboard_api():
+    scope = _scope(
+        "/api/source-recordings",
+        headers=[
+            (
+                b"referer",
+                b"https://recorder.example/studio/slices",
+            )
+        ],
+    )
+
+    assert is_studio_proxy_request(scope)
+    assert upstream_path(scope) == "/api/source-recordings"
+
+
+def test_native_recorder_referer_is_not_captured():
+    scope = _scope(
+        "/api/v1/app/status",
+        headers=[
+            (
+                b"referer",
+                b"https://recorder.example/tasks",
+            )
+        ],
+    )
+
+    assert not is_studio_proxy_request(scope)
