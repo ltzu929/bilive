@@ -125,7 +125,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 
 ## 日常审核工作流
 
-打开 `http://<pi>:2234/tasks` 后使用同一个工作台完成复核和发布确认：
+在 Tailnet 中优先从统一入口
+`https://ubuntu.tail699f46.ts.net:2233/tasks` 打开工作台；也可以直接访问
+`https://ubuntu.tail699f46.ts.net:2234/tasks`。统一入口通过 iframe 加载 `2234`，
+因此 Pi 必须同时保留以下 Tailscale Serve 配置：
+
+```bash
+sudo tailscale serve --bg --yes --https=2233 http://127.0.0.1:2233
+sudo tailscale serve --bg --yes --https=2234 http://127.0.0.1:2234
+```
+
+打开工作台后完成复核和发布确认：
 
 1. 在左侧选择 UP 主分组和直播场次。状态筛选用于快速查看待处理、处理中、失败、已完成和已有保留片段的录播；桌面窄宽度下队列可以收起。
 2. 在中间预览源录播，点击候选区间跳转；拖拽密度图入点/出点或用 `I/O` 记录当前播放点，修改只形成草稿。
