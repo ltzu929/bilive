@@ -126,14 +126,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\check_windows_health.p
 ## 日常审核工作流
 
 在 Tailnet 中优先从统一入口
-`https://ubuntu.tail699f46.ts.net:2233/tasks` 打开工作台；也可以直接访问
-`https://ubuntu.tail699f46.ts.net:2234/tasks`。统一入口通过 iframe 加载 `2234`，
-因此 Pi 必须同时保留以下 Tailscale Serve 配置：
+`https://ubuntu.tail699f46.ts.net:2233/tasks` 打开原生 Angular 录播控制台。
+切片、上传和工作台设置位于 `/studio/slices`、`/studio/uploads`、
+`/studio/settings`；迁移期间旧工作台通过同源 `/studio-proxy/*` 由录播端
+代理到本机 `2234`，浏览器不需要再暴露第二个 Tailnet 端口。
 
 ```bash
 sudo tailscale serve --bg --yes --https=2233 http://127.0.0.1:2233
-sudo tailscale serve --bg --yes --https=2234 http://127.0.0.1:2234
 ```
+
+`2234` 仍由 `bilive-dashboard.service` 提供内部代理目标；如需排障，
+可在 Pi 本机访问 `http://127.0.0.1:2234/tasks`，不应把它作为公开入口。
 
 打开工作台后完成复核和发布确认：
 

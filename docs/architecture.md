@@ -16,7 +16,7 @@ Bilive 分为 Pi 轻服务和 Windows 重任务：
 | 端口 | 进程 | 生命周期 |
 |---|---|---|
 | `2233` | Pi blrec | 常驻 |
-| `2234` | Pi dashboard | 常驻 |
+| `2234` | Pi dashboard（由录播端同源代理） | 常驻 |
 | `2235` | Windows Worker API | 按需存在，仅 localhost |
 
 ## 部署拓扑
@@ -27,6 +27,13 @@ Bilive 分为 Pi 轻服务和 Windows 重任务：
 - 单机 Windows：`BILIVE_WINDOWS_SSH_TARGET` 为空。blrec 由 `start_windows_recorder.ps1` 用 uvicorn 在本机 `.venv-recorder`（Python 3.10）拉起，dashboard 用本地 `curl.exe` 打 `127.0.0.1:2235`，全部端口收敛到同机 localhost。
 
 `src/dashboard/remote_worker.py` 按 `BILIVE_WINDOWS_SSH_TARGET` 是否为空决定命令是否带 `ssh` 前缀，这是唯一的拓扑开关；worker、watcher、MiMo、上传等处理链路两种拓扑完全一致。
+
+## 前端迁移边界
+
+录播端 `2233` 直接提供上游 blrec 的原生 Angular/ng-zorro 外壳。切片、上传和
+工作台设置的路由已经进入 Angular 菜单；页面迁移完成前，旧 dashboard 通过
+`/studio-proxy/*` 同源代理到 `2234`，因此 API、媒体预览和相对资源仍保持原有
+路径语义。代理只处理带该前缀或来自嵌入页面的请求，不改变录制端其他路由。
 
 ## 数据流
 
