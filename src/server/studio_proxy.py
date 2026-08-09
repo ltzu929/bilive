@@ -54,7 +54,12 @@ def is_studio_proxy_request(scope: Scope, prefix: str = "/studio-proxy") -> bool
         return True
     referer = _header_map(scope).get("referer", "")
     referer_path = urlsplit(referer).path
-    return referer_path == prefix or referer_path.startswith(f"{prefix}/")
+    if referer_path == prefix or referer_path.startswith(f"{prefix}/"):
+        return True
+    # Native Angular studio pages keep their API/media requests same-origin
+    # with the recorder shell. Route those requests to the dashboard service
+    # by referer while leaving recorder-native pages such as /tasks untouched.
+    return referer_path == "/studio" or referer_path.startswith("/studio/")
 
 
 def upstream_path(scope: Scope, *, prefix: str = "/studio-proxy") -> str:
