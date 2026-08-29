@@ -661,6 +661,8 @@ def test_mimo_prompt_describes_chat_slice_editor_role():
     assert "empty_reason" in prompt
     assert "B 站口语标题" in prompt
     assert "候选在原视频中的起点秒数: 100.000" in prompt
+    assert "均从候选 00:00 起算" in prompt
+    assert "不要叠加该偏移" in prompt
     assert "80.000-92.000s" in prompt
     assert "ASR 时间轴" not in prompt
     assert "只允许返回一个主片段" in prompt
