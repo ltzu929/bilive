@@ -143,3 +143,22 @@ def test_task_history_persists_segments(tmp_path):
             "judge_error": "LLM failed: 502",
         }
     ]
+
+
+def test_task_history_persists_candidate_judgments(tmp_path):
+    source = tmp_path / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    judgments = [
+        {
+            "candidate_index": 1,
+            "decision": "review",
+            "raw_model_response": {"clips": []},
+            "rejection_reasons": ["missing standalone context"],
+        }
+    ]
+
+    write_task_history(source, status="done", candidate_judgments=judgments)
+
+    data = read_task_history(source)
+    assert data is not None
+    assert data["candidate_judgments"] == judgments

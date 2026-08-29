@@ -56,6 +56,7 @@ def test_slice_only_outputs_multiple_mimo_clips(monkeypatch, tmp_path):
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice
 
+    monkeypatch.setattr(slice_module, "scan_log", CaptureLog())
     monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
     room = tmp_path / "Videos" / "123"
     room.mkdir(parents=True)
@@ -103,6 +104,7 @@ def test_slice_only_quality_review_never_renders_or_queues(monkeypatch, tmp_path
     from src.burn import slice_only as slice_module
     from src.autoslice.danmaku_slice import GeneratedSlice
 
+    monkeypatch.setattr(slice_module, "scan_log", CaptureLog())
     monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
     room = tmp_path / "Videos" / "123"
     room.mkdir(parents=True)
@@ -113,6 +115,12 @@ def test_slice_only_quality_review_never_renders_or_queues(monkeypatch, tmp_path
     review.judge_status = "review"
     review.retain_recommendation = False
     review.judge_error = "Automatic publish quality gate requires review"
+    review.raw_model_response = {
+        "decision": "keep",
+        "quality_score": 0.9,
+        "completeness_score": 0.7,
+        "confidence": 0.9,
+    }
 
     monkeypatch.setattr(slice_module, "MIN_VIDEO_SIZE", 1)
     monkeypatch.setattr(
@@ -158,6 +166,17 @@ def test_slice_only_quality_review_never_renders_or_queues(monkeypatch, tmp_path
     assert result["slice_count"] == 0
     assert result["segments"][0]["judge_status"] == "review"
     assert result["segments"][0]["upload_status"] == "not_queued"
+    assert result["segments"][0]["preview_available"] is False
+    assert result["segments"][0]["preview_reason"] == review.judge_error
+    assert result["segments"][0]["mimo_raw_response"] == review.raw_model_response
+    assert result["candidate_judgments"][0]["decision"] == "review"
+    assert (
+        result["candidate_judgments"][0]["raw_model_response"]
+        == review.raw_model_response
+    )
+    assert result["candidate_judgments"][0]["rejection_reasons"] == [
+        review.judge_error
+    ]
     assert candidate.exists()
 
 
@@ -286,6 +305,8 @@ def test_slice_only_routes_lower_scored_cross_candidate_duplicate_to_review(
         else:
             result = _clip("同一个弹幕问题回应", 5.0, 55.0)
             score = 0.95
+        result.core_start = 5.0
+        result.core_end = 8.0
         result.topic_summary = "主播回应同一个弹幕问题"
         result.quality_score = score
         result.completeness_score = score
@@ -542,7 +563,9 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
     result = slice_module.slice_only(str(source), burst_context=120)
     log_text = captured.text()
 
-    assert result["status"] == "failed"
+    assert result["status"] == "done"
+    assert result["slice_count"] == 0
+    assert result["candidate_judgments"][0]["decision"] == "empty"
     mimo = next(item for item in result["diagnostics"] if item["id"] == "mimo")
     assert mimo["status"] == "warning"
     assert {"label": "返回片段", "value": "0"} in mimo["details"]
@@ -551,3 +574,112 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
     assert "reason=missing standalone context" in log_text
     assert "Slice-only summary: candidates=1, final_clips=0, judge_failed=0" in log_text
     assert "empty_candidates=1" in log_text
+
+
+def test_candidate_judgment_distinguishes_explicit_drop_from_empty(tmp_path):
+    from src.autoslice.mllm_sdk.mimo_video import MimoClipResults
+    from src.autoslice.danmaku_slice import GeneratedSlice
+    from src.burn import slice_only as slice_module
+
+    candidate = GeneratedSlice(
+        str(tmp_path / "candidate.mp4"),
+        10.0,
+        20.0,
+        0.0,
+        60.0,
+        60.0,
+        3,
+    )
+    results = MimoClipResults(
+        [],
+        raw_response={
+            "clips": [
+                {
+                    "decision": "drop",
+                    "reason": "ordinary goodbye",
+                }
+            ]
+        },
+    )
+
+    judgment = slice_module._candidate_judgment_record(
+        1,
+        candidate,
+        results,
+        results,
+    )
+
+    assert judgment["decision"] == "drop"
+    assert judgment["rejection_reasons"] == ["ordinary goodbye"]
+
+
+def test_slice_only_runs_mimo_before_post_judge_asr(monkeypatch, tmp_path):
+    from src.burn import slice_only as slice_module
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.danmaku_slice import GeneratedSlice
+
+    monkeypatch.setenv("BILIVE_RUNTIME_DIR", str(tmp_path))
+    room = tmp_path / "Videos" / "123"
+    room.mkdir(parents=True)
+    source = _write_source(room)
+    candidate = room / "0s_123_20260624-10-00-00.mp4"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setattr(slice_module, "MIN_VIDEO_SIZE", 1)
+    monkeypatch.setattr(
+        slice_module,
+        "slice_video_by_danmaku",
+        lambda *args, **kwargs: [
+            GeneratedSlice(str(candidate), 50.0, 60.0, 0.0, 120.0, 120.0, 2)
+        ],
+    )
+    monkeypatch.setattr(slice_module, "extract_danmaku_text", lambda *args, **kwargs: "弹幕")
+
+    events = []
+
+    def fake_judge(video_path, artist, **kwargs):
+        events.append(("mimo", kwargs))
+        result = _clip("完整主片段", 45.0, 60.0)
+        result.core_start = 52.0
+        result.core_end = 56.0
+        return [result]
+
+    monkeypatch.setattr(slice_module, "judge_candidate_clips_with_mimo", fake_judge)
+
+    def fake_analyze_audio(video_path, model, **kwargs):
+        events.append(("asr", kwargs))
+        return {
+            "transcript": "铺垫 发展 爆点 收尾",
+            "segments": [
+                {"start": 17.0, "end": 23.0, "text": "铺垫"},
+                {"start": 23.0, "end": 27.0, "text": "发展"},
+                {"start": 27.0, "end": 31.0, "text": "爆点"},
+                {"start": 31.0, "end": 37.0, "text": "收尾"},
+            ],
+        }
+
+    monkeypatch.setattr(candidate_analyzer, "analyze_audio", fake_analyze_audio)
+
+    def fake_burn(video_path, analysis, *, output_path=None, style=None):
+        Path(output_path).write_bytes(b"rendered")
+        return type("Burn", (), {"burned": True, "message": "ok"})()
+
+    monkeypatch.setattr(slice_module, "burn_subtitles_from_analysis", fake_burn)
+    monkeypatch.setattr(slice_module, "write_slice_upload_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(slice_module, "insert_upload_queue", lambda path: True)
+    monkeypatch.setattr(slice_module, "get_upload_item", lambda path: None)
+    monkeypatch.setattr(slice_module, "get_video_info", lambda path: ("title", "主播", "date"))
+    monkeypatch.setattr(slice_module, "unload_candidate_models", lambda: None)
+
+    result = slice_module.slice_only(str(source), burst_context=60)
+
+    assert result["status"] == "done"
+    assert result["slice_count"] == 1
+    assert [event[0] for event in events] == ["mimo", "asr"]
+    mimo_kwargs = events[0][1]
+    assert mimo_kwargs["candidate_core_start"] == 50.0
+    assert mimo_kwargs["candidate_core_end"] == 60.0
+    assert mimo_kwargs["single_clip"] is True
+    assert events[1][1]["start_seconds"] == 25.0
+    assert events[1][1]["duration_seconds"] == 55.0
+    assert result["segments"][0]["start_seconds"] == 42.0
+    assert result["segments"][0]["end_seconds"] == 62.0

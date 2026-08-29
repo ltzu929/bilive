@@ -54,6 +54,7 @@ class AnalysisResult:
     why_viewer_would_watch: str = ""
     completeness_score: float = 0.0
     confidence: float = 0.0
+    raw_model_response: Dict[str, Any] = field(default_factory=dict)
 
     # MCP 剪辑数据（待办功能使用）
     highlights: List[Highlight] = field(default_factory=list)
@@ -61,6 +62,8 @@ class AnalysisResult:
     suggested_trim: Optional[TrimSuggestion] = None
     candidate_start: Optional[float] = None
     candidate_end: Optional[float] = None
+    core_start: Optional[float] = None
+    core_end: Optional[float] = None
     source_start: Optional[float] = None
     source_end: Optional[float] = None
     transcript: str = ""
@@ -112,11 +115,18 @@ class AnalysisResult:
             why_viewer_would_watch=data.get("why_viewer_would_watch", ""),
             completeness_score=data.get("completeness_score", 0.0),
             confidence=data.get("confidence", 0.0),
+            raw_model_response=(
+                dict(data.get("raw_model_response"))
+                if isinstance(data.get("raw_model_response"), dict)
+                else {}
+            ),
             highlights=highlights,
             emotion_peak_time=data.get("emotion_peak_time", 0.0),
             suggested_trim=suggested_trim,
             candidate_start=data.get("candidate_start"),
             candidate_end=data.get("candidate_end"),
+            core_start=data.get("core_start"),
+            core_end=data.get("core_end"),
             source_start=data.get("source_start"),
             source_end=data.get("source_end"),
             transcript=data.get("transcript", ""),
@@ -159,6 +169,7 @@ class AnalysisResult:
             "why_viewer_would_watch": self.why_viewer_would_watch,
             "completeness_score": self.completeness_score,
             "confidence": self.confidence,
+            "raw_model_response": self.raw_model_response,
             "highlights": [
                 {"start": h.start, "end": h.end, "score": h.score, "desc": h.desc}
                 for h in self.highlights
@@ -171,6 +182,8 @@ class AnalysisResult:
             } if self.suggested_trim else None,
             "candidate_start": self.candidate_start,
             "candidate_end": self.candidate_end,
+            "core_start": self.core_start,
+            "core_end": self.core_end,
             "source_start": self.source_start,
             "source_end": self.source_end,
             "transcript": self.transcript,

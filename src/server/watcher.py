@@ -280,6 +280,7 @@ def _process_pending_root(root: Path) -> int:
                     root,
                 ),
                 segments=pipeline_result.get("segments"),
+                candidate_judgments=pipeline_result.get("candidate_judgments"),
                 diagnostics=pipeline_result.get("diagnostics"),
             )
             processed += 1

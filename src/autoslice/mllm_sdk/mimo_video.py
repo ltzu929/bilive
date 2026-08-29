@@ -40,10 +40,12 @@ class MimoClipResults(list):
         *,
         empty_reason: str = "",
         raw_response_summary: str = "",
+        raw_response: dict[str, Any] | None = None,
     ):
         super().__init__(items)
         self.empty_reason = empty_reason
         self.raw_response_summary = raw_response_summary
+        self.raw_response = dict(raw_response or {})
 
 
 @dataclass
@@ -178,6 +180,10 @@ def judge_candidate_clips_with_mimo(
     artist: str,
     danmaku_text: str,
     candidate_duration: float,
+    candidate_start: float = 0.0,
+    candidate_core_start: float | None = None,
+    candidate_core_end: float | None = None,
+    single_clip: bool = False,
     model: str = MIMO_MODEL,
     base_url: str = MIMO_BASE_URL,
     fps: float = MIMO_FPS,
@@ -222,6 +228,9 @@ def judge_candidate_clips_with_mimo(
                                 artist=artist,
                                 danmaku_text=danmaku_text,
                                 candidate_duration=candidate_duration,
+                                candidate_start=candidate_start,
+                                core_start=candidate_core_start,
+                                core_end=candidate_core_end,
                             ),
                         },
                     ],
@@ -251,6 +260,13 @@ def judge_candidate_clips_with_mimo(
         for result in results:
             result.token_usage = usage
             result.model_name = response_model
+            if single_clip and len(results) > 1:
+                results = MimoClipResults(
+                    [_select_primary_clip(results)],
+                    empty_reason=getattr(results, "empty_reason", ""),
+                    raw_response_summary=getattr(results, "raw_response_summary", ""),
+                    raw_response=getattr(results, "raw_response", {}),
+                )
     except Exception as exc:
         reason = f"MiMo response failed: {exc}"
         _set_status("error", error=reason)
@@ -296,6 +312,9 @@ def judge_candidate_with_mimo(
     artist: str,
     danmaku_text: str,
     candidate_duration: float,
+    candidate_start: float = 0.0,
+    candidate_core_start: float | None = None,
+    candidate_core_end: float | None = None,
     model: str = MIMO_MODEL,
     base_url: str = MIMO_BASE_URL,
     fps: float = MIMO_FPS,
@@ -310,6 +329,9 @@ def judge_candidate_with_mimo(
         artist=artist,
         danmaku_text=danmaku_text,
         candidate_duration=candidate_duration,
+        candidate_start=candidate_start,
+        candidate_core_start=candidate_core_start,
+        candidate_core_end=candidate_core_end,
         model=model,
         base_url=base_url,
         fps=fps,
@@ -331,17 +353,32 @@ def judge_candidate_with_mimo(
         )
     return results[0]
 
-def _build_prompt(*, artist: str, danmaku_text: str, candidate_duration: float) -> str:
+def _build_prompt(
+    *,
+    artist: str,
+    danmaku_text: str,
+    candidate_duration: float,
+    candidate_start: float = 0.0,
+    core_start: float | None = None,
+    core_end: float | None = None,
+) -> str:
+    core_text = (
+        f"{float(core_start):.3f}-{float(core_end):.3f}s"
+        if core_start is not None and core_end is not None
+        else "(not available)"
+    )
     return (
         "候选元数据:\n"
         f"- 主播: {artist or 'unknown'}\n"
         f"- 候选时长秒数: {float(candidate_duration or 0):.3f}\n"
+        f"- 候选在原视频中的起点秒数: {float(candidate_start or 0):.3f}\n"
+        f"- 弹幕检测到的爆点核心（相对候选）: {core_text}\n"
         f"- 候选范围内弹幕: {str(danmaku_text or '').strip() or '(none)'}\n\n"
         "你的角色:\n"
         "你是短视频剪辑师 + 严格主编。你的目标不是多产出切片，"
         "而是避免发布低质量聊天切片。弹幕峰值只是候选来源，不是保留理由。\n\n"
         "任务:\n"
-        "在这个最多约 5 分钟的直播聊天候选里，找出 0 个、1 个或多个"
+        "在这个最多约 5 分钟的直播聊天候选里，找出 0 个或 1 个"
         "可以独立投稿的聊天短片。故事、观点、情绪反应、弹幕互动没有固定"
         "优先级；选择最能独立成片、最容易被陌生观众理解、最有观看价值的片段。\n\n"
         "每个保留片段必须:\n"
@@ -364,8 +401,16 @@ def _build_prompt(*, artist: str, danmaku_text: str, candidate_duration: float) 
         "If clips is empty, include top-level empty_reason with a brief rejection reason.\n"
         " decision, clip_type, topic_summary, why_viewer_would_watch, reason, "
         "title, description, tags, quality_score, completeness_score, confidence, "
-        "trim_start, trim_end。decision 只能是 keep。trim_start/trim_end 是相对"
-        "候选视频开头的秒数。tags 是字符串数组。"
+        "trim_start, trim_end, core_start, core_end。decision 只能是 keep。"
+        "quality_score、completeness_score、confidence 必须是 0.0 到 1.0 之间的数字，"
+        "不是百分制数字，也不能填写文字。"
+        "trim_start/trim_end 是相对"
+        "候选视频开头的秒数。tags 是字符串数组。\n"
+        "本次候选窗口只允许返回一个主片段；如果有多个可能片段，只保留最完整、"
+        "最有爆点的一个。keep 时还必须返回 core_start 和 core_end，表示片段内"
+        "真正的爆点核心区间（相对候选开头的秒数）。最终 trim 必须覆盖该核心，"
+        "并同时覆盖核心之前的铺垫和核心之后的落点；无法证明完整事件时返回"
+        "{\"clips\": []}，并填写 empty_reason。"
     )
 
 
@@ -499,6 +544,21 @@ def _analysis_from_mimo_dict(
             model=model,
         )
 
+    core_start = None
+    core_end = None
+    if retain and ("core_start" in data or "core_end" in data):
+        try:
+            core_start = float(data.get("core_start"))
+            core_end = float(data.get("core_end"))
+            if not math.isfinite(core_start) or not math.isfinite(core_end):
+                raise ValueError
+        except (TypeError, ValueError):
+            return _failed_result(
+                artist,
+                "MiMo keep response core_start/core_end must be finite numbers",
+                model=model,
+            )
+
     result = AnalysisResult(
         title=title_value.strip(),
         description=description_value.strip(),
@@ -509,6 +569,8 @@ def _analysis_from_mimo_dict(
         judge_status="keep" if retain else "drop",
         judge_error="",
         suggested_trim=trim,
+        core_start=core_start,
+        core_end=core_end,
         model_name=model,
         completeness_score=completeness_score,
         confidence=confidence,
@@ -534,40 +596,44 @@ def _analysis_list_from_mimo_dict(
     clips = data.get("clips")
     if clips is None:
         single = _analysis_from_mimo_dict(data, artist=artist, model=model)
+        single.raw_model_response = dict(data)
         if single.judge_status in {"keep", "review"}:
-            return MimoClipResults([single])
+            return MimoClipResults([single], raw_response=data)
         if single.judge_status == "judge_failed":
-            return MimoClipResults([single])
+            return MimoClipResults([single], raw_response=data)
         return MimoClipResults(
             empty_reason=single.quality_reason,
             raw_response_summary=_summarize_empty_response(data),
+            raw_response=data,
         )
     if not isinstance(clips, list):
-        return [
-            _failed_result(
-                artist,
-                "MiMo response clips must be an array",
-                model=model,
-            )
-        ]
+        result = _failed_result(
+            artist,
+            "MiMo response clips must be an array",
+            model=model,
+        )
+        result.raw_model_response = dict(data)
+        return [result]
     if not clips:
         return MimoClipResults(
             empty_reason=_empty_reason_from_response(data),
             raw_response_summary=_summarize_empty_response(data),
+            raw_response=data,
         )
 
     results: list[AnalysisResult] = []
     for index, clip in enumerate(clips, start=1):
         if not isinstance(clip, dict):
-            results.append(
-                _failed_result(
-                    artist,
-                    f"MiMo clip #{index} must be an object",
-                    model=model,
-                )
+            result = _failed_result(
+                artist,
+                f"MiMo clip #{index} must be an object",
+                model=model,
             )
+            result.raw_model_response = dict(data)
+            results.append(result)
             continue
         result = _analysis_from_mimo_dict(clip, artist=artist, model=model)
+        result.raw_model_response = dict(data)
         if result.judge_status in {"keep", "review"}:
             result.clip_type = str(clip.get("clip_type") or "").strip()
             result.topic_summary = str(clip.get("topic_summary") or "").strip()
@@ -575,7 +641,36 @@ def _analysis_list_from_mimo_dict(
                 clip.get("why_viewer_would_watch") or ""
             ).strip()
             results.append(result)
-    return results
+        elif result.judge_status == "judge_failed":
+            results.append(result)
+    return MimoClipResults(results, raw_response=data)
+
+
+def _select_primary_clip(results: list[AnalysisResult]) -> AnalysisResult:
+    """Select one deterministic primary clip for a candidate window."""
+    def rank(result: AnalysisResult) -> tuple[float, ...]:
+        def number(value: Any) -> float:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return 0.0
+            return parsed if math.isfinite(parsed) else 0.0
+
+        core_duration = 0.0
+        if result.core_start is not None and result.core_end is not None:
+            core_duration = max(
+                0.0,
+                number(result.core_end) - number(result.core_start),
+            )
+        return (
+            1.0 if result.judge_status == "keep" else 0.0,
+            number(result.quality_score),
+            number(result.completeness_score),
+            number(result.confidence),
+            core_duration,
+        )
+
+    return max(enumerate(results), key=lambda item: (rank(item[1]), -item[0]))[1]
 
 
 def _strict_score(data: dict[str, Any], field: str) -> tuple[float, str]:

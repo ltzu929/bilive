@@ -57,8 +57,8 @@ def analyze_candidate_clips(*args, **kwargs):
     return _multi_candidate_analyzer(*args, **kwargs)
 
 
-def judge_candidate_clips_with_mimo(*args, **kwargs):
-    return _mimo_candidate_judge(*args, **kwargs)
+_DEFAULT_ANALYZE_CANDIDATE_CLIPS = analyze_candidate_clips
+judge_candidate_clips_with_mimo = _mimo_candidate_judge
 
 
 def analyze_candidate_clip_results(*args, **kwargs):
@@ -97,6 +97,24 @@ def _format_seconds_range(start, end):
         return f"{float(start):.3f}-{float(end):.3f}s"
     except (TypeError, ValueError):
         return "-"
+
+
+def _relative_core_range(generated_slice):
+    context_start = float(generated_slice.context_start or 0.0)
+    duration = float(generated_slice.duration or 0.0)
+    start = max(
+        0.0,
+        float(generated_slice.density_core_start or context_start) - context_start,
+    )
+    end = max(
+        start,
+        float(generated_slice.density_core_end or context_start) - context_start,
+    )
+    if duration > 0:
+        start = min(duration, start)
+        end = min(duration, end)
+        end = max(start, end)
+    return start, end
 
 
 def _resolve_mimo_parallelism(value, total_slices):
@@ -298,6 +316,73 @@ def _format_score(value):
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "-"
+
+
+def _candidate_judgment_record(index, generated_slice, results, raw_source=None):
+    clips = []
+    raw_response = {}
+    rejection_reasons = []
+    for result in results or []:
+        if hasattr(result, "to_dict"):
+            clips.append(result.to_dict())
+        raw = getattr(result, "raw_model_response", None)
+        if not raw_response and isinstance(raw, dict):
+            raw_response = dict(raw)
+        status = str(getattr(result, "judge_status", "") or "")
+        if status in {"review", "drop", "judge_failed"}:
+            reason = getattr(result, "judge_error", "") or getattr(
+                result, "quality_reason", ""
+            )
+            text = str(reason or "").strip()
+            if text and text not in rejection_reasons:
+                rejection_reasons.append(text)
+
+    if not raw_response and isinstance(getattr(raw_source, "raw_response", None), dict):
+        raw_response = dict(raw_source.raw_response)
+    raw_clips = raw_response.get("clips") if isinstance(raw_response, dict) else None
+    if isinstance(raw_clips, list):
+        for clip in raw_clips:
+            if not isinstance(clip, dict):
+                continue
+            if str(clip.get("decision") or "").strip().lower() != "drop":
+                continue
+            text = str(clip.get("reason") or "").strip()
+            if text and text not in rejection_reasons:
+                rejection_reasons.append(text)
+    for reason in (
+        getattr(raw_source, "empty_reason", ""),
+        getattr(raw_source, "raw_response_summary", ""),
+    ):
+        text = str(reason or "").strip()
+        if text and text not in rejection_reasons:
+            rejection_reasons.append(text)
+
+    decisions = [
+        str(item.get("judge_status") or "")
+        for item in clips
+        if str(item.get("judge_status") or "")
+    ]
+    if decisions:
+        decision = decisions[0] if len(set(decisions)) == 1 else "mixed"
+    elif isinstance(raw_clips, list) and raw_clips and all(
+        isinstance(clip, dict)
+        and str(clip.get("decision") or "").strip().lower() == "drop"
+        for clip in raw_clips
+    ):
+        decision = "drop"
+    else:
+        decision = "empty"
+    return {
+        "candidate_index": int(index),
+        "candidate_path": str(generated_slice.path),
+        "candidate_start_seconds": float(generated_slice.context_start),
+        "candidate_end_seconds": float(generated_slice.context_end),
+        "candidate_duration_seconds": float(generated_slice.duration),
+        "decision": decision,
+        "clips": clips,
+        "raw_model_response": raw_response,
+        "rejection_reasons": rejection_reasons,
+    }
 
 
 def _mimo_empty_result_details(results):
@@ -609,6 +694,7 @@ def slice_only(video_path, **_slice_options):
     )
     output_slices = []
     segments = []
+    candidate_judgments = []
     judge_failed_count = 0
     dropped_count = 0
     empty_candidate_count = 0
@@ -628,12 +714,14 @@ def slice_only(video_path, **_slice_options):
             with_timestamps=DANMAKU_TIMELINE,
             focus_start=generated_slice.density_core_start,
             focus_end=generated_slice.density_core_end,
+            relative_to=generated_slice.context_start,
         )
         for index, generated_slice in enumerate(slices_path, start=1)
     }
 
     def run_mimo_candidate(index, generated_slice):
         started = time.perf_counter()
+        core_start, core_end = _relative_core_range(generated_slice)
         results = analyze_clips_stage(
             generated_slice.path,
             artist=artist,
@@ -641,6 +729,9 @@ def slice_only(video_path, **_slice_options):
             candidate_start=generated_slice.context_start,
             candidate_end=generated_slice.context_end,
             candidate_duration=generated_slice.duration,
+            candidate_core_start=core_start,
+            candidate_core_end=core_end,
+            single_clip=True,
             analyzer=judge_candidate_clips_with_mimo,
         )
         return {
@@ -656,7 +747,16 @@ def slice_only(video_path, **_slice_options):
         nonlocal diagnostics
         if total_slices <= 1:
             for candidate_index, candidate in enumerate(slices_path, start=1):
-                yield candidate_index, candidate, None
+                if (
+                    analyze_candidate_clips is not _DEFAULT_ANALYZE_CANDIDATE_CLIPS
+                    or analyze_candidate is not _single_candidate_analyzer
+                ):
+                    yield candidate_index, candidate, None
+                else:
+                    yield candidate_index, candidate, run_mimo_candidate(
+                        candidate_index,
+                        candidate,
+                    )
             return
 
         component_by_index = _candidate_overlap_components(slices_path)
@@ -745,8 +845,8 @@ def slice_only(video_path, **_slice_options):
                     original_video_path,
                 )
                 # Only potentially-overlapping candidates wait for one another.
-                # Independent ready groups can start single-worker ASR while
-                # unrelated MiMo requests continue in the pool.
+                # Independent ready groups can finalize while unrelated MiMo
+                # requests continue in the pool.
                 yield from ready_items
 
     for index, generated_slice, precomputed_mimo in iter_candidate_work():
@@ -758,6 +858,8 @@ def slice_only(video_path, **_slice_options):
         )
         try:
             danmaku_text = danmaku_by_index[index]
+            core_abs_start = float(generated_slice.density_core_start or 0.0)
+            core_abs_end = float(generated_slice.density_core_end or 0.0)
             mimo_details = [
                 ("候选", f"{index}/{total_slices}"),
                 (
@@ -768,8 +870,10 @@ def slice_only(video_path, **_slice_options):
                     ),
                 ),
                 ("候选时长", f"{_format_score(generated_slice.duration)}s"),
+                ("爆点核心", _format_seconds_range(core_abs_start, core_abs_end)),
                 ("弹幕数", str(int(getattr(generated_slice, "danmaku_count", 0) or 0))),
                 ("弹幕字符", str(len(danmaku_text))),
+                ("判断方式", "MiMo 视频+弹幕"),
             ]
             diagnostics = upsert_diagnostic(
                 diagnostics,
@@ -800,6 +904,7 @@ def slice_only(video_path, **_slice_options):
                     raise precomputed_mimo["error"]
                 danmaku_text = precomputed_mimo.get("danmaku_text", danmaku_text)
                 empty_result_source = precomputed_mimo["results"]
+                core_start, core_end = _relative_core_range(generated_slice)
                 asr_started = time.perf_counter()
                 results = analyze_candidate_clip_results(
                     precomputed_mimo["results"],
@@ -808,6 +913,9 @@ def slice_only(video_path, **_slice_options):
                     candidate_start=generated_slice.context_start,
                     candidate_end=generated_slice.context_end,
                     candidate_duration=generated_slice.duration,
+                    candidate_core_start=core_start,
+                    candidate_core_end=core_end,
+                    post_judge_asr=True,
                 )
                 candidate_timings["asr"] = round(
                     (time.perf_counter() - asr_started) * 1000,
@@ -833,6 +941,14 @@ def slice_only(video_path, **_slice_options):
                 f"MiMo 返回 {len(results)} 个可处理片段"
                 if results
                 else "MiMo 未返回可投稿片段"
+            )
+            candidate_judgments.append(
+                _candidate_judgment_record(
+                    index,
+                    generated_slice,
+                    results,
+                    empty_result_source,
+                )
             )
             empty_details = [] if results else _mimo_empty_result_details(empty_result_source)
             diagnostics = upsert_diagnostic(
@@ -1129,7 +1245,12 @@ def slice_only(video_path, **_slice_options):
 
     output_slices, segments = _ordered_pipeline_results(output_slices, segments)
 
-    if total_slices and not output_slices and not segments:
+    if (
+        total_slices
+        and not output_slices
+        and not segments
+        and empty_candidate_count < total_slices
+    ):
         _log_slice_only_summary(
             total_slices,
             output_slices,
@@ -1143,6 +1264,7 @@ def slice_only(video_path, **_slice_options):
         return {
             "status": "failed",
             "error": error,
+            "candidate_judgments": candidate_judgments,
             "diagnostics": diagnostics,
         }
 
@@ -1231,6 +1353,7 @@ def slice_only(video_path, **_slice_options):
         "judge_failed_count": judge_failed_count,
         "output_slices": output_slices,
         "segments": segments,
+        "candidate_judgments": candidate_judgments,
         "diagnostics": diagnostics,
     }
 
@@ -1282,6 +1405,8 @@ def build_segment_record(
     description = ""
     tags = []
     manual_override = False
+    raw_model_response = {}
+    rejection_reasons = []
 
     if analysis is not None:
         judge_status = analysis.judge_status or ("keep" if analysis.retain_recommendation else "drop")
@@ -1298,6 +1423,14 @@ def build_segment_record(
         title = analysis.title
         description = analysis.description
         tags = analysis.tags
+        raw_model_response = dict(
+            getattr(analysis, "raw_model_response", {}) or {}
+        )
+        if judge_status in {"review", "drop", "judge_failed"}:
+            reason = analysis.judge_error or analysis.quality_reason
+            text = str(reason or "").strip()
+            if text:
+                rejection_reasons.append(text)
         trim = analysis.suggested_trim
         if trim is not None:
             mimo_trim_start = float(trim.trim_start)
@@ -1314,6 +1447,11 @@ def build_segment_record(
                 else candidate_start + mimo_trim_end
             )
 
+    preview_available = bool(
+        candidate_path_override
+        and judge_status in {"keep", "manual_keep"}
+        and os.path.isfile(slice_path)
+    )
     return {
         "segment_id": segment_id_for(source_path, start, end),
         "source_rel_path": source_rel_path(source_path),
@@ -1337,6 +1475,13 @@ def build_segment_record(
         "duplicate_reason": duplicate_reason,
         "_dedupe_key": dedupe_key,
         "quality_reason": quality_reason,
+        "mimo_raw_response": raw_model_response,
+        "rejection_reasons": rejection_reasons,
+        "preview_available": preview_available,
+        "preview_reason": "" if preview_available else (
+            "; ".join(rejection_reasons)
+            or "内部候选未生成可审核短片"
+        ),
         "title": title,
         "description": description,
         "tags": tags,

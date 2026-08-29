@@ -29,6 +29,8 @@ def test_detect_bursts_populates_baseline_and_local_density():
     for event in events:
         assert event.baseline_density > 0
         assert event.local_density > 0
+        assert event.burst_start < event.burst_end
+        assert event.start <= event.burst_start <= event.burst_end <= event.end
 
 
 def test_detect_bursts_lag_seconds_shifts_window_earlier():

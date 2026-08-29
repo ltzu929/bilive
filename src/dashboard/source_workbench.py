@@ -168,6 +168,7 @@ def build_source_recording_detail(
         "source_media_id": _media_id(root, source),
         "density_points": build_density_points(source.with_suffix(".xml")),
         "segments": segments,
+        "candidate_judgments": history.get("candidate_judgments") or [],
         "segment_count": len(segments),
         "summary_counts": counts,
         "judge_failed_count": counts["judge_failed"],
@@ -217,11 +218,15 @@ def manual_keep_segment(
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
         _apply_optional_metadata(segment, data)
         _apply_optional_range(segment, data)
+        if not _preview_allowed(segment):
+            raise ValueError("内部候选没有可发布预览，请先调整边界并生成成片")
         candidate = _segment_candidate_path(root, segment)
         if not candidate.is_file():
             raise FileNotFoundError(f"Candidate not found: {candidate}")
         segment["judge_status"] = "manual_keep"
         segment["manual_override"] = True
+        segment["preview_available"] = True
+        segment["preview_reason"] = ""
         write_slice_upload_metadata(
             candidate,
             title=str(segment.get("title") or candidate.stem),
@@ -604,6 +609,8 @@ def finalize_segment(
                 "candidate_path": str(final_path),
                 "candidate_rel_path": final_path.relative_to(root_path).as_posix(),
                 "candidate_media_id": _media_id(root_path, final_path),
+                "preview_available": True,
+                "preview_reason": "",
                 "analysis_path": str(analysis_path),
                 "upload_status": "not_queued",
                 "failure": None,
@@ -670,6 +677,8 @@ def finalize_segment(
                 "candidate_path": str(final_path),
                 "candidate_rel_path": final_path.relative_to(root_path).as_posix(),
                 "candidate_media_id": _media_id(root_path, final_path),
+                "preview_available": True,
+                "preview_reason": "",
                 "analysis_path": str(analysis_path),
                 "judge_status": "manual_keep",
                 "judge_error": "",
@@ -819,6 +828,8 @@ def render_segment(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
         segment["candidate_path"] = str(output)
         segment["candidate_rel_path"] = output.relative_to(root).as_posix()
         segment["candidate_media_id"] = _media_id(root, output)
+        segment["preview_available"] = True
+        segment["preview_reason"] = ""
         segment["manual_override"] = True
         return segment
 
@@ -1332,11 +1343,14 @@ def _normalize_segments(root: Path, source: Path, segments: Any) -> list[dict[st
         segment = dict(raw)
         segment.setdefault("source_rel_path", source.relative_to(root).as_posix())
         segment.setdefault("candidate_rel_path", _candidate_rel_path(root, segment))
-        segment.setdefault("candidate_media_id", _candidate_media_id(root, segment))
         segment.setdefault("judge_status", "review")
         segment.setdefault("judge_error", "")
         segment.setdefault("upload_status", "not_queued")
         segment.setdefault("manual_override", False)
+        preview_available = _preview_allowed(segment)
+        segment["preview_available"] = preview_available
+        segment["preview_reason"] = "" if preview_available else _preview_reason(segment)
+        segment["candidate_media_id"] = _candidate_media_id(root, segment)
         segment["revision"] = max(0, int(_float(segment.get("revision"))))
         for key in ("start_seconds", "end_seconds", "density_core_start", "density_core_end"):
             if key in segment:
@@ -1438,7 +1452,17 @@ def _normalize_artifacts(
         else {}
     )
     candidate_rel = _candidate_rel_path(root, segment)
-    if "final_output" not in current and candidate_rel:
+    failure = segment.get("failure")
+    retained_final_failure = (
+        str(failure.get("stage") or "") in {"metadata", "queue"}
+        if isinstance(failure, dict)
+        else False
+    )
+    if not _preview_allowed(segment) and not retained_final_failure:
+        current.pop("final_output", None)
+    if "raw_candidate" not in current and candidate_rel and not _preview_allowed(segment):
+        current["raw_candidate"] = {"rel_path": candidate_rel}
+    if "final_output" not in current and candidate_rel and _preview_allowed(segment):
         current["final_output"] = {"rel_path": candidate_rel}
     if "analysis_sidecar" not in current and candidate_rel:
         candidate = (root / candidate_rel).resolve()
@@ -1462,7 +1486,12 @@ def _normalize_artifacts(
             except ValueError:
                 path = None
         item["exists"] = bool(path and path.is_file())
-        if name == "final_output" and path is not None and path.is_file():
+        if (
+            name == "final_output"
+            and _preview_allowed(segment)
+            and path is not None
+            and path.is_file()
+        ):
             item["media_id"] = _media_id(root, path)
         else:
             item.pop("media_id", None)
@@ -1595,6 +1624,8 @@ def _candidate_rel_path(root: Path, segment: dict[str, Any]) -> str:
 
 
 def _candidate_media_id(root: Path, segment: dict[str, Any]) -> str:
+    if not _preview_allowed(segment):
+        return ""
     rel = _candidate_rel_path(root, segment)
     if not rel:
         return ""
@@ -1602,6 +1633,25 @@ def _candidate_media_id(root: Path, segment: dict[str, Any]) -> str:
     if not candidate.is_file():
         return ""
     return _media_id(root, candidate)
+
+
+def _preview_allowed(segment: dict[str, Any]) -> bool:
+    if str(segment.get("judge_status") or "") not in {"keep", "manual_keep"}:
+        return False
+    if "preview_available" in segment:
+        return bool(segment.get("preview_available"))
+    return True
+
+
+def _preview_reason(segment: dict[str, Any]) -> str:
+    if _preview_allowed(segment):
+        return ""
+    return str(
+        segment.get("preview_reason")
+        or segment.get("judge_error")
+        or segment.get("quality_reason")
+        or "内部候选未生成可审核短片"
+    ).strip()
 
 
 def _media_id(root: Path, path: Path) -> str:

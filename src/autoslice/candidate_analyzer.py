@@ -38,6 +38,9 @@ def judge_candidate_clips_only(
     candidate_start: float = 0.0,
     candidate_end: float | None = None,
     candidate_duration: float | None = None,
+    candidate_core_start: float | None = None,
+    candidate_core_end: float | None = None,
+    single_clip: bool = False,
 ) -> list[AnalysisResult]:
     duration = _resolve_candidate_duration(
         candidate_start,
@@ -49,6 +52,10 @@ def judge_candidate_clips_only(
         artist=artist,
         danmaku_text=str(danmaku_text or ""),
         candidate_duration=duration,
+        candidate_start=candidate_start,
+        candidate_core_start=candidate_core_start,
+        candidate_core_end=candidate_core_end,
+        single_clip=single_clip,
     )
 
 
@@ -60,6 +67,13 @@ def analyze_candidate_clip_results(
     candidate_start: float = 0.0,
     candidate_end: float | None = None,
     candidate_duration: float | None = None,
+    candidate_core_start: float | None = None,
+    candidate_core_end: float | None = None,
+    candidate_transcript: str | None = None,
+    candidate_transcript_segments: list[TranscriptSegment] | None = None,
+    candidate_evidence_error: str = "",
+    require_candidate_evidence: bool = False,
+    post_judge_asr: bool = False,
 ) -> list[AnalysisResult]:
     duration = _resolve_candidate_duration(
         candidate_start,
@@ -79,6 +93,22 @@ def analyze_candidate_clip_results(
             analyzed.append(result)
             continue
         if result.judge_status == "review":
+            if post_judge_asr and result.suggested_trim is not None:
+                error, transcript, segments = _run_post_judge_asr(
+                    video_path,
+                    result,
+                    duration,
+                    candidate_core_start,
+                    candidate_core_end,
+                )
+                if error:
+                    _append_review_reason(
+                        result,
+                        f"Post-judgment ASR unavailable: {error}",
+                    )
+                else:
+                    result.transcript = transcript
+                    result.transcript_segments = segments
             _annotate_ranges(
                 result,
                 candidate_start,
@@ -108,6 +138,32 @@ def analyze_candidate_clip_results(
             analyzed.append(_failed_result(artist, trim_error, base=result))
             continue
         if route_below_quality_gate_to_review(result):
+            if post_judge_asr:
+                error, transcript, segments = _run_post_judge_asr(
+                    video_path,
+                    result,
+                    duration,
+                    candidate_core_start,
+                    candidate_core_end,
+                )
+                if error:
+                    _append_review_reason(
+                        result,
+                        f"Post-judgment ASR unavailable: {error}",
+                    )
+                else:
+                    result.transcript = transcript
+                    result.transcript_segments = segments
+            _annotate_ranges(
+                result,
+                candidate_start,
+                candidate_end,
+                duration,
+                include_trim=True,
+            )
+            analyzed.append(result)
+            continue
+        if route_trim_shape_to_review(result, duration):
             _annotate_ranges(
                 result,
                 candidate_start,
@@ -120,12 +176,66 @@ def analyze_candidate_clip_results(
 
         trim = result.suggested_trim
         assert trim is not None
-        error, transcript, segments = _transcribe_for_trim(
-            video_path, result, duration
+        evidence_supplied = (
+            candidate_transcript is not None
+            or candidate_transcript_segments is not None
+            or bool(candidate_evidence_error)
         )
-        if error:
-            analyzed.append(_failed_result(artist, error, base=result))
+        if require_candidate_evidence and not evidence_supplied:
+            analyzed.append(
+                _failed_result(
+                    artist,
+                    "Candidate ASR evidence was not prepared before MiMo",
+                    base=result,
+                )
+            )
             continue
+        if evidence_supplied:
+            if candidate_evidence_error:
+                analyzed.append(
+                    _failed_result(
+                        artist,
+                        f"Candidate ASR failed: {candidate_evidence_error}",
+                        base=result,
+                    )
+                )
+                continue
+            error, transcript, segments = _prepare_evidence_trim(
+                result,
+                duration,
+                candidate_core_start,
+                candidate_core_end,
+                candidate_transcript_segments or [],
+            )
+            if error:
+                _route_to_review(result, error)
+                _annotate_ranges(
+                    result,
+                    candidate_start,
+                    candidate_end,
+                    duration,
+                    include_trim=True,
+                )
+                analyzed.append(result)
+                continue
+        elif post_judge_asr:
+            error, transcript, segments = _run_post_judge_asr(
+                video_path,
+                result,
+                duration,
+                candidate_core_start,
+                candidate_core_end,
+            )
+            if error:
+                analyzed.append(_failed_result(artist, error, base=result))
+                continue
+        else:
+            error, transcript, segments = _transcribe_for_trim(
+                video_path, result, duration
+            )
+            if error:
+                analyzed.append(_failed_result(artist, error, base=result))
+                continue
         _annotate_ranges(
             result,
             candidate_start,
@@ -147,6 +257,13 @@ def analyze_candidate_clips(
     candidate_start: float = 0.0,
     candidate_end: float | None = None,
     candidate_duration: float | None = None,
+    candidate_core_start: float | None = None,
+    candidate_core_end: float | None = None,
+    candidate_transcript: str | None = None,
+    candidate_transcript_segments: list[TranscriptSegment] | None = None,
+    candidate_evidence_error: str = "",
+    require_candidate_evidence: bool = False,
+    single_clip: bool = False,
 ) -> list[AnalysisResult]:
     results = judge_candidate_clips_only(
         video_path,
@@ -155,6 +272,9 @@ def analyze_candidate_clips(
         candidate_start=candidate_start,
         candidate_end=candidate_end,
         candidate_duration=candidate_duration,
+        candidate_core_start=candidate_core_start,
+        candidate_core_end=candidate_core_end,
+        single_clip=single_clip,
     )
     return analyze_candidate_clip_results(
         results,
@@ -163,6 +283,12 @@ def analyze_candidate_clips(
         candidate_start=candidate_start,
         candidate_end=candidate_end,
         candidate_duration=candidate_duration,
+        candidate_core_start=candidate_core_start,
+        candidate_core_end=candidate_core_end,
+        candidate_transcript=candidate_transcript,
+        candidate_transcript_segments=candidate_transcript_segments,
+        candidate_evidence_error=candidate_evidence_error,
+        require_candidate_evidence=require_candidate_evidence,
     )
 
 
@@ -220,7 +346,6 @@ def analyze_candidate(
             include_trim=True,
         )
         return result
-
     trim = result.suggested_trim
     assert trim is not None
     error, transcript, segments = _transcribe_for_trim(video_path, result, duration)
@@ -246,7 +371,7 @@ def unload_candidate_models() -> None:
 
 
 def route_below_quality_gate_to_review(result: AnalysisResult) -> str:
-    """Route uncertain MiMo keeps to review before ASR or upload work.
+    """Route uncertain MiMo keeps to review before render or upload work.
 
     Returns the review reason when the gate rejects automatic publishing,
     otherwise an empty string. Explicit MiMo drops and judge failures are left
@@ -287,6 +412,49 @@ def route_below_quality_gate_to_review(result: AnalysisResult) -> str:
     return reason
 
 
+TRIM_BOUNDARY_REVIEW_SECONDS = 1.0
+
+
+def route_trim_shape_to_review(
+    result: AnalysisResult,
+    candidate_duration: float,
+    *,
+    boundary_seconds: float = TRIM_BOUNDARY_REVIEW_SECONDS,
+) -> str:
+    """Keep boundary-dependent trims out of automatic previews.
+
+    Trim duration is an editorial preference, not an automatic rejection
+    criterion. The current review loop needs to expose longer complete clips
+    so a human can judge their actual quality.
+    """
+    if result.judge_status != "keep" or not result.retain_recommendation:
+        return ""
+    trim = result.suggested_trim
+    if trim is None:
+        return ""
+    try:
+        start = float(trim.trim_start)
+        end = float(trim.trim_end)
+        duration = float(candidate_duration)
+    except (TypeError, ValueError):
+        return ""
+    if not all(math.isfinite(value) for value in (start, end, duration)):
+        return ""
+
+    reasons: list[str] = []
+    boundary = max(0.0, float(boundary_seconds))
+    if duration > 0 and (start <= boundary or duration - end <= boundary):
+        reasons.append(
+            "trim is too close to the candidate boundary; context may be incomplete"
+        )
+    if not reasons:
+        return ""
+
+    reason = "Automatic trim gate requires review: " + "; ".join(reasons)
+    _route_to_review(result, reason)
+    return reason
+
+
 def _run_asr(video_path: str, start_seconds: float, duration_seconds: float) -> dict:
     return analyze_audio(
         video_path,
@@ -295,6 +463,180 @@ def _run_asr(video_path: str, start_seconds: float, duration_seconds: float) -> 
         whisper_compute_type=WHISPER_COMPUTE_TYPE,
         start_seconds=start_seconds,
         duration_seconds=duration_seconds,
+    )
+
+
+POST_JUDGE_ASR_PADDING_SECONDS = 20.0
+
+
+def _transcribe_for_boundary_evidence(
+    video_path: str,
+    result: AnalysisResult,
+    duration: float,
+) -> tuple[str, str, list[TranscriptSegment]]:
+    """Transcribe only the selected trim plus nearby context.
+
+    MiMo decides whether a candidate is worth keeping. This pass runs after
+    that decision and supplies timestamped speech evidence for safe boundaries
+    and subtitles; it never participates in candidate discovery.
+    """
+    trim = result.suggested_trim
+    if trim is None:
+        return "MiMo keep response did not include a trim interval", "", []
+
+    padding = max(
+        float(POST_JUDGE_ASR_PADDING_SECONDS),
+        float(TRIM_ASR_PADDING_SECONDS),
+    )
+    window_start = max(0.0, float(trim.trim_start) - padding)
+    window_end = float(trim.trim_end) + padding
+    if duration > 0:
+        window_end = min(float(duration), window_end)
+    if window_end <= window_start:
+        return "Post-judgment ASR window is empty", "", []
+
+    try:
+        audio = _run_asr(
+            video_path,
+            window_start,
+            window_end - window_start,
+        )
+    except Exception as exc:
+        return f"ASR failed: {exc}", "", []
+
+    window_segments = _valid_transcript_segments(audio.get("segments"))
+    candidate_segments = [
+        TranscriptSegment(
+            start=segment.start + window_start,
+            end=segment.end + window_start,
+            text=segment.text,
+        )
+        for segment in window_segments
+    ]
+    transcript = str(audio.get("transcript") or "").strip()
+    if not transcript and candidate_segments:
+        transcript = " ".join(segment.text for segment in candidate_segments).strip()
+    if not transcript:
+        return str(audio.get("error") or "ASR produced no transcript"), "", []
+    if not candidate_segments:
+        return "ASR produced no valid timestamped transcript segments", "", []
+    return "", transcript, candidate_segments
+
+
+def _run_post_judge_asr(
+    video_path: str,
+    result: AnalysisResult,
+    duration: float,
+    candidate_core_start: float | None,
+    candidate_core_end: float | None,
+) -> tuple[str, str, list[TranscriptSegment]]:
+    error, _, segments = _transcribe_for_boundary_evidence(
+        video_path,
+        result,
+        duration,
+    )
+    if error:
+        return error, "", []
+    return _prepare_evidence_trim(
+        result,
+        duration,
+        candidate_core_start,
+        candidate_core_end,
+        segments,
+    )
+
+
+def _append_review_reason(result: AnalysisResult, reason: str) -> None:
+    prior_reason = str(result.quality_reason or "").strip()
+    result.judge_error = (
+        f"{result.judge_error}; {reason}"
+        if result.judge_error
+        else reason
+    )
+    result.quality_reason = (
+        f"{prior_reason}; {reason}" if prior_reason else reason
+    )
+
+
+def _prepare_evidence_trim(
+    result: AnalysisResult,
+    duration: float,
+    candidate_core_start: float | None,
+    candidate_core_end: float | None,
+    segments: list[TranscriptSegment],
+) -> tuple[str, str, list[TranscriptSegment]]:
+    """Validate and repair a keep trim using timestamped ASR evidence."""
+    if not segments:
+        return "Candidate ASR contains no timestamped segments", "", []
+
+    try:
+        core_start = float(result.core_start)
+        core_end = float(result.core_end)
+    except (TypeError, ValueError):
+        return "MiMo keep response did not include a highlight core interval", "", []
+    if not all(math.isfinite(value) for value in (core_start, core_end)):
+        return "MiMo highlight core interval must be finite", "", []
+    if core_start < 0 or core_end <= core_start:
+        return "MiMo highlight core interval is empty or reversed", "", []
+    if duration > 0 and core_end > duration + 0.001:
+        return "MiMo highlight core interval exceeds the candidate duration", "", []
+
+    if candidate_core_start is not None and candidate_core_end is not None:
+        try:
+            density_start = float(candidate_core_start)
+            density_end = float(candidate_core_end)
+        except (TypeError, ValueError):
+            return "Detected burst core interval is invalid", "", []
+        if density_end > density_start and (
+            min(core_end, density_end) <= max(core_start, density_start)
+        ):
+            return "MiMo highlight core does not cover the detected burst", "", []
+
+    trim = result.suggested_trim
+    assert trim is not None
+    trim_start = min(float(trim.trim_start), core_start)
+    trim_end = max(float(trim.trim_end), core_end)
+    repaired = TrimSuggestion(
+        trim_start=trim_start,
+        trim_end=trim_end,
+        reason=f"{trim.reason}; ASR boundary repair",
+    )
+    snapped = snap_trim_to_segments(
+        repaired,
+        segments,
+        max(0.0, float(SNAP_TRIM_TOLERANCE)),
+        outward_only=True,
+    )
+    result.suggested_trim = snapped
+    trim_error = _validate_trim(result, duration)
+    if trim_error:
+        return trim_error, "", []
+    if snapped.trim_start > core_start + 0.001 or snapped.trim_end < core_end - 0.001:
+        return "Repaired trim does not cover the highlight core", "", []
+    if not any(
+        segment.start < core_start and segment.end > snapped.trim_start
+        for segment in segments
+    ):
+        return "No ASR evidence before the highlight core inside the trim", "", []
+    if not any(
+        segment.end > core_end and segment.start < snapped.trim_end
+        for segment in segments
+    ):
+        return "No ASR evidence after the highlight core inside the trim", "", []
+
+    sliced_transcript, sliced_segments = _slice_segments_to_trim(segments, snapped)
+    if not sliced_transcript or not sliced_segments:
+        return "ASR evidence does not overlap the repaired trim", "", []
+    return "", sliced_transcript, sliced_segments
+
+
+def _route_to_review(result: AnalysisResult, reason: str) -> None:
+    prior_reason = str(result.quality_reason or "").strip()
+    result.judge_status = "review"
+    result.retain_recommendation = False
+    result.judge_error = str(reason)
+    result.quality_reason = (
+        f"{prior_reason}; {reason}" if prior_reason else str(reason)
     )
 
 
@@ -377,6 +719,8 @@ def snap_trim_to_segments(
     trim: TrimSuggestion,
     segments: list[TranscriptSegment],
     tolerance: float,
+    *,
+    outward_only: bool = False,
 ) -> TrimSuggestion:
     """Snap trim endpoints to the nearest sentence boundary within ``tolerance``.
 
@@ -388,8 +732,12 @@ def snap_trim_to_segments(
         return trim
     starts = [seg.start for seg in segments]
     ends = [seg.end for seg in segments]
-    new_start = _snap_value(float(trim.trim_start), starts, tolerance)
-    new_end = _snap_value(float(trim.trim_end), ends, tolerance)
+    if outward_only:
+        new_start = _snap_start_outward(float(trim.trim_start), starts, tolerance)
+        new_end = _snap_end_outward(float(trim.trim_end), ends, tolerance)
+    else:
+        new_start = _snap_value(float(trim.trim_start), starts, tolerance)
+        new_end = _snap_value(float(trim.trim_end), ends, tolerance)
     if new_end <= new_start:
         return trim
     return TrimSuggestion(
@@ -408,6 +756,24 @@ def _snap_value(value: float, candidates: list[float], tolerance: float) -> floa
             best_dist = dist
             best = candidate
     return best
+
+
+def _snap_start_outward(value: float, candidates: list[float], tolerance: float) -> float:
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate <= value and value - candidate <= tolerance
+    ]
+    return max(eligible, default=value)
+
+
+def _snap_end_outward(value: float, candidates: list[float], tolerance: float) -> float:
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate >= value and candidate - value <= tolerance
+    ]
+    return min(eligible, default=value)
 
 
 def _slice_segments_to_trim(
@@ -541,10 +907,17 @@ def _failed_result(
         suggested_trim=base.suggested_trim if base else None,
         candidate_start=base.candidate_start if base else None,
         candidate_end=base.candidate_end if base else None,
+        core_start=base.core_start if base else None,
+        core_end=base.core_end if base else None,
         source_start=base.source_start if base else None,
         source_end=base.source_end if base else None,
         transcript=transcript,
         transcript_segments=list(segments or []),
+        raw_model_response=(
+            dict(base.raw_model_response)
+            if base is not None and isinstance(base.raw_model_response, dict)
+            else {}
+        ),
     )
     if base is not None:
         for attribute in ("_dedupe_key", "duplicate_of", "duplicate_reason"):

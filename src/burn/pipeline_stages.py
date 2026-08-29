@@ -48,6 +48,9 @@ def analyze_clips_stage(
     candidate_start: float | None = None,
     candidate_end: float | None = None,
     candidate_duration: float | None = None,
+    candidate_core_start: float | None = None,
+    candidate_core_end: float | None = None,
+    single_clip: bool = False,
     analyzer: Callable[..., Any],
 ) -> list[AnalysisResult]:
     results = analyzer(
@@ -57,6 +60,9 @@ def analyze_clips_stage(
         candidate_start=candidate_start,
         candidate_end=candidate_end,
         candidate_duration=candidate_duration,
+        candidate_core_start=candidate_core_start,
+        candidate_core_end=candidate_core_end,
+        single_clip=single_clip,
     )
     if not isinstance(results, list) or any(
         not isinstance(item, AnalysisResult) for item in results

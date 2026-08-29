@@ -25,7 +25,7 @@ def _write_danmaku_xml(path):
     )
 
 
-def _create_processed_source(videos):
+def _create_processed_source(videos, *, failed_preview=False):
     room = videos / "22384516"
     room.mkdir(parents=True)
     source = room / "22384516_20260602-12-56-49.mp4"
@@ -59,6 +59,7 @@ def _create_processed_source(videos):
                 "judge_status": "judge_failed",
                 "judge_error": "LLM failed",
                 "upload_status": "not_queued",
+                "preview_available": failed_preview,
             },
         ],
     )
@@ -80,7 +81,9 @@ def test_source_recording_detail_returns_density_and_segments(tmp_path):
         {"start_seconds": 20, "end_seconds": 30, "count": 2, "normalized": 1.0},
     ]
     assert detail["segments"][1]["judge_status"] == "judge_failed"
-    assert detail["segments"][1]["candidate_media_id"]
+    assert detail["segments"][1]["candidate_media_id"] == ""
+    assert detail["segments"][1]["preview_available"] is False
+    assert detail["segments"][1]["preview_reason"] == "LLM failed"
     assert detail["segments"][1]["quality"]["reason"] == ""
     assert detail["segments"][1]["failure"] == {
         "stage": "judge",
@@ -89,9 +92,37 @@ def test_source_recording_detail_returns_density_and_segments(tmp_path):
         "technical_details": "LLM failed",
         "recovery_action": "重新分析，或人工调整后生成成片",
     }
-    assert detail["segments"][1]["artifacts"]["final_output"]["exists"] is True
+    assert detail["segments"][1]["artifacts"]["raw_candidate"]["exists"] is True
+    assert detail["segments"][1]["artifacts"]["final_output"]["exists"] is False
     assert detail["segments"][1]["timings_ms"] == {}
     assert detail["segments"][1]["action_state"]["status"] == "idle"
+
+
+def test_source_recording_detail_rejects_stale_failed_preview_and_final_output(tmp_path):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos, failed_preview=True)
+    history_path = source.with_suffix(".mp4.task.json")
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    history["segments"][1]["artifacts"] = {
+        "final_output": {
+            "rel_path": history["segments"][1]["candidate_rel_path"],
+        }
+    }
+    history_path.write_text(
+        json.dumps(history, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    task_id = build_task_inventory(videos)[0]["task_id"]
+
+    detail = source_workbench.build_source_recording_detail(videos, task_id)
+    failed = detail["segments"][1]
+
+    assert failed["judge_status"] == "judge_failed"
+    assert failed["preview_available"] is False
+    assert failed["candidate_media_id"] == ""
+    assert failed["artifacts"]["raw_candidate"]["exists"] is True
+    assert failed["artifacts"]["final_output"]["exists"] is False
+    assert "media_id" not in failed["artifacts"]["final_output"]
 
 
 def test_source_recording_detail_is_read_only(tmp_path):
@@ -155,7 +186,7 @@ def test_manual_keep_segment_updates_sidecar_and_queues_upload(tmp_path, monkeyp
 
     updated = source_workbench.manual_keep_segment(
         videos,
-        "seg_failed",
+        "seg_keep",
         {
             "title": "Manual title",
             "description": "Manual desc",
@@ -169,7 +200,7 @@ def test_manual_keep_segment_updates_sidecar_and_queues_upload(tmp_path, monkeyp
     assert queued == [updated["candidate_path"]]
     assert metadata[0][1]["title"] == "Manual title"
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
-    assert history["segments"][1]["judge_status"] == "manual_keep"
+    assert history["segments"][0]["judge_status"] == "manual_keep"
 
 
 def test_manual_keep_segment_reports_queue_failure(tmp_path, monkeypatch):
@@ -186,7 +217,7 @@ def test_manual_keep_segment_reports_queue_failure(tmp_path, monkeypatch):
     # Re-check confirms the row is not in the queue, so False is a real failure.
     monkeypatch.setattr(source_workbench, "get_upload_item", lambda path: None)
 
-    updated = source_workbench.manual_keep_segment(videos, "seg_failed")
+    updated = source_workbench.manual_keep_segment(videos, "seg_keep")
 
     assert updated["judge_status"] == "manual_keep"
     assert updated["manual_override"] is True
@@ -194,7 +225,7 @@ def test_manual_keep_segment_reports_queue_failure(tmp_path, monkeypatch):
     assert updated["upload_error"] == "upload queue insert returned false"
     assert metadata
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
-    assert history["segments"][1]["upload_status"] == "queue_failed"
+    assert history["segments"][0]["upload_status"] == "queue_failed"
 
 
 def test_manual_keep_segment_treats_duplicate_queue_as_idempotent(tmp_path, monkeypatch):
@@ -217,14 +248,22 @@ def test_manual_keep_segment_treats_duplicate_queue_as_idempotent(tmp_path, monk
         lambda path: {"video_path": str(path), "status": "queued"},
     )
 
-    updated = source_workbench.manual_keep_segment(videos, "seg_failed")
+    updated = source_workbench.manual_keep_segment(videos, "seg_keep")
 
     assert updated["judge_status"] == "manual_keep"
     assert updated["upload_status"] == "queued"
     assert "upload_error" not in updated
     assert metadata
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
-    assert history["segments"][1]["upload_status"] == "queued"
+    assert history["segments"][0]["upload_status"] == "queued"
+
+
+def test_manual_keep_segment_rejects_stale_failed_preview(tmp_path):
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos, failed_preview=True)
+
+    with pytest.raises(ValueError, match="内部候选没有可发布预览"):
+        source_workbench.manual_keep_segment(videos, "seg_failed")
 
 
 def test_finalize_segment_separates_artifacts_and_queues_after_success(
@@ -560,6 +599,9 @@ def test_finalize_metadata_failure_is_fail_closed_and_recoverable(
     failed = source_workbench._read_segment(videos, "seg_failed")[2]
     assert failed["failure"]["code"] == "metadata_write_failed"
     assert failed["artifacts"]["final_output"]["exists"] is True
+    assert "media_id" not in failed["artifacts"]["final_output"]
+    assert failed["candidate_media_id"] == ""
+    assert failed["preview_available"] is False
     assert failed["upload_status"] == "not_queued"
 
 

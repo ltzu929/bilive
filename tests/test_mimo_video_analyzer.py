@@ -19,8 +19,11 @@ class _TempDir:
         shutil.rmtree(self.path, ignore_errors=True)
 
 
-def test_encode_video_for_mimo_retries_and_cleans_temp_dir(tmp_path):
+def test_encode_video_for_mimo_retries_and_cleans_temp_dir(tmp_path, monkeypatch):
     from src.autoslice.mllm_sdk.mimo_video import encode_video_for_mimo
+    from src.autoslice.mllm_sdk import mimo_video
+
+    monkeypatch.setattr(mimo_video, "scan_log", type("Log", (), {"warning": lambda *args: None})())
 
     source = tmp_path / "clip.mp4"
     source.write_bytes(b"video")
@@ -97,11 +100,14 @@ def test_server_config_exports_mimo_settings():
     assert server_config.TRIM_ASR_PADDING_SECONDS == 6.0
 
 
-def test_encode_video_for_mimo_raises_when_retry_exceeds_limit(tmp_path):
+def test_encode_video_for_mimo_raises_when_retry_exceeds_limit(tmp_path, monkeypatch):
     from src.autoslice.mllm_sdk.mimo_video import (
         MimoVideoTooLarge,
         encode_video_for_mimo,
     )
+    from src.autoslice.mllm_sdk import mimo_video
+
+    monkeypatch.setattr(mimo_video, "scan_log", type("Log", (), {"warning": lambda *args: None})())
 
     source = tmp_path / "clip.mp4"
     source.write_bytes(b"video")
@@ -279,6 +285,7 @@ def test_judge_candidate_with_mimo_fails_closed_on_timeout_or_rate_limit(
 ):
     from src.autoslice.mllm_sdk import mimo_video
 
+    monkeypatch.setattr(mimo_video, "scan_log", type("Log", (), {"warning": lambda *args: None})())
     monkeypatch.setenv("MIMO_API_KEY", "secret-key")
 
     for error in (TimeoutError("request timed out"), RuntimeError("429 rate limited")):
@@ -572,6 +579,7 @@ def test_mimo_multi_clip_response_parses_kept_clips():
     assert results[0].clip_type == "story"
     assert results[0].suggested_trim.trim_start == 20.0
     assert results[1].confidence == 0.84
+    assert results[0].raw_model_response == data
 
 
 def test_mimo_multi_clip_response_drops_empty_clip_list():
@@ -603,6 +611,37 @@ def test_mimo_empty_clip_response_preserves_reason():
     )
 
 
+def test_mimo_malformed_clip_is_not_treated_as_legitimate_empty_result():
+    from src.autoslice.mllm_sdk.mimo_video import _analysis_list_from_mimo_dict
+
+    response = {
+        "clips": [
+            {
+                "decision": "keep",
+                "reason": "完整事件",
+                "title": "缺少描述的非法结果",
+                "tags": ["直播切片"],
+                "quality_score": 0.9,
+                "completeness_score": 0.9,
+                "confidence": 0.9,
+                "trim_start": 10,
+                "trim_end": 30,
+            }
+        ]
+    }
+
+    results = _analysis_list_from_mimo_dict(
+        response,
+        artist="主播",
+        model="mimo-v2.5",
+    )
+
+    assert len(results) == 1
+    assert results[0].judge_status == "judge_failed"
+    assert "missing required fields: description" in results[0].judge_error
+    assert results[0].raw_model_response == response
+
+
 def test_mimo_prompt_describes_chat_slice_editor_role():
     from src.autoslice.mllm_sdk.mimo_video import _build_prompt
 
@@ -610,6 +649,9 @@ def test_mimo_prompt_describes_chat_slice_editor_role():
         artist="主播",
         danmaku_text="哈哈哈 主播被整不会了",
         candidate_duration=240.0,
+        candidate_start=100.0,
+        core_start=80.0,
+        core_end=92.0,
     )
 
     assert "短视频剪辑师" in prompt
@@ -618,6 +660,57 @@ def test_mimo_prompt_describes_chat_slice_editor_role():
     assert "clips" in prompt
     assert "empty_reason" in prompt
     assert "B 站口语标题" in prompt
+    assert "候选在原视频中的起点秒数: 100.000" in prompt
+    assert "80.000-92.000s" in prompt
+    assert "ASR 时间轴" not in prompt
+    assert "只允许返回一个主片段" in prompt
+    assert "0.0 到 1.0" in prompt
+    assert "不是百分制数字" in prompt
+
+
+def test_mimo_primary_clip_selection_prefers_highest_quality():
+    from src.autoslice.mllm_sdk.mimo_video import _analysis_list_from_mimo_dict
+
+    results = _analysis_list_from_mimo_dict(
+        {
+            "clips": [
+                {
+                    "decision": "keep",
+                    "reason": "完整但普通",
+                    "title": "普通片段",
+                    "description": "desc",
+                    "tags": ["live"],
+                    "quality_score": 0.82,
+                    "completeness_score": 0.86,
+                    "confidence": 0.84,
+                    "trim_start": 10,
+                    "trim_end": 30,
+                    "core_start": 18,
+                    "core_end": 22,
+                },
+                {
+                    "decision": "keep",
+                    "reason": "爆点更强",
+                    "title": "主片段",
+                    "description": "desc",
+                    "tags": ["live"],
+                    "quality_score": 0.95,
+                    "completeness_score": 0.92,
+                    "confidence": 0.93,
+                    "trim_start": 12,
+                    "trim_end": 34,
+                    "core_start": 20,
+                    "core_end": 24,
+                },
+            ]
+        },
+        artist="主播",
+        model="mimo-v2.5",
+    )
+
+    from src.autoslice.mllm_sdk.mimo_video import _select_primary_clip
+
+    assert _select_primary_clip(results).title == "主片段"
 
 
 def test_judge_candidate_clips_with_mimo_returns_multiple(monkeypatch):

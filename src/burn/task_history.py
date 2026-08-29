@@ -66,6 +66,7 @@ def write_task_history(
     slice_count: int = 0,
     output_slices: Optional[List[str]] = None,
     segments: Optional[List[Dict[str, Any]]] = None,
+    candidate_judgments: Optional[List[Dict[str, Any]]] = None,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
     log_path: Optional[str] = None,
     error: Optional[str] = None,
@@ -116,6 +117,9 @@ def write_task_history(
 
         if segments is not None:
             history["segments"] = segments
+
+        if candidate_judgments is not None:
+            history["candidate_judgments"] = candidate_judgments
 
         if diagnostics:
             history["diagnostics"] = diagnostics

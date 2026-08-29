@@ -23,6 +23,10 @@ class BurstEvent:
     local_density: float = 0.0      # 峰值局部密度（弹幕数/秒）
 
 
+    burst_start: float = 0.0
+    burst_end: float = 0.0
+
+
 def build_density_series(
     timestamps: List[float],
     video_duration: float,
@@ -231,6 +235,11 @@ def detect_bursts(
             danmaku_count=dmk_count,
             baseline_density=baseline,
             local_density=peak_local_density,
+            burst_start=max(0.0, min(float(seg_start), float(video_duration))),
+            burst_end=max(
+                max(0.0, min(float(seg_start), float(video_duration))),
+                min(float(seg_end), float(video_duration)),
+            ),
         ))
 
     # 7. 按 peak_density 降序取 top_n

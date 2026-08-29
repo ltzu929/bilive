@@ -352,6 +352,77 @@ def test_analyze_candidate_clips_runs_asr_for_each_mimo_clip(monkeypatch):
     ]
 
 
+def test_analyze_candidate_clips_allows_long_complete_trim_for_human_review(
+    monkeypatch,
+):
+    from src.autoslice import candidate_analyzer
+
+    monkeypatch.setattr(candidate_analyzer, "SNAP_TRIM_TO_SEGMENTS", False)
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "judge_candidate_clips_with_mimo",
+        lambda **kwargs: [_mimo_keep(trim_start=10.0, trim_end=71.0)],
+    )
+    audio_calls = []
+
+    def fake_analyze_audio(video_path, model, **kwargs):
+        audio_calls.append(kwargs)
+        return {
+            "transcript": "完整事件字幕",
+            "segments": [{"start": 0.0, "end": 2.0, "text": "完整事件字幕"}],
+        }
+
+    monkeypatch.setattr(candidate_analyzer, "analyze_audio", fake_analyze_audio)
+
+    analyzed = candidate_analyzer.analyze_candidate_clips(
+        "candidate.mp4",
+        "主播",
+        "弹幕",
+        candidate_duration=120.0,
+    )
+
+    assert analyzed[0].judge_status == "keep"
+    assert analyzed[0].retain_recommendation is True
+    assert audio_calls[0]["start_seconds"] == 10.0
+    assert audio_calls[0]["duration_seconds"] == 61.0
+
+
+@pytest.mark.parametrize(
+    ("trim_start", "trim_end", "candidate_duration", "reason_text"),
+    [
+        (0.0, 10.0, 240.0, "candidate boundary"),
+    ],
+)
+def test_analyze_candidate_clips_routes_unsafe_trim_shape_to_review(
+    monkeypatch,
+    trim_start,
+    trim_end,
+    candidate_duration,
+    reason_text,
+):
+    from src.autoslice import candidate_analyzer
+
+    result = _mimo_keep(trim_start=trim_start, trim_end=trim_end)
+    monkeypatch.setattr(
+        candidate_analyzer,
+        "analyze_audio",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unsafe automatic trims must not run ASR or render")
+        ),
+    )
+
+    analyzed = candidate_analyzer.analyze_candidate_clip_results(
+        [result],
+        "candidate.mp4",
+        "artist",
+        candidate_duration=candidate_duration,
+    )
+
+    assert analyzed[0].judge_status == "review"
+    assert analyzed[0].retain_recommendation is False
+    assert reason_text in analyzed[0].judge_error
+
+
 def test_snap_trim_to_segments_aligns_to_sentence_boundaries():
     from src.autoslice import candidate_analyzer
     from src.autoslice.analysis_result import TranscriptSegment
@@ -382,6 +453,94 @@ def test_snap_trim_to_segments_keeps_endpoint_outside_tolerance():
 
     assert snapped.trim_start == 3.0
     assert snapped.trim_end == 20.0
+
+
+def test_snap_trim_to_segments_outward_only_never_cuts_a_sentence():
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.analysis_result import TranscriptSegment
+
+    trim = TrimSuggestion(trim_start=3.2, trim_end=9.4, reason="raw")
+    segments = [
+        TranscriptSegment(start=0.0, end=3.0, text="a"),
+        TranscriptSegment(start=3.0, end=9.0, text="b"),
+        TranscriptSegment(start=9.0, end=15.0, text="c"),
+    ]
+
+    snapped = candidate_analyzer.snap_trim_to_segments(
+        trim,
+        segments,
+        tolerance=1.0,
+        outward_only=True,
+    )
+
+    assert snapped.trim_start == 3.0
+    assert snapped.trim_end == 9.4
+
+
+def test_candidate_evidence_repairs_trim_and_requires_complete_event():
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.analysis_result import TranscriptSegment
+
+    result = _mimo_keep(trim_start=14.0, trim_end=21.0)
+    result.core_start = 18.0
+    result.core_end = 20.0
+    segments = [
+        TranscriptSegment(start=12.0, end=15.0, text="铺垫"),
+        TranscriptSegment(start=15.0, end=18.0, text="发展"),
+        TranscriptSegment(start=18.0, end=20.0, text="爆点"),
+        TranscriptSegment(start=20.0, end=22.0, text="收尾"),
+    ]
+
+    analyzed = candidate_analyzer.analyze_candidate_clip_results(
+        [result],
+        "candidate.mp4",
+        "主播",
+        candidate_start=100.0,
+        candidate_end=130.0,
+        candidate_duration=30.0,
+        candidate_core_start=17.0,
+        candidate_core_end=21.0,
+        candidate_transcript="铺垫 发展 爆点 收尾",
+        candidate_transcript_segments=segments,
+        require_candidate_evidence=True,
+    )
+
+    assert analyzed[0].judge_status == "keep"
+    assert analyzed[0].suggested_trim.trim_start == 12.0
+    assert analyzed[0].suggested_trim.trim_end == 22.0
+    assert analyzed[0].source_start == 112.0
+    assert analyzed[0].source_end == 122.0
+    assert [segment.text for segment in analyzed[0].transcript_segments] == [
+        "铺垫",
+        "发展",
+        "爆点",
+        "收尾",
+    ]
+
+
+def test_candidate_evidence_routes_missing_highlight_core_to_review():
+    from src.autoslice import candidate_analyzer
+    from src.autoslice.analysis_result import TranscriptSegment
+
+    result = _mimo_keep(trim_start=10.0, trim_end=30.0)
+    analyzed = candidate_analyzer.analyze_candidate_clip_results(
+        [result],
+        "candidate.mp4",
+        "主播",
+        candidate_duration=60.0,
+        candidate_core_start=20.0,
+        candidate_core_end=24.0,
+        candidate_transcript="铺垫 爆点 收尾",
+        candidate_transcript_segments=[
+            TranscriptSegment(start=8.0, end=15.0, text="铺垫"),
+            TranscriptSegment(start=20.0, end=24.0, text="爆点"),
+            TranscriptSegment(start=24.0, end=30.0, text="收尾"),
+        ],
+        require_candidate_evidence=True,
+    )
+
+    assert analyzed[0].judge_status == "review"
+    assert "highlight core" in analyzed[0].judge_error
 
 
 def test_analyze_candidate_snap_reuses_candidate_asr(monkeypatch):

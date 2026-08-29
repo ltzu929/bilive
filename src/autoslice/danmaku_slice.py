@@ -233,10 +233,17 @@ def _slice_by_burst(
 
 
 def _build_generated_slice(output_name: str, event: BurstEvent) -> GeneratedSlice:
+    burst_start = float(getattr(event, "burst_start", 0.0) or 0.0)
+    burst_end = float(getattr(event, "burst_end", 0.0) or 0.0)
+    if burst_end <= burst_start:
+        burst_start = max(event.start, event.peak_time - 5.0)
+        burst_end = min(event.end, event.peak_time + 5.0)
+    core_start = max(event.start, min(event.end, burst_start))
+    core_end = max(core_start, min(event.end, burst_end))
     return GeneratedSlice(
         path=output_name,
-        density_core_start=max(event.start, event.peak_time - 5),
-        density_core_end=min(event.end, event.peak_time + 5),
+        density_core_start=core_start,
+        density_core_end=core_end,
         context_start=event.start,
         context_end=event.end,
         duration=event.duration,
@@ -285,8 +292,12 @@ def extract_danmaku_text(
     with_timestamps: bool = True,
     focus_start: float | None = None,
     focus_end: float | None = None,
+    relative_to: float | None = None,
 ) -> str:
     """Extract danmaku messages within a time window from a Bilibili XML file.
+
+    ``relative_to`` shifts emitted timeline coordinates to the candidate
+    window's origin while XML filtering still uses absolute source time.
 
     When ``with_timestamps`` is False, messages are joined by spaces
     and, if too long, truncated to the last ``max_chars`` characters.
@@ -327,9 +338,21 @@ def extract_danmaku_text(
         return result
 
     messages.sort(key=lambda item: item[0])
+    offset = float(relative_to or 0.0)
+    if offset:
+        messages = [
+            (timestamp - offset, text)
+            for timestamp, text in messages
+        ]
+        if focus_start is not None:
+            focus_start -= offset
+        if focus_end is not None:
+            focus_end -= offset
     if focus_start is None or focus_end is None or focus_end <= focus_start:
-        midpoint = (float(start) + float(end)) / 2.0
-        half_focus = max(1.0, (float(end) - float(start)) * 0.05)
+        relative_start = float(start) - offset
+        relative_end = float(end) - offset
+        midpoint = (relative_start + relative_end) / 2.0
+        half_focus = max(1.0, (relative_end - relative_start) * 0.05)
         focus_start = midpoint - half_focus
         focus_end = midpoint + half_focus
     return _truncate_timeline_around_focus(

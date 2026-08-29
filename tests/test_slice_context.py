@@ -49,6 +49,8 @@ def test_slice_video_by_danmaku_uses_xml_burst_events(tmp_path, monkeypatch):
                 peak_density=2.0,
                 burst_ratio=4.0,
                 danmaku_count=2,
+                burst_start=72.0,
+                burst_end=88.0,
             )
         ]
 
@@ -91,8 +93,8 @@ def test_slice_video_by_danmaku_uses_xml_burst_events(tmp_path, monkeypatch):
         )
     ]
     assert slices[0].path == str(tmp_path / "50s_source.mp4")
-    assert slices[0].density_core_start == 75.0
-    assert slices[0].density_core_end == 85.0
+    assert slices[0].density_core_start == 72.0
+    assert slices[0].density_core_end == 88.0
     assert slices[0].context_start == 50.0
     assert slices[0].context_end == 110.0
     assert slices[0].duration == 60.0
@@ -109,6 +111,38 @@ def test_extract_danmaku_text_with_timestamps_emits_timeline(tmp_path):
 
     # Chronological [mm:ss] lines, one per danmaku.
     assert text.splitlines() == ["[00:01] hello", "[00:10] burst"]
+
+
+def test_extract_danmaku_text_can_emit_candidate_relative_timeline(tmp_path):
+    xml_path = tmp_path / "source.xml"
+    _write_danmaku_xml(xml_path)
+    text = danmaku_slice.extract_danmaku_text(
+        str(xml_path),
+        0.0,
+        20.0,
+        with_timestamps=True,
+        relative_to=0.0,
+    )
+    assert text.splitlines() == ["[00:01] hello", "[00:10] burst"]
+
+    shifted_xml = tmp_path / "shifted.xml"
+    shifted_xml.write_text(
+        "<i>"
+        '<d p="101.25,1,25,16777215,0,0,0,0">hello</d>'
+        '<d p="110,1,25,16777215,0,0,0,0">burst</d>'
+        "</i>",
+        encoding="utf-8",
+    )
+    shifted = danmaku_slice.extract_danmaku_text(
+        str(shifted_xml),
+        100.0,
+        120.0,
+        with_timestamps=True,
+        focus_start=110.0,
+        focus_end=112.0,
+        relative_to=100.0,
+    )
+    assert shifted.splitlines() == ["[00:01] hello", "[00:10] burst"]
 
 
 def test_extract_danmaku_text_without_timestamps_joins_plainly(tmp_path):
