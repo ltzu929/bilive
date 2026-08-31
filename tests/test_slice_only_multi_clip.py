@@ -568,6 +568,7 @@ def test_slice_only_logs_summary_when_mimo_returns_no_clips(monkeypatch, tmp_pat
     assert result["candidate_judgments"][0]["decision"] == "empty"
     mimo = next(item for item in result["diagnostics"] if item["id"] == "mimo")
     assert mimo["status"] == "warning"
+    assert mimo["message"] == "MiMo 未生成可投稿片段：missing standalone context"
     assert {"label": "返回片段", "value": "0"} in mimo["details"]
     assert {"label": "Empty reason", "value": "missing standalone context"} in mimo["details"]
     assert "MiMo found no postable chat clips" in log_text

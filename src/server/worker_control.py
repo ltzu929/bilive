@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from src.burn.slice_progress import SliceProgressWriter
 from src.server.worker_lock import default_worker_lock_path, read_worker_lock
 
 
@@ -142,6 +143,20 @@ def stop_worker(
     if errors:
         result["status"] = "partial"
         result["errors"] = errors
+    if stopped or recovered > 0:
+        progress_path = root / "logs" / "runtime" / "slice-progress.json"
+        SliceProgressWriter(progress_path).update(
+            force=True,
+            status="cancelled",
+            phase="cancelled",
+            phase_label="已停止",
+            message=(
+                "切片 worker 已由停止请求中断；"
+                f"{pending_tasks} 个任务已退回待处理队列"
+            ),
+            error="",
+        )
+        result["reason"] = "user_requested_stop"
     return result
 
 def _count_pending_markers(videos: Path) -> int:

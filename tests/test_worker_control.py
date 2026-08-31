@@ -142,8 +142,19 @@ def test_stop_worker_terminates_watcher_and_lock_owner_then_recovers(tmp_path, m
         "recovered_actions": 0,
         "pending_tasks": 4,
         "log_path": "logs/runtime/pc-worker-test.log",
+        "reason": "user_requested_stop",
     }
     assert recovered == [videos]
+    progress = json.loads(
+        (tmp_path / "logs" / "runtime" / "slice-progress.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert progress["status"] == "cancelled"
+    assert progress["phase_label"] == "已停止"
+    assert progress["message"] == (
+        "切片 worker 已由停止请求中断；4 个任务已退回待处理队列"
+    )
 
 
 def test_stop_worker_recovers_action_jobs_and_counts_all_pending(tmp_path, monkeypatch):

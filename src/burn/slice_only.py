@@ -396,6 +396,15 @@ def _mimo_empty_result_details(results):
     return details
 
 
+def _mimo_empty_result_message(results):
+    reason = str(getattr(results, "empty_reason", "") or "").strip()
+    if not reason:
+        reason = str(getattr(results, "raw_response_summary", "") or "").strip()
+    if not reason:
+        reason = "MiMo 未提供原因"
+    return f"MiMo 未生成可投稿片段：{reason}"
+
+
 def _mimo_empty_log_suffix(results):
     reason = str(getattr(results, "empty_reason", "") or "").strip()
     if reason:
@@ -940,7 +949,7 @@ def slice_only(video_path, **_slice_options):
             result_message = (
                 f"MiMo 返回 {len(results)} 个可处理片段"
                 if results
-                else "MiMo 未返回可投稿片段"
+                else _mimo_empty_result_message(empty_result_source)
             )
             candidate_judgments.append(
                 _candidate_judgment_record(
