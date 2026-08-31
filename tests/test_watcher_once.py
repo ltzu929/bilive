@@ -5,7 +5,7 @@ from src.server import watcher
 from src.burn.task_history import read_task_history
 
 
-def test_watcher_once_processes_pending_and_exits(monkeypatch):
+def test_watcher_once_processes_pending_and_exits(monkeypatch, tmp_path):
     calls = []
 
     def fake_process_pending(videos_dir=None):
@@ -14,7 +14,18 @@ def test_watcher_once_processes_pending_and_exits(monkeypatch):
 
     monkeypatch.setattr(watcher, "process_pending_until_quiet", fake_process_pending)
 
-    assert watcher.main(["--once", "--videos-dir", "D:/alldata/pi/bilive/Videos"]) == 0
+    assert (
+        watcher.main(
+            [
+                "--once",
+                "--videos-dir",
+                "D:/alldata/pi/bilive/Videos",
+                "--lock-file",
+                str(tmp_path / "slice-worker.lock"),
+            ]
+        )
+        == 0
+    )
     assert calls == ["D:/alldata/pi/bilive/Videos"]
 
 
