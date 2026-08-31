@@ -48,3 +48,7 @@ Thumbs.db
 [Dd]esktop.ini
 $RECYCLE.BIN/
 .worktrees/
+
+# Local review and configuration backups
+review_diff.patch
+settings.toml.before-*
