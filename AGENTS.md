@@ -36,4 +36,4 @@ python -m compileall src tests
 .\.venv-win\Scripts\python.exe -m pip check
 ```
 
-涉及部署时还要执行 PowerShell 解析、`bash -n` 和 systemd unit 校验。
+涉及部署时还要执行 PowerShell 解析、`bash -n` 和仓库实际包含的 systemd unit 校验。

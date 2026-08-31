@@ -285,7 +285,7 @@ Stop-ScheduledTask -TaskName BiliveWorkerApi
 
 ```bash
 find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-systemd-analyze verify deploy/*.service deploy/*.mount deploy/*.automount deploy/*.timer
+systemd-analyze verify deploy/*.service deploy/*.timer
 ```
 
 验收不得进行真实 B 站投稿，也不得自动处理已有 ready 录像。
