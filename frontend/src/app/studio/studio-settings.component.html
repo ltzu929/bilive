@@ -1,0 +1,37 @@
+<section class="studio-page settings-page">
+  <nz-page-header nzTitle="工作台设置" nzSubtitle="浏览器偏好与当前处理链路配置"></nz-page-header>
+
+  <div class="settings-grid">
+    <nz-card nzTitle="界面偏好">
+      <form nz-form>
+        <nz-form-item>
+          <nz-form-label nzFor="refresh-interval">刷新间隔（秒）</nz-form-label>
+          <nz-form-control nzErrorTip="请输入 5 到 300 之间的数字">
+            <input nz-input id="refresh-interval" type="number" min="5" max="300" [(ngModel)]="refreshInterval" name="refreshInterval" />
+          </nz-form-control>
+        </nz-form-item>
+        <nz-form-item>
+          <nz-form-label>紧凑队列</nz-form-label>
+          <nz-form-control><nz-switch [(ngModel)]="compactQueue" name="compactQueue"></nz-switch></nz-form-control>
+        </nz-form-item>
+        <nz-form-item>
+          <nz-form-label>默认收起侧栏</nz-form-label>
+          <nz-form-control><nz-switch [(ngModel)]="collapseSidebar" name="collapseSidebar"></nz-switch></nz-form-control>
+        </nz-form-item>
+        <button nz-button nzType="primary" type="button" (click)="save()">保存浏览器偏好</button>
+      </form>
+    </nz-card>
+
+    <nz-card nzTitle="处理链路（只读）">
+      <nz-spin [nzSpinning]="loading">
+        <nz-descriptions nzSize="small" [nzColumn]="1">
+          <nz-descriptions-item nzTitle="MiMo 模型">{{ dashboardSettings.mimo?.model || '-' }}</nz-descriptions-item>
+          <nz-descriptions-item nzTitle="MiMo FPS">{{ dashboardSettings.mimo?.fps || '-' }}</nz-descriptions-item>
+          <nz-descriptions-item nzTitle="ASR">{{ dashboardSettings.whisper?.model || '-' }} / {{ dashboardSettings.whisper?.device || '-' }}</nz-descriptions-item>
+          <nz-descriptions-item nzTitle="上传自动启动">{{ dashboardSettings.upload?.auto_start == null ? '-' : (dashboardSettings.upload.auto_start ? '是' : '否') }}</nz-descriptions-item>
+        </nz-descriptions>
+        <p class="readonly-hint">处理链路配置由 bilive-server.toml 和 Windows worker 环境管理；此处不直接写入生产配置。</p>
+      </nz-spin>
+    </nz-card>
+  </div>
+</section>

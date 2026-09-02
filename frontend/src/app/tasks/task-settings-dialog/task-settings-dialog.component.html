@@ -1,0 +1,756 @@
+<nz-modal
+  nzTitle="任务设置"
+  nzCentered
+  [nzVisible]="visible"
+  [nzOkDisabled]="ngForm?.form?.invalid"
+  (nzOnOk)="handleConfirm()"
+  (nzOnCancel)="handleCancel()"
+  (nzAfterOpen)="afterOpen.emit()"
+  (nzAfterClose)="afterClose.emit()"
+>
+  <ng-container *nzModalContent>
+    <form nz-form ngForm>
+      <div ngModelGroup="output" class="form-group output">
+        <h2>文件</h2>
+        <nz-form-item class="setting-item input">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="变量说明请查看对应全局设置"
+            >路径模板</nz-form-label
+          >
+          <nz-form-control
+            class="setting-control input"
+            [nzErrorTip]="pathTemplateErrorTip"
+          >
+            <input
+              type="text"
+              required
+              [pattern]="pathTemplatePattern"
+              nz-input
+              name="pathTemplate"
+              [(ngModel)]="model.output.pathTemplate"
+              [disabled]="options.output.pathTemplate === null"
+            />
+            <ng-template #pathTemplateErrorTip let-control>
+              <ng-container *ngIf="control.hasError('required')">
+                请输入路径模板
+              </ng-container>
+              <ng-container *ngIf="control.hasError('pattern')">
+                路径模板有错误
+              </ng-container>
+            </ng-template>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.output.pathTemplate !== null"
+            (nzCheckedChange)="
+              options.output.pathTemplate = $event
+                ? globalSettings.output.pathTemplate
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item filesize-limit">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            [nzTooltipTitle]="filesizeLimitTip"
+            >大小限制</nz-form-label
+          >
+          <ng-template #filesizeLimitTip>
+            <p>
+              自动分割文件以限制录播文件大小
+              <br />
+              格式：数字 + 单位(GB, MB, KB, B)
+              <br />
+              不自动分割文件设置为 <strong>0 B</strong>
+              <br />
+            </p>
+          </ng-template>
+          <nz-form-control class="setting-control input">
+            <app-input-filesize
+              name="filesizeLimit"
+              [(ngModel)]="model.output.filesizeLimit"
+              [disabled]="options.output.filesizeLimit === null"
+            ></app-input-filesize>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.output.filesizeLimit !== null"
+            (nzCheckedChange)="
+              options.output.filesizeLimit = $event
+                ? globalSettings.output.filesizeLimit
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item duration-limit">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            [nzTooltipTitle]="durationLimitTip"
+            >时长限制</nz-form-label
+          >
+          <ng-template #durationLimitTip>
+            <p>
+              自动分割文件以限制录播文件时长
+              <br />
+              格式：HH:MM:SS
+              <br />
+              不自动分割文件设置为 <strong>00:00:00</strong>
+              <br />
+            </p>
+          </ng-template>
+          <nz-form-control class="setting-control input">
+            <app-input-duration
+              name="durationLimit"
+              [(ngModel)]="model.output.durationLimit"
+              [disabled]="options.output.durationLimit === null"
+            ></app-input-duration>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.output.durationLimit !== null"
+            (nzCheckedChange)="
+              options.output.durationLimit = $event
+                ? globalSettings.output.durationLimit
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+      </div>
+
+      <div ngModelGroup="recorder" class="form-group recorder">
+        <h2>录制</h2>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            [nzTooltipTitle]="streamFormatTip"
+            >直播流格式</nz-form-label
+          >
+          <ng-template #streamFormatTip>
+            <p>
+              选择要录制的直播流格式
+              <br />
+              <b>FLV:</b>
+              flv 流在网络不稳定的情况下容易中断丢失数据或录制到二压画质。没有
+              flv 流的直播会自动切换录制 fmp4 流。
+              <br />
+              <b>HLS (fmp4):</b>
+              hls 流基本不受网络波动影响，但不是所有直播间都支持。有 flv
+              流的直播，在设定的等待时间内没有 fmp4 流会自动切换录制 flv 流。
+              <br />
+              <b>P.S.</b>
+              <br />
+              WEB 端直播播放器是 Hls7Player 的直播间支持录制 fmp4 流, fMp4Player
+              则不支持。
+            </p>
+          </ng-template>
+          <nz-form-control class="setting-control select">
+            <nz-select
+              name="streamFormat"
+              [(ngModel)]="model.recorder.streamFormat"
+              [disabled]="options.recorder.streamFormat === null"
+              [nzOptions]="streamFormatOptions"
+            >
+            </nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.streamFormat !== null"
+            (nzCheckedChange)="
+              options.recorder.streamFormat = $event
+                ? globalSettings.recorder.streamFormat
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item
+          class="setting-item"
+          *ngIf="
+            (options.recorder.streamFormat || model.recorder.streamFormat) ===
+            'fmp4'
+          "
+        >
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            [nzTooltipTitle]="fmp4StreamTimeoutTip"
+            >fmp4 流等待时间</nz-form-label
+          >
+          <ng-template #fmp4StreamTimeoutTip>
+            <p>
+              如果超过所设置的等待时间 fmp4 流还没有就切换为录制 flv 流
+              <br />
+              fmp4 流在刚推流是没有的，要过一会才有。
+              <br />
+              fmp4 流出现的时间和直播延迟有关，一般都在 10
+              秒内，但也有延迟比较大超过 1 分钟的。
+              <br />
+              推荐全局设置为 10 秒，个别延迟比较大的直播间单独设置。
+            </p>
+          </ng-template>
+          <nz-form-control class="setting-control select">
+            <nz-select
+              #fmp4StreamTimeout="ngModel"
+              name="fmp4StreamTimeout"
+              [(ngModel)]="model.recorder.fmp4StreamTimeout"
+              [disabled]="options.recorder.fmp4StreamTimeout === null"
+              [nzOptions]="fmp4StreamTimeoutOptions"
+            >
+            </nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.fmp4StreamTimeout !== null"
+            (nzCheckedChange)="
+              options.recorder.fmp4StreamTimeout = $event
+                ? globalSettings.recorder.fmp4StreamTimeout
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="所选画质不存在将以原画代替"
+            >画质</nz-form-label
+          >
+          <nz-form-control class="setting-control select">
+            <nz-select
+              name="qualityNumber"
+              [(ngModel)]="model.recorder.qualityNumber"
+              [disabled]="options.recorder.qualityNumber === null"
+              [nzOptions]="qualityOptions"
+            >
+            </nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.qualityNumber !== null"
+            (nzCheckedChange)="
+              options.recorder.qualityNumber = $event
+                ? globalSettings.recorder.qualityNumber
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="录播文件完成时保存当前直播间的封面"
+            >保存封面</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              name="saveCover"
+              [(ngModel)]="model.recorder.saveCover"
+              [disabled]="options.recorder.saveCover === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.saveCover !== null"
+            (nzCheckedChange)="
+              options.recorder.saveCover = $event
+                ? globalSettings.recorder.saveCover
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            [nzTooltipTitle]="coverSaveStrategyTip"
+            >封面保存策略</nz-form-label
+          >
+          <ng-template #coverSaveStrategyTip>
+            <p>
+              默认:
+              每个分割的录播文件对应保存一个封面文件，不管封面是否相同。<br />
+              去重: 相同的封面只保存一次<br />
+              P.S.
+              <br />
+              判断是否相同是依据封面数据的 sha1，只在单次录制内有效。
+            </p>
+          </ng-template>
+          <nz-form-control class="setting-control select">
+            <nz-select
+              name="coverSaveStrategy"
+              [(ngModel)]="model.recorder.coverSaveStrategy"
+              [disabled]="
+                options.recorder.coverSaveStrategy === null ||
+                !options.recorder.saveCover
+              "
+              [nzOptions]="coverSaveStrategies"
+            ></nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.coverSaveStrategy !== null"
+            (nzCheckedChange)="
+              options.recorder.coverSaveStrategy = $event
+                ? globalSettings.recorder.coverSaveStrategy
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item
+          class="setting-item"
+          *ngIf="
+            (options.recorder.streamFormat || model.recorder.streamFormat) ===
+            'flv'
+          "
+        >
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="超时时间设置得比较长相对不容易因网络不稳定而出现流中断，但是一旦出现中断就无法实现无缝拼接且漏录较多。"
+            >数据读取超时</nz-form-label
+          >
+          <nz-form-control
+            class="setting-control select"
+            nzWarningTip="无缝拼接会失效！"
+            [nzValidateStatus]="readTimeout.value > 3 ? 'warning' : readTimeout"
+          >
+            <nz-select
+              #readTimeout="ngModel"
+              name="readTimeout"
+              [(ngModel)]="model.recorder.readTimeout"
+              [disabled]="options.recorder.readTimeout === null"
+              [nzOptions]="readTimeoutOptions"
+            >
+            </nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.readTimeout !== null"
+            (nzCheckedChange)="
+              options.recorder.readTimeout = $event
+                ? globalSettings.recorder.readTimeout
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="断网超过等待时间就结束录制，如果网络恢复后仍未下播会自动重新开始录制。"
+            >断网等待时间</nz-form-label
+          >
+          <nz-form-control class="setting-control select">
+            <nz-select
+              name="disconnectionTimeout"
+              [(ngModel)]="model.recorder.disconnectionTimeout"
+              [disabled]="options.recorder.disconnectionTimeout === null"
+              [nzOptions]="disconnectionTimeoutOptions"
+              [nzOptionOverflowSize]="6"
+            >
+            </nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.bufferSize !== null"
+            (nzCheckedChange)="
+              options.recorder.bufferSize = $event
+                ? globalSettings.recorder.bufferSize
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item
+          class="setting-item"
+          *ngIf="
+            (options.recorder.streamFormat || model.recorder.streamFormat) ===
+            'flv'
+          "
+        >
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="硬盘写入缓冲设置得比较大可以减少对硬盘的写入，但需要占用更多的内存。"
+            >硬盘写入缓冲</nz-form-label
+          >
+          <nz-form-control class="setting-control select">
+            <nz-select
+              name="bufferSize"
+              [(ngModel)]="model.recorder.bufferSize"
+              [disabled]="options.recorder.bufferSize === null"
+              [nzOptions]="bufferOptions"
+              [nzOptionOverflowSize]="6"
+            >
+            </nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.recorder.bufferSize !== null"
+            (nzCheckedChange)="
+              options.recorder.bufferSize = $event
+                ? globalSettings.recorder.bufferSize
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+      </div>
+
+      <div ngModelGroup="danmaku" class="form-group danmaku">
+        <h2>弹幕</h2>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzFor="recordGiftSend"
+            nzNoColon
+            nzTooltipTitle="记录礼物信息到弹幕文件里"
+            >记录礼物</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              id="recordGiftSend"
+              name="recordGiftSend"
+              [(ngModel)]="model.danmaku.recordGiftSend"
+              [disabled]="options.danmaku.recordGiftSend === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.danmaku.recordGiftSend !== null"
+            (nzCheckedChange)="
+              options.danmaku.recordGiftSend = $event
+                ? globalSettings.danmaku.recordGiftSend
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzFor="recordFreeGifts"
+            nzNoColon
+            nzTooltipTitle="记录免费礼物信息到弹幕文件里"
+            >记录免费礼物</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              id="recordFreeGifts"
+              name="recordFreeGifts"
+              [(ngModel)]="model.danmaku.recordFreeGifts"
+              [disabled]="options.danmaku.recordFreeGifts === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.danmaku.recordFreeGifts !== null"
+            (nzCheckedChange)="
+              options.danmaku.recordFreeGifts = $event
+                ? globalSettings.danmaku.recordFreeGifts
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzFor="recordGuardBuy"
+            nzNoColon
+            nzTooltipTitle="记录上舰信息到弹幕文件里"
+            >记录上舰</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              id="recordGuardBuy"
+              name="recordGuardBuy"
+              [(ngModel)]="model.danmaku.recordGuardBuy"
+              [disabled]="options.danmaku.recordGuardBuy === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.danmaku.recordGuardBuy !== null"
+            (nzCheckedChange)="
+              options.danmaku.recordGuardBuy = $event
+                ? globalSettings.danmaku.recordGuardBuy
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzFor="recordSuperChat"
+            nzNoColon
+            nzTooltipTitle="记录 Super Chat 信息到弹幕文件里"
+            >记录 Super Chat</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              id="recordSuperChat"
+              name="recordSuperChat"
+              [(ngModel)]="model.danmaku.recordSuperChat"
+              [disabled]="options.danmaku.recordSuperChat === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.danmaku.recordSuperChat !== null"
+            (nzCheckedChange)="
+              options.danmaku.recordSuperChat = $event
+                ? globalSettings.danmaku.recordSuperChat
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzFor="danmuUname"
+            nzNoColon
+            nzTooltipTitle="发送者: 弹幕内容"
+            >弹幕前加用户名</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              id="danmuUname"
+              name="danmuUname"
+              [(ngModel)]="model.danmaku.danmuUname"
+              [disabled]="options.danmaku.danmuUname === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.danmaku.danmuUname !== null"
+            (nzCheckedChange)="
+              options.danmaku.danmuUname = $event
+                ? globalSettings.danmaku.danmuUname
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzFor="saveRawDanmaku"
+            nzNoColon
+            nzTooltipTitle="保存原始弹幕到 JSON lines 文件，主要用于分析调试。"
+            >保存原始弹幕</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              id="saveRawDanmaku"
+              name="saveRawDanmaku"
+              [(ngModel)]="model.danmaku.saveRawDanmaku"
+              [disabled]="options.danmaku.saveRawDanmaku === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.danmaku.saveRawDanmaku !== null"
+            (nzCheckedChange)="
+              options.danmaku.saveRawDanmaku = $event
+                ? globalSettings.danmaku.saveRawDanmaku
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+      </div>
+
+      <div ngModelGroup="postprocessing" class="form-group postprocessing">
+        <h2>文件处理</h2>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="添加关键帧等元数据使定位播放和拖进度条不会卡顿"
+            >flv 添加元数据</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              name="injectExtraMetadata"
+              [(ngModel)]="model.postprocessing.injectExtraMetadata"
+              [disabled]="
+                options.postprocessing.injectExtraMetadata === null ||
+                !!options.postprocessing.remuxToMp4
+              "
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.postprocessing.injectExtraMetadata !== null"
+            (nzCheckedChange)="
+              options.postprocessing.injectExtraMetadata = $event
+                ? globalSettings.postprocessing.injectExtraMetadata
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            nzTooltipTitle="调用 ffmpeg 进行转换，需要安装 ffmpeg 。"
+            >转封装为 mp4</nz-form-label
+          >
+          <nz-form-control class="setting-control switch">
+            <nz-switch
+              name="remuxToMp4"
+              [(ngModel)]="model.postprocessing.remuxToMp4"
+              [disabled]="options.postprocessing.remuxToMp4 === null"
+            ></nz-switch>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.postprocessing.remuxToMp4 !== null"
+            (nzCheckedChange)="
+              options.postprocessing.remuxToMp4 = $event
+                ? globalSettings.postprocessing.remuxToMp4
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item">
+          <nz-form-label
+            class="setting-label"
+            nzNoColon
+            [nzTooltipTitle]="deleteSourceTip"
+            >源文件删除策略</nz-form-label
+          >
+          <ng-template #deleteSourceTip>
+            <p>
+              自动: 没出错就删除源文件<br />
+              谨慎: 没出错且没警告才删除源文件<br />
+              从不: 总是保留源文件<br />
+            </p>
+          </ng-template>
+          <nz-form-control class="setting-control select">
+            <nz-select
+              name="deleteSource"
+              [(ngModel)]="model.postprocessing.deleteSource"
+              [disabled]="
+                options.postprocessing.deleteSource === null ||
+                !options.postprocessing.remuxToMp4
+              "
+              [nzOptions]="deleteStrategies"
+            ></nz-select>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.postprocessing.deleteSource !== null"
+            (nzCheckedChange)="
+              options.postprocessing.deleteSource = $event
+                ? globalSettings.postprocessing.deleteSource
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+      </div>
+
+      <div ngModelGroup="header" class="form-group header">
+        <h2>网络请求</h2>
+        <nz-form-item class="setting-item textarea">
+          <nz-form-label class="setting-label" nzFor="userAgent" nzNoColon
+            >User Agent</nz-form-label
+          >
+          <nz-form-control
+            class="setting-control textarea"
+            [nzWarningTip]="warningTip"
+            [nzValidateStatus]="
+              userAgent.valid &&
+              options.header.userAgent !== taskOptions.header.userAgent &&
+              options.header.userAgent !== globalSettings.header.userAgent
+                ? 'warning'
+                : userAgent
+            "
+            [nzErrorTip]="userAgentErrorTip"
+          >
+            <textarea
+              #userAgent="ngModel"
+              nz-input
+              required
+              id="userAgent"
+              name="userAgent"
+              [rows]="3"
+              [(ngModel)]="model.header.userAgent"
+              [disabled]="options.header.userAgent === null"
+            ></textarea>
+          </nz-form-control>
+          <ng-template #userAgentErrorTip let-control>
+            <ng-container *ngIf="control.hasError('required')">
+              请输入 User Agent
+            </ng-container>
+          </ng-template>
+          <label
+            nz-checkbox
+            [nzChecked]="options.header.userAgent !== null"
+            (nzCheckedChange)="
+              options.header.userAgent = $event
+                ? globalSettings.header.userAgent
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+        <nz-form-item class="setting-item textarea">
+          <nz-form-label class="setting-label" nzFor="cookie" nzNoColon
+            >Cookie</nz-form-label
+          >
+          <nz-form-control
+            class="setting-control textarea"
+            [nzWarningTip]="warningTip"
+            [nzValidateStatus]="
+              cookie.valid &&
+              options.header.cookie !== taskOptions.header.cookie &&
+              options.header.cookie !== globalSettings.header.cookie
+                ? 'warning'
+                : cookie
+            "
+          >
+            <textarea
+              #cookie="ngModel"
+              nz-input
+              id="cookie"
+              name="cookie"
+              [rows]="3"
+              [(ngModel)]="model.header.cookie"
+              [disabled]="options.header.cookie === null"
+            ></textarea>
+          </nz-form-control>
+          <label
+            nz-checkbox
+            [nzChecked]="options.header.cookie !== null"
+            (nzCheckedChange)="
+              options.header.cookie = $event
+                ? globalSettings.header.cookie
+                : null
+            "
+            >覆盖全局设置</label
+          >
+        </nz-form-item>
+      </div>
+    </form>
+  </ng-container>
+</nz-modal>

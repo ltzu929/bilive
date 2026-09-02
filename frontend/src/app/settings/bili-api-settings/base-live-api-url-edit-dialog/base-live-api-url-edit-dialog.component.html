@@ -1,0 +1,50 @@
+<nz-modal
+  nzTitle="修改直播 API 主机地址"
+  nzCentered
+  [(nzVisible)]="visible"
+  [nzOkDisabled]="control.invalid || control.value.trim() === value"
+>
+  <ng-container *nzModalContent>
+    <form nz-form [formGroup]="settingsForm">
+      <nz-form-item>
+        <nz-form-control [nzErrorTip]="errorTip">
+          <textarea
+            [rows]="5"
+            wrap="soft"
+            nz-input
+            required
+            formControlName="baseLiveApiUrls"
+          ></textarea>
+          <ng-template #errorTip let-control>
+            <ng-container *ngIf="control.hasError('required')">
+              不能为空
+            </ng-container>
+            <ng-container *ngIf="control.hasError('baseUrl')">
+              输入无效: {{ control.getError("baseUrl").value | json }}
+            </ng-container>
+          </ng-template>
+        </nz-form-control>
+      </nz-form-item>
+    </form>
+  </ng-container>
+  <ng-template [nzModalFooter]>
+    <button
+      nz-button
+      nzType="default"
+      (click)="restoreDefault()"
+      [disabled]="control.value.trim() === defaultBaseLiveApiUrl"
+    >
+      恢复默认
+    </button>
+    <button nz-button nzType="default" (click)="handleCancel()">取消</button>
+    <button
+      nz-button
+      nzDanger
+      nzType="default"
+      (click)="handleConfirm()"
+      [disabled]="control.invalid || control.value.trim() === value"
+    >
+      确定
+    </button>
+  </ng-template>
+</nz-modal>

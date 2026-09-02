@@ -1,0 +1,212 @@
+<form nz-form [formGroup]="settingsForm">
+  <nz-form-item class="setting-item">
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      [nzTooltipTitle]="streamFormatTip"
+      >直播流格式</nz-form-label
+    >
+    <ng-template #streamFormatTip>
+      <p>
+        选择要录制的直播流格式
+        <br />
+        <b>FLV:</b>
+        flv 流在网络不稳定的情况下容易中断丢失数据或录制到二压画质。没有 flv
+        流的直播会自动切换录制 fmp4 流。
+        <br />
+        <b>HLS (fmp4):</b>
+        hls 流基本不受网络波动影响，但不是所有直播间都支持。有 flv
+        流的直播，在设定的等待时间内没有 fmp4 流会自动切换录制 flv 流。
+        <br />
+        <b>P.S.</b>
+        <br />
+        WEB 端直播播放器是 Hls7Player 的直播间支持录制 fmp4 流, fMp4Player
+        则不支持。
+      </p>
+    </ng-template>
+    <nz-form-control
+      class="setting-control select"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.streamFormat ? streamFormatControl : 'warning'
+      "
+    >
+      <nz-select
+        formControlName="streamFormat"
+        [nzOptions]="streamFormatOptions"
+      >
+      </nz-select>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item
+    class="setting-item"
+    *ngIf="streamFormatControl.value === 'fmp4'"
+  >
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      [nzTooltipTitle]="fmp4StreamTimeoutTip"
+      >fmp4 流等待时间</nz-form-label
+    >
+    <ng-template #fmp4StreamTimeoutTip>
+      <p>
+        如果超过所设置的等待时间 fmp4 流还没有就切换为录制 flv 流
+        <br />
+        fmp4 流在刚推流是没有的，要过一会才有。
+        <br />
+        fmp4 流出现的时间和直播延迟有关，一般都在 10 秒内，但也有延迟比较大超过
+        1 分钟的。
+        <br />
+        推荐全局设置为 10 秒，个别延迟比较大的直播间单独设置。
+      </p>
+    </ng-template>
+    <nz-form-control
+      class="setting-control select"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.fmp4StreamTimeout ? fmp4StreamTimeoutControl : 'warning'
+      "
+    >
+      <nz-select
+        formControlName="fmp4StreamTimeout"
+        [nzOptions]="fmp4StreamTimeoutOptions"
+      >
+      </nz-select>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item class="setting-item">
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="所选画质不存在将以原画代替"
+      >画质</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control select"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.qualityNumber ? qualityNumberControl : 'warning'
+      "
+    >
+      <nz-select formControlName="qualityNumber" [nzOptions]="qualityOptions">
+      </nz-select>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item class="setting-item" appSwitchActionable>
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="录播文件完成时保存当前直播间的封面"
+      >保存封面</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control switch"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="syncStatus.saveCover ? saveCoverControl : 'warning'"
+    >
+      <nz-switch formControlName="saveCover"></nz-switch>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item class="setting-item">
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      [nzTooltipTitle]="coverSaveStrategyTip"
+      >封面保存策略</nz-form-label
+    >
+    <ng-template #coverSaveStrategyTip>
+      <p>
+        默认: 每个分割的录播文件对应保存一个封面文件，不管封面是否相同。<br />
+        去重: 相同的封面只保存一次<br />
+        P.S.
+        <br />
+        判断是否相同是依据封面数据的 sha1，只在单次录制内有效。
+      </p>
+    </ng-template>
+    <nz-form-control
+      class="setting-control radio"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.coverSaveStrategy ? coverSaveStrategyControl : 'warning'
+      "
+    >
+      <nz-radio-group
+        formControlName="coverSaveStrategy"
+        [nzDisabled]="!saveCoverControl.value"
+      >
+        <ng-container *ngFor="let strategy of coverSaveStrategies">
+          <label nz-radio-button [nzValue]="strategy.value">{{
+            strategy.label
+          }}</label>
+        </ng-container>
+      </nz-radio-group>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item
+    class="setting-item"
+    *ngIf="streamFormatControl.value === 'flv'"
+  >
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="超时时间设置得比较长相对不容易因网络不稳定而出现流中断，但是一旦出现中断就无法实现无缝拼接且漏录较多。"
+      >数据读取超时</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control select"
+      [nzWarningTip]="
+        syncStatus.readTimeout ? '无缝拼接会失效！' : syncFailedWarningTip
+      "
+      [nzValidateStatus]="
+        syncStatus.readTimeout && readTimeoutControl.value <= 3
+          ? readTimeoutControl
+          : 'warning'
+      "
+    >
+      <nz-select formControlName="readTimeout" [nzOptions]="readTimeoutOptions">
+      </nz-select>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item class="setting-item">
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="断网超过等待时间就结束录制，如果网络恢复后仍未下播会自动重新开始录制。"
+      >断网等待时间</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control select"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.disconnectionTimeout
+          ? disconnectionTimeoutControl
+          : 'warning'
+      "
+    >
+      <nz-select
+        formControlName="disconnectionTimeout"
+        [nzOptions]="disconnectionTimeoutOptions"
+      >
+      </nz-select>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item
+    class="setting-item"
+    *ngIf="streamFormatControl.value === 'flv'"
+  >
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="硬盘写入缓冲设置得比较大可以减少对硬盘的写入，但需要占用更多的内存。"
+      >硬盘写入缓冲</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control select"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="syncStatus.bufferSize ? bufferSizeControl : 'warning'"
+    >
+      <nz-select formControlName="bufferSize" [nzOptions]="bufferOptions">
+      </nz-select>
+    </nz-form-control>
+  </nz-form-item>
+</form>

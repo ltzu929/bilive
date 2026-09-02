@@ -1,0 +1,70 @@
+<form nz-form [formGroup]="settingsForm">
+  <nz-form-item class="setting-item" appSwitchActionable>
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="添加关键帧等元数据使定位播放和拖进度条不会卡顿"
+      >flv 添加元数据</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control switch"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.injectExtraMetadata ? injectExtraMetadataControl : 'warning'
+      "
+    >
+      <nz-switch
+        formControlName="injectExtraMetadata"
+        [nzDisabled]="remuxToMp4Control.value"
+      ></nz-switch>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item class="setting-item" appSwitchActionable>
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      nzTooltipTitle="调用 ffmpeg 进行转换，需要安装 ffmpeg 。"
+      >转封装为 mp4</nz-form-label
+    >
+    <nz-form-control
+      class="setting-control switch"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="syncStatus.remuxToMp4 ? remuxToMp4Control : 'warning'"
+    >
+      <nz-switch formControlName="remuxToMp4"></nz-switch>
+    </nz-form-control>
+  </nz-form-item>
+  <nz-form-item class="setting-item">
+    <nz-form-label
+      class="setting-label"
+      nzNoColon
+      [nzTooltipTitle]="deleteSourceTip"
+      >源文件删除策略</nz-form-label
+    >
+    <ng-template #deleteSourceTip>
+      <p>
+        自动: 没出错就删除源文件<br />
+        谨慎: 没出错且没警告才删除源文件<br />
+        从不: 总是保留源文件<br />
+      </p>
+    </ng-template>
+    <nz-form-control
+      class="setting-control radio"
+      [nzWarningTip]="syncFailedWarningTip"
+      [nzValidateStatus]="
+        syncStatus.deleteSource ? deleteSourceControl : 'warning'
+      "
+    >
+      <nz-radio-group
+        formControlName="deleteSource"
+        [nzDisabled]="!remuxToMp4Control.value"
+      >
+        <ng-container *ngFor="let strategy of deleteStrategies">
+          <label nz-radio-button [nzValue]="strategy.value">{{
+            strategy.label
+          }}</label>
+        </ng-container>
+      </nz-radio-group>
+    </nz-form-control>
+  </nz-form-item>
+</form>

@@ -1,0 +1,43 @@
+<section class="studio-page uploads-page">
+  <nz-page-header nzTitle="上传中心" nzSubtitle="查看成片队列与投稿状态">
+    <nz-page-header-extra>
+      <button nz-button (click)="refresh()" [disabled]="loading || actionBusy">
+        <i nz-icon nzType="reload"></i>刷新
+      </button>
+      <button nz-button (click)="wakeWorker()" [disabled]="actionBusy">唤醒 worker</button>
+      <button nz-button nzDanger (click)="stopWorker()" [disabled]="actionBusy">停止 worker</button>
+    </nz-page-header-extra>
+  </nz-page-header>
+
+  <nz-alert *ngIf="error" nzType="error" nzShowIcon [nzMessage]="error"></nz-alert>
+
+  <nz-spin [nzSpinning]="loading">
+    <div class="upload-stats">
+      <nz-card nzSize="small" nzTitle="待上传"><nz-statistic [nzValue]="count('queued')"></nz-statistic></nz-card>
+      <nz-card nzSize="small" nzTitle="上传中"><nz-statistic [nzValue]="count('uploading')"></nz-statistic></nz-card>
+      <nz-card nzSize="small" nzTitle="等待投稿"><nz-statistic [nzValue]="count('uploaded')"></nz-statistic></nz-card>
+      <nz-card nzSize="small" nzTitle="已发布"><nz-statistic [nzValue]="count('published')"></nz-statistic></nz-card>
+      <nz-card nzSize="small" nzTitle="失败"><nz-statistic [nzValue]="count('failed')"></nz-statistic></nz-card>
+    </div>
+
+    <nz-card nzTitle="投稿队列" class="upload-table-card">
+      <nz-table #uploadTable [nzData]="dashboard.items || []" [nzFrontPagination]="false" nzSize="small">
+        <thead>
+          <tr><th>文件</th><th>房间</th><th>状态</th><th>尝试次数</th><th>错误</th><th>BVID</th></tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let item of uploadTable.data">
+            <td>{{ item.name || '-' }}</td>
+            <td>{{ item.room || '-' }}</td>
+            <td><nz-tag [nzColor]="statusColor(item.status)">{{ statusLabel(item.status) }}</nz-tag></td>
+            <td>{{ item.attempts || 0 }}</td>
+            <td class="error-cell">{{ item.last_error || '-' }}</td>
+            <td>{{ item.bvid || '-' }}</td>
+          </tr>
+        </tbody>
+      </nz-table>
+      <nz-empty *ngIf="!(dashboard.items || []).length" nzNotFoundContent="暂无上传记录"></nz-empty>
+      <p class="database-state">数据库：{{ dashboard.database || '未知' }}</p>
+    </nz-card>
+  </nz-spin>
+</section>

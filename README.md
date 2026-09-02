@@ -12,6 +12,10 @@ The browser calls the Windows dashboard through the explicit same-origin
 never proxies recorder-native `/api` or `/api/v1` requests.  Port `2234` remains
 an API-only internal service and is not a second public entry point.
 
+The matching Angular source is kept in `frontend/`. Building it produces local
+files under `frontend/dist/blrec`; it does not update the production wheel or
+deploy to the Raspberry Pi automatically.
+
 Bilive 是自维护的 B 站直播录制、切片分析、字幕处理和投稿队列项目。Pi 负责连续录制与局域网仪表盘，Windows 负责所有重型处理。
 
 ## 生产边界
