@@ -1,4 +1,10 @@
+import hashlib
+import json
+import zipfile
 from pathlib import Path
+
+
+WHEEL = Path("wheel/blrec-2.0.0b4+bilive.5-py3-none-any.whl")
 
 
 def test_dashboard_service_is_api_only():
@@ -27,3 +33,68 @@ def test_native_gateway_namespace_is_explicit():
     assert 'or "/studio-api"' in gateway
     assert "/studio-proxy" not in gateway
     assert "get(\"referer\")" not in gateway
+
+
+def test_native_wheel_uses_studio_api_namespace():
+    with zipfile.ZipFile(WHEEL) as archive:
+        javascript = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/") and name.endswith(".js")
+        )
+
+    assert b"/studio-api" in javascript
+    assert b"/api/source-recordings" not in javascript
+    assert b"/api/slice/start" not in javascript
+    assert b"/api/worker-trigger/" not in javascript
+
+
+def test_native_wheel_allows_workspace_and_queue_to_scroll():
+    with zipfile.ZipFile(WHEEL) as archive:
+        compiled_styles = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/")
+            and name.endswith((".css", ".js"))
+        )
+
+    assert compiled_styles.count(
+        b"overflow-x:hidden!important;overflow-y:auto!important"
+    ) >= 2
+
+
+def test_native_wheel_includes_source_built_queue_sorting():
+    with zipfile.ZipFile(WHEEL) as archive:
+        javascript = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/") and name.endswith(".js")
+        )
+        index = archive.read("blrec/data/webapp/index.html")
+
+    assert b"bilive-studio-queue-sort.js" not in index
+    assert rb"\u6700\u65b0\u5f55\u64ad\u4f18\u5148" in javascript
+    assert rb"\u6700\u65e9\u5f55\u64ad\u4f18\u5148" in javascript
+    assert rb"\u6309 UP \u4e3b\u5206\u7ec4" in javascript
+
+
+def test_native_wheel_service_worker_tracks_patched_assets():
+    with zipfile.ZipFile(WHEEL) as archive:
+        stylesheet_name = next(
+            name
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/styles.") and name.endswith(".css")
+        )
+        manifest = json.loads(archive.read("blrec/data/webapp/ngsw.json"))
+
+        assets = {
+            f"/{Path(stylesheet_name).name}": archive.read(stylesheet_name),
+            "/index.html": archive.read("blrec/data/webapp/index.html"),
+        }
+
+    app_urls = next(
+        group["urls"] for group in manifest["assetGroups"] if group["name"] == "app"
+    )
+    for public_path, contents in assets.items():
+        assert public_path in app_urls
+        assert manifest["hashTable"][public_path] == hashlib.sha1(contents).hexdigest()

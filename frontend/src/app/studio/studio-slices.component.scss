@@ -222,7 +222,8 @@ h1 {
   top: 12px;
   align-self: start;
   max-height: calc(100vh - 120px);
-  overflow: auto;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
 }
 
 .source-group + .source-group {

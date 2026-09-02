@@ -26,6 +26,10 @@ stored in Git.
 cd D:\alldata\pi\bilive\frontend
 npm ci
 npm run build
+python build_wheel.py `
+  ..\wheel\blrec-2.0.0b4+bilive.4-py3-none-any.whl `
+  ..\wheel\blrec-2.0.0b4+bilive.5-py3-none-any.whl `
+  2.0.0b4+bilive.5
 ```
 
 The production build is written to `frontend/dist/blrec`. Building here does
@@ -33,10 +37,9 @@ not deploy it, modify the checked-in wheel, restart a service, or run work on th
 Raspberry Pi. A wheel update and Pi deployment remain separate, explicit
 operations.
 
-The currently deployed `+bilive.4` wheel still carries the standalone
-`bilive-studio-queue-sort.js` compatibility patch. Its equivalent ordering UI
-now lives in this Angular source; remove the injected asset when a source-built
-wheel replaces that compatibility wheel so both controls are not shipped.
+The currently deployed `+bilive.4` wheel still carries the old standalone
+queue compatibility patch. Source-built wheels contain the ordering UI directly
+and must not include that injected asset.
 
 Do not commit `node_modules`, `.angular`, or `dist`. The checked-in
 `package-lock.json` is the reproducible dependency input.

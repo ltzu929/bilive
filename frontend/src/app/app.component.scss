@@ -132,5 +132,6 @@ $app-logo-size: 32px;
 }
 
 .main-content {
-  overflow: hidden;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
 }
