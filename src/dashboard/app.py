@@ -40,6 +40,7 @@ from src.dashboard.routes import (
     slice_control as slice_control_routes,
     slice_progress as slice_progress_routes,
     status as status_routes,
+    streamers as streamers_routes,
     tasks as tasks_routes,
 )
 from src.log.logger import configure_default_logging
@@ -128,6 +129,7 @@ def create_app(
     app.include_router(feedback_routes.router)
     app.include_router(media_routes.router)
     app.include_router(analytics_routes.router)
+    app.include_router(streamers_routes.router)
 
     if static_dir:
         static_path = Path(static_dir)

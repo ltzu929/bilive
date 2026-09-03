@@ -98,6 +98,7 @@ default_highlight_window = 12
 
 [slice.subtitle]
 # 硬烧字幕外观（全局默认，可被单切片编辑覆盖）
+font_name = "Noto Sans SC"
 font_size = 20
 margin_v = 60
 # 以下为可选项，留空则不写入 force_style（保持 ffmpeg 默认）

@@ -17,6 +17,7 @@ from fastapi import HTTPException, Request
 
 from src.dashboard.file_store import DashboardFileStore
 from src.server.action_jobs import enqueue_action_job, find_active_segment_job
+from src.server.action_jobs import find_active_recording_job
 from src.dashboard.remote_worker import (
     remote_worker_status,
     stop_remote_worker,
@@ -81,6 +82,16 @@ class DashboardContext:
                 task_id = raw_task_id.strip()
                 if not task_id:
                     raise HTTPException(status_code=400, detail="task_id must not be empty")
+        if task_id:
+            from src.dashboard.source_lifecycle import profile_slice_options
+            from src.dashboard.task_state import resolve_task_id
+
+            source = resolve_task_id(self.store.videos_root, task_id)
+            profile_options = profile_slice_options(
+                self.store.videos_root,
+                source.parent.name,
+            )
+            slice_options = {**profile_options, **(slice_options or {})} or None
         return start_slice_scan(
             self.store.videos_root,
             slice_options=slice_options,
@@ -111,6 +122,31 @@ class DashboardContext:
 
     def active_segment_job(self, segment_id: str) -> Dict[str, Any] | None:
         return find_active_segment_job(self.store.videos_root, segment_id)
+
+    def queue_recording_action(
+        self,
+        action: str,
+        recording_id: str,
+        *,
+        payload: Dict[str, Any] | None = None,
+        after_enqueue: Callable[[Dict[str, Any]], Any] | None = None,
+    ) -> Dict[str, Any]:
+        result = enqueue_action_job(
+            self.store.videos_root,
+            action=action,
+            recording_id=recording_id,
+            payload=payload,
+        )
+        job_id = result["job"]["job_id"]
+        result["job_id"] = job_id
+        result["status_url"] = f"/api/jobs/{job_id}"
+        if after_enqueue is not None:
+            after_enqueue(result)
+        result["worker_trigger"] = self.trigger_worker(1)
+        return result
+
+    def active_recording_job(self, recording_id: str) -> Dict[str, Any] | None:
+        return find_active_recording_job(self.store.videos_root, recording_id)
 
 
 def _validated_slice_options(payload: Dict[str, Any] | None) -> dict[str, Any] | None:

@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from src.server import watcher
 from src.burn.task_history import read_task_history
+from src.dashboard.source_lifecycle import read_experiences, read_recording_state
 
 
 def test_watcher_once_processes_pending_and_exits(monkeypatch, tmp_path):
@@ -192,6 +193,56 @@ def test_watcher_writes_slice_count_to_done_history(monkeypatch, tmp_path):
         "22384516/100s_22384516_20260527-12-55-32.mp4",
         "22384516/200s_22384516_20260527-12-55-32.mp4",
     ]
+
+
+def test_watcher_records_pipeline_judge_failure_as_technical_experience(
+    monkeypatch,
+    tmp_path,
+):
+    from src.burn import slice_only as slice_module
+
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    source = room / "22384516_20260527-12-55-32.mp4"
+    source.write_bytes(b"video")
+    source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    source.with_suffix(".mp4.pending").write_text(
+        '{"video_rel_path":"22384516/22384516_20260527-12-55-32.mp4","action":"slice"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        slice_module,
+        "slice_only",
+        lambda *_args, **_kwargs: {
+            "status": "done",
+            "slice_count": 1,
+            "segments": [
+                {
+                    "segment_id": "failed-segment",
+                    "judge_status": "judge_failed",
+                    "judge_error": "LLM unavailable",
+                    "start_seconds": 12,
+                    "end_seconds": 20,
+                }
+            ],
+        },
+    )
+
+    assert watcher.process_pending_videos(videos) == 1
+
+    experiences = read_experiences(videos)
+    assert len(experiences) == 1
+    assert experiences[0]["experience_type"] == "technical_failure"
+    assert experiences[0]["reason_type"] == (
+        "candidate_pipeline:candidate_processing_failed"
+    )
+    assert experiences[0]["note"] == "LLM unavailable"
+    task_id = watcher._task_id_for_source(source, videos.resolve())
+    state = read_recording_state(videos, task_id)
+    assert state is not None
+    assert state["review_state"] == "candidate_review"
 
 
 def test_watcher_recovers_stale_processing_marker(tmp_path):

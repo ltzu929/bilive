@@ -24,6 +24,8 @@ SUPPORTED_ACTIONS = {
     "render_segment",
     "reburn_subtitles",
     "finalize_segment",
+    "create_missed_segment",
+    "trash_recording",
 }
 JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = ("pending", "processing", "done", "failed")
@@ -51,20 +53,26 @@ def enqueue_action_job(
     videos_root: str | Path,
     *,
     action: str,
-    segment_id: str,
+    segment_id: str = "",
+    recording_id: str = "",
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if action not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported action job: {action}")
     segment = str(segment_id).strip()
-    if not segment:
-        raise ValueError("segment_id is required")
+    recording = str(recording_id).strip()
+    if not segment and not recording:
+        raise ValueError("segment_id or recording_id is required")
+    if segment and recording:
+        raise ValueError("segment_id and recording_id are mutually exclusive")
 
     root = jobs_dir(videos_root)
     root.mkdir(parents=True, exist_ok=True)
     normalized_payload = dict(payload or {})
     with _queue_lock(root / ".enqueue.lock"):
         existing = find_active_segment_job(videos_root, segment)
+        if recording:
+            existing = find_active_recording_job(videos_root, recording)
         if existing is not None:
             if (
                 existing.get("action") == action
@@ -86,6 +94,10 @@ def enqueue_action_job(
             "created_ns": time.time_ns(),
             "updated_at": now,
         }
+        if segment:
+            job["segment_id"] = segment
+        if recording:
+            job["recording_id"] = recording
         if normalized_payload:
             job["payload"] = normalized_payload
         _write_json_atomic(_state_path(root, job["job_id"], "pending"), job)
@@ -237,11 +249,13 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
         )
 
     from src.dashboard.source_workbench import (
+        create_missed_segment,
         finalize_segment,
         reburn_segment_subtitles,
         render_segment,
         retry_segment_judge,
     )
+    from src.dashboard.recording_trash import trash_recording
 
     if job["action"] == "retry_judge":
         return retry_segment_judge(videos_root, job["segment_id"])
@@ -255,6 +269,20 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
         return finalize_segment(
             videos_root,
             job["segment_id"],
+            payload=payload,
+        )
+    if job["action"] == "create_missed_segment":
+        return create_missed_segment(
+            videos_root,
+            job["segment_id"],
+            payload=dict(job.get("payload") or {}),
+        )
+    if job["action"] == "trash_recording":
+        payload = dict(job.get("payload") or {})
+        payload["_job_id"] = str(job.get("job_id") or "")
+        return trash_recording(
+            videos_root,
+            str(job.get("recording_id") or ""),
             payload=payload,
         )
     raise ValueError(f"Unsupported action job: {job['action']}")
@@ -283,7 +311,14 @@ def _read_pending_job(path: Path) -> dict[str, Any]:
         str(job.get("job_id") or "") != expected_job_id
         or not JOB_ID_RE.fullmatch(expected_job_id)
         or str(job.get("action") or "") not in SUPPORTED_ACTIONS
-        or not str(job.get("segment_id") or "").strip()
+        or not bool(
+            str(job.get("segment_id") or "").strip()
+            or str(job.get("recording_id") or "").strip()
+        )
+        or bool(
+            str(job.get("segment_id") or "").strip()
+            and str(job.get("recording_id") or "").strip()
+        )
     ):
         raise ValueError("pending action job has invalid or inconsistent fields")
     return job
@@ -353,6 +388,19 @@ def find_active_segment_job(
     return None
 
 
+def find_active_recording_job(
+    videos_root: str | Path,
+    recording_id: str,
+) -> dict[str, Any] | None:
+    root = jobs_dir(videos_root)
+    for state in ("pending", "processing"):
+        for path in sorted(root.glob(f"*.{state}.json")):
+            job = _read_json(path)
+            if job.get("recording_id") == recording_id:
+                return job
+    return None
+
+
 def _record_segment_job_state(
     videos_root: Path,
     job: dict[str, Any],
@@ -361,6 +409,9 @@ def _record_segment_job_state(
     failure: dict[str, str] | None = None,
 ) -> None:
     if os.name != "nt":
+        return
+    if not str(job.get("segment_id") or "").strip():
+        _record_recording_job_state(videos_root, job, status, failure=failure)
         return
     try:
         from src.dashboard.source_workbench import record_segment_action_state
@@ -376,6 +427,35 @@ def _record_segment_job_state(
     except Exception:
         # The job file remains authoritative even if a damaged/missing history
         # cannot be synchronized. Do not mask the original action outcome.
+        return
+
+
+def _record_recording_job_state(
+    videos_root: Path,
+    job: dict[str, Any],
+    status: str,
+    *,
+    failure: dict[str, str] | None = None,
+) -> None:
+    recording_id = str(job.get("recording_id") or "").strip()
+    if not recording_id:
+        return
+    try:
+        from src.dashboard.source_lifecycle import set_trash_job_state
+
+        reason = ""
+        if failure:
+            reason = str(failure.get("summary") or failure.get("technical_details") or "")
+        set_trash_job_state(
+            videos_root,
+            recording_id,
+            status=status,
+            job_id=str(job.get("job_id") or ""),
+            reason=reason,
+        )
+    except Exception:
+        # Keep the action-job file authoritative if the independent recording
+        # state is missing or damaged.
         return
 
 

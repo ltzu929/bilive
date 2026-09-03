@@ -72,8 +72,8 @@ def _setup_pipeline(tmp_path, monkeypatch, analysis):
     )
     monkeypatch.setattr(
         slice_only_module,
-        "insert_upload_queue",
-        lambda path: conn.insert_upload_queue(path, db_path=db_path),
+        "stage_upload_queue",
+        lambda path: conn.stage_upload_queue(path, db_path=db_path),
     )
     monkeypatch.setattr(
         slice_only_module,
@@ -92,7 +92,7 @@ def _setup_pipeline(tmp_path, monkeypatch, analysis):
     return source, candidate, db_path
 
 
-def test_kept_candidate_is_queued_once_and_reprocessing_is_idempotent(
+def test_kept_candidate_is_staged_once_and_reprocessing_is_idempotent(
     tmp_path,
     monkeypatch,
 ):
@@ -122,7 +122,10 @@ def test_kept_candidate_is_queued_once_and_reprocessing_is_idempotent(
     assert second["slice_count"] == 1
     assert len(rows) == 1
     assert rows[0]["video_path"] == expected_output
-    assert rows[0]["status"] == "queued"
+    assert rows[0]["status"] == "staged"
+    assert first["segments"][0]["upload_status"] == "awaiting_publish"
+    assert second["segments"][0]["upload_status"] == "awaiting_publish"
+    assert conn.peek_next_upload(db_path) is None
     assert candidate.with_name(
         "1s_100s_22384516_20260609-10-00-00_clip1.upload.json"
     ).is_file()
@@ -254,7 +257,7 @@ def test_unexpected_failure_after_enqueue_rolls_back_new_queue_row(
 
     class FailAfterEnqueue:
         def info(self, message):
-            if "Slice ready for upload" in message:
+            if "Slice staged and waiting for publish approval" in message:
                 raise OSError("post-enqueue failure")
             return real_log.info(message)
 

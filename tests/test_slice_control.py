@@ -52,6 +52,26 @@ def test_start_slice_scan_queues_only_requested_source_recording(tmp_path):
     assert marker["video_rel_path"] == "22384516/22384516_20260524-12-57-08.mp4"
     assert not other.with_suffix(".mp4.pending").exists()
 
+
+def test_start_slice_scan_defaults_to_newest_recording_only(tmp_path):
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    older = room / "22384516_20260524-12-57-08.mp4"
+    newer = room / "22384516_20260525-12-57-08.mp4"
+    for source in [older, newer]:
+        source.write_bytes(b"mp4")
+        source.with_suffix(".xml").write_text("<i></i>", encoding="utf-8")
+    older.touch()
+    newer.touch()
+
+    result = slice_control.start_slice_scan(videos_root=videos)
+
+    assert result["queued"] == 1
+    assert result["deferred"] == 1
+    assert not older.with_suffix(".mp4.pending").exists()
+    assert newer.with_suffix(".mp4.pending").is_file()
+
 def test_start_slice_scan_reports_empty_queue_when_nothing_is_ready(tmp_path):
     videos = tmp_path / "Videos"
     room = videos / "22384516"

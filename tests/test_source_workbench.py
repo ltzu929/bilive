@@ -171,7 +171,7 @@ def test_candidate_relative_path_cannot_escape_videos_root(tmp_path):
         source_workbench._segment_candidate_path(videos.resolve(), segment)
 
 
-def test_manual_keep_segment_updates_sidecar_and_queues_upload(tmp_path, monkeypatch):
+def test_manual_keep_segment_marks_candidate_without_queueing_upload(tmp_path, monkeypatch):
     videos = tmp_path / "Videos"
     source = _create_processed_source(videos)
     queued = []
@@ -196,14 +196,14 @@ def test_manual_keep_segment_updates_sidecar_and_queues_upload(tmp_path, monkeyp
 
     assert updated["judge_status"] == "manual_keep"
     assert updated["manual_override"] is True
-    assert updated["upload_status"] == "queued"
-    assert queued == [updated["candidate_path"]]
-    assert metadata[0][1]["title"] == "Manual title"
+    assert updated["upload_status"] == "not_queued"
+    assert queued == []
+    assert metadata == []
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
     assert history["segments"][0]["judge_status"] == "manual_keep"
 
 
-def test_manual_keep_segment_reports_queue_failure(tmp_path, monkeypatch):
+def test_manual_keep_segment_does_not_report_queue_failure(tmp_path, monkeypatch):
     videos = tmp_path / "Videos"
     source = _create_processed_source(videos)
     metadata = []
@@ -221,21 +221,20 @@ def test_manual_keep_segment_reports_queue_failure(tmp_path, monkeypatch):
 
     assert updated["judge_status"] == "manual_keep"
     assert updated["manual_override"] is True
-    assert updated["upload_status"] == "queue_failed"
-    assert updated["upload_error"] == "upload queue insert returned false"
-    assert metadata
+    assert updated["upload_status"] == "not_queued"
+    assert "upload_error" not in updated
+    assert metadata == []
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
-    assert history["segments"][0]["upload_status"] == "queue_failed"
+    assert history["segments"][0]["upload_status"] == "not_queued"
 
 
-def test_manual_keep_segment_treats_duplicate_queue_as_idempotent(tmp_path, monkeypatch):
+def test_manual_keep_segment_is_idempotent_before_finalization(tmp_path, monkeypatch):
     videos = tmp_path / "Videos"
     source = _create_processed_source(videos)
     metadata = []
 
-    # insert_upload_queue returns False on a duplicate video_path (the unique
-    # index already has this row). The re-check finds it in the queue, so the
-    # segment should be reported as queued, not queue_failed.
+    # Legacy queue hooks are intentionally unused: manual keep only records
+    # the human decision; finalization creates the staged row later.
     monkeypatch.setattr(source_workbench, "insert_upload_queue", lambda path: False)
     monkeypatch.setattr(
         source_workbench,
@@ -251,11 +250,11 @@ def test_manual_keep_segment_treats_duplicate_queue_as_idempotent(tmp_path, monk
     updated = source_workbench.manual_keep_segment(videos, "seg_keep")
 
     assert updated["judge_status"] == "manual_keep"
-    assert updated["upload_status"] == "queued"
+    assert updated["upload_status"] == "not_queued"
     assert "upload_error" not in updated
-    assert metadata
+    assert metadata == []
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
-    assert history["segments"][0]["upload_status"] == "queued"
+    assert history["segments"][0]["upload_status"] == "not_queued"
 
 
 def test_manual_keep_segment_rejects_stale_failed_preview(tmp_path):
@@ -296,7 +295,7 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
     def fake_activate(path):
         persisted = source_workbench._read_segment(videos, "seg_failed")[2]
         assert persisted["action_state"]["status"] == "done"
-        assert persisted["upload_status"] == "queued"
+        assert persisted["upload_status"] == "awaiting_publish"
         return {"video_path": path, "status": "queued"}
 
     monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
@@ -369,7 +368,7 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
     assert final.read_bytes() == b"final"
     assert updated["candidate_path"] == str(final)
     assert updated["judge_status"] == "manual_keep"
-    assert updated["upload_status"] == "queued"
+    assert updated["upload_status"] == "awaiting_publish"
     assert updated["failure"] is None
     assert updated["action_state"]["status"] == "done"
     assert set(updated["timings_ms"]) == {
@@ -487,7 +486,7 @@ def test_finalize_retry_reuses_raw_and_asr_after_subtitle_failure(
 
     updated = source_workbench.finalize_segment(videos, "seg_failed")
 
-    assert updated["upload_status"] == "queued"
+    assert updated["upload_status"] == "awaiting_publish"
     assert updated["failure"] is None
     assert calls == {"slice": 1, "asr": 1, "burn": 2, "queue": 1}
     assert not source.with_name(f"{source.stem}_reburn_src.mp4").exists()
@@ -786,6 +785,43 @@ def test_retry_judge_preserves_review_state_when_analysis_fails(tmp_path, monkey
     assert queued == []
 
 
+def test_retry_judge_uses_approved_streamer_guidance(tmp_path, monkeypatch):
+    from src.dashboard.source_lifecycle import patch_streamer_profile
+
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos)
+    patch_streamer_profile(
+        videos,
+        "22384516",
+        {"approved_guidance": "必须保留完整事件落点"},
+    )
+    seen = {}
+
+    monkeypatch.setattr(
+        source_workbench,
+        "extract_danmaku_text",
+        lambda *_args: "danmaku",
+    )
+
+    def fake_analyze(path, artist, danmaku_text="", **kwargs):
+        seen.update(kwargs)
+        return AnalysisResult(
+            title="指导后的标题",
+            description="说明",
+            tags=["直播"],
+            retain_recommendation=True,
+            judge_status="keep",
+            quality_reason="worth it",
+        )
+
+    monkeypatch.setattr(source_workbench, "analyze_candidate", fake_analyze)
+
+    updated = source_workbench.retry_segment_judge(videos, "seg_failed")
+
+    assert seen["guidance"] == "必须保留完整事件落点"
+    assert updated["judge_status"] == "keep"
+
+
 def test_render_segment_regenerates_candidate_path(tmp_path, monkeypatch):
     videos = tmp_path / "Videos"
     _create_processed_source(videos)
@@ -816,6 +852,7 @@ def test_update_segment_subtitle_style_persists_mapping(tmp_path):
     )
 
     assert updated["subtitle_style"] == {
+        "font_name": "Noto Sans SC",
         "font_size": 26,
         "margin_v": 80,
         "alignment": 8,

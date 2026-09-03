@@ -41,22 +41,26 @@ def judge_candidate_clips_only(
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
     single_clip: bool = False,
+    guidance: str = "",
 ) -> list[AnalysisResult]:
     duration = _resolve_candidate_duration(
         candidate_start,
         candidate_end,
         candidate_duration,
     )
-    return judge_candidate_clips_with_mimo(
-        video_path=video_path,
-        artist=artist,
-        danmaku_text=str(danmaku_text or ""),
-        candidate_duration=duration,
-        candidate_start=candidate_start,
-        candidate_core_start=candidate_core_start,
-        candidate_core_end=candidate_core_end,
-        single_clip=single_clip,
-    )
+    kwargs = {
+        "video_path": video_path,
+        "artist": artist,
+        "danmaku_text": str(danmaku_text or ""),
+        "candidate_duration": duration,
+        "candidate_start": candidate_start,
+        "candidate_core_start": candidate_core_start,
+        "candidate_core_end": candidate_core_end,
+        "single_clip": single_clip,
+    }
+    if guidance:
+        kwargs["guidance"] = guidance
+    return judge_candidate_clips_with_mimo(**kwargs)
 
 
 def analyze_candidate_clip_results(
@@ -264,6 +268,7 @@ def analyze_candidate_clips(
     candidate_evidence_error: str = "",
     require_candidate_evidence: bool = False,
     single_clip: bool = False,
+    guidance: str = "",
 ) -> list[AnalysisResult]:
     results = judge_candidate_clips_only(
         video_path,
@@ -275,6 +280,7 @@ def analyze_candidate_clips(
         candidate_core_start=candidate_core_start,
         candidate_core_end=candidate_core_end,
         single_clip=single_clip,
+        guidance=guidance,
     )
     return analyze_candidate_clip_results(
         results,
@@ -300,18 +306,22 @@ def analyze_candidate(
     candidate_start: float = 0.0,
     candidate_end: float | None = None,
     candidate_duration: float | None = None,
+    guidance: str = "",
 ) -> AnalysisResult:
     duration = _resolve_candidate_duration(
         candidate_start,
         candidate_end,
         candidate_duration,
     )
-    result = judge_candidate_with_mimo(
-        video_path=video_path,
-        artist=artist,
-        danmaku_text=str(danmaku_text or ""),
-        candidate_duration=duration,
-    )
+    kwargs = {
+        "video_path": video_path,
+        "artist": artist,
+        "danmaku_text": str(danmaku_text or ""),
+        "candidate_duration": duration,
+    }
+    if guidance:
+        kwargs["guidance"] = guidance
+    result = judge_candidate_with_mimo(**kwargs)
     _annotate_ranges(
         result,
         candidate_start,

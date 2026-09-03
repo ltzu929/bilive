@@ -33,8 +33,8 @@ from src.autoslice.danmaku_slice import extract_danmaku_text, format_seconds_for
 from src.burn.subtitle_burn import burn_subtitles_from_analysis
 from src.burn.pipeline_stages import (
     analyze_clips_stage,
-    enqueue_stage,
     metadata_stage,
+    stage_upload_stage,
     subtitle_stage,
 )
 from src.upload.slice_metadata import (
@@ -45,7 +45,13 @@ from src.upload.slice_metadata import (
 from src.upload.extract_video_info import get_video_info
 from src.log.logger import scan_log
 from src.burn.slice_progress import SliceProgressWriter
-from src.db.conn import delete_upload_queue, get_upload_item, insert_upload_queue
+from src.db.conn import (
+    delete_upload_queue,
+    get_upload_item,
+    insert_upload_queue,
+    requeue_failed_upload,
+    stage_upload_queue,
+)
 
 analyze_candidate = _single_candidate_analyzer
 
@@ -469,6 +475,24 @@ def slice_only(video_path, **_slice_options):
     source_name = Path(original_video_path).name
     room_id = Path(original_video_path).parent.name
     xml_path = original_video_path[:-4] + ".xml"
+    from src.dashboard.source_lifecycle import profile_context_for_mimo
+    from src.dashboard.source_lifecycle import profile_subtitle_style
+    from src.burn.subtitle_burn import SubtitleStyle
+    from src.config import default_subtitle_style
+
+    guidance = profile_context_for_mimo(
+        Path(original_video_path).parent.parent,
+        room_id,
+    )
+    configured_subtitle_style = profile_subtitle_style(
+        Path(original_video_path).parent.parent,
+        room_id,
+    )
+    automatic_subtitle_style = (
+        SubtitleStyle.from_mapping(configured_subtitle_style)
+        if configured_subtitle_style
+        else default_subtitle_style()
+    )
 
     def set_diagnostic(item, **progress_fields):
         nonlocal diagnostics
@@ -741,6 +765,7 @@ def slice_only(video_path, **_slice_options):
             candidate_core_start=core_start,
             candidate_core_end=core_end,
             single_clip=True,
+            guidance=guidance,
             analyzer=judge_candidate_clips_with_mimo,
         )
         return {
@@ -939,6 +964,7 @@ def slice_only(video_path, **_slice_options):
                     candidate_start=generated_slice.context_start,
                     candidate_end=generated_slice.context_end,
                     candidate_duration=generated_slice.duration,
+                    guidance=guidance,
                     analyzer=analyze_candidate_clips,
                 )
                 candidate_timings["analysis"] = round(
@@ -1057,6 +1083,17 @@ def slice_only(video_path, **_slice_options):
                     upload_status="not_queued",
                     candidate_path_override=output_path,
                 )
+                segment["artifacts"] = {
+                    "final_output": {
+                        "rel_path": Path(output_path)
+                        .resolve()
+                        .relative_to(Path(original_video_path).parent.parent.resolve())
+                        .as_posix(),
+                        "exists": False,
+                    }
+                }
+                segment["subtitle_style"] = automatic_subtitle_style.to_mapping()
+                segment["_subtitle_style_source"] = "profile" if configured_subtitle_style else "global"
                 segment["timings_ms"] = dict(candidate_timings)
 
                 if OMNI_ENABLE_DEEP_ANALYSIS:
@@ -1072,6 +1109,7 @@ def slice_only(video_path, **_slice_options):
                         video,
                         analysis,
                         output_path,
+                        style=automatic_subtitle_style,
                     ),
                 )
                 segment["timings_ms"]["subtitle"] = round(
@@ -1087,6 +1125,13 @@ def slice_only(video_path, **_slice_options):
                     scan_log.warning(f"{reason}: {slice_path}")
                     segments.append(segment)
                     continue
+                segment["artifacts"]["final_output"]["exists"] = True
+                # ``build_segment_record`` runs before ffmpeg creates the
+                # output, so its initial preview flag is false.  The burned
+                # final artifact is the user-facing preview and must become
+                # available before the staged publish approval.
+                segment["preview_available"] = True
+                segment["preview_reason"] = ""
                 scan_log.info(f"ASR subtitles burned into slice: {output_path}")
 
                 trim_duration = (
@@ -1159,10 +1204,9 @@ def slice_only(video_path, **_slice_options):
                     diagnostics=diagnostics,
                 )
                 queue_started = time.perf_counter()
-                queue_result = enqueue_stage(
+                queue_result = stage_upload_stage(
                     output_path,
-                    insert=insert_upload_queue,
-                    lookup=get_upload_item,
+                    stage=stage_upload_queue,
                     skip=os.getenv("BILIVE_SKIP_UPLOAD_QUEUE") == "1",
                 )
                 segment["timings_ms"]["queue"] = round(
@@ -1180,11 +1224,19 @@ def slice_only(video_path, **_slice_options):
                     scan_log.error(f"{reason}: {output_path}")
                     continue
                 queue_created = bool(queue_result.get("created"))
-                segment["upload_status"] = queue_result["status"]
+                segment["upload_status"] = (
+                    "awaiting_publish"
+                    if queue_result["status"] == "staged"
+                    else queue_result["status"]
+                )
                 if queue_result["status"] == "skipped":
                     scan_log.info(f"Skip upload queue for local test: {output_path}")
+                elif queue_result["status"] == "staged":
+                    scan_log.info(
+                        f"Slice staged and waiting for publish approval: {output_path}"
+                    )
                 elif queue_result["status"] == "queued":
-                    scan_log.info(f"Slice ready for upload: {output_path}")
+                    scan_log.info(f"Slice already approved for upload: {output_path}")
                 else:
                     scan_log.info(
                         f"Slice already exists in upload queue "
@@ -1296,7 +1348,7 @@ def slice_only(video_path, **_slice_options):
             phase_label="清理源文件",
             message="0 切片，源文件已保留",
         )
-    elif os.getenv("BILIVE_DELETE_SOURCE_AFTER_SLICE") != "1":
+    else:
         scan_log.info("Keep original video/danmaku files after slicing.")
         set_diagnostic(
             diagnostic_item(
@@ -1310,32 +1362,6 @@ def slice_only(video_path, **_slice_options):
             phase="cleanup",
             phase_label="清理源文件",
             message="源文件已保留",
-        )
-    else:
-        progress.update(
-            force=True,
-            status="running",
-            phase="cleanup",
-            phase_label="清理源文件",
-            message="正在清理源文件",
-            diagnostics=diagnostics,
-        )
-        for remove_path in [original_video_path, xml_path]:
-            if os.path.exists(remove_path):
-                os.remove(remove_path)
-                scan_log.info(f"Removed: {remove_path}")
-        set_diagnostic(
-            diagnostic_item(
-                "cleanup",
-                "清理动作",
-                "ok",
-                "已清理源 mp4 和弹幕 XML",
-                [("源文件", "已删除"), ("弹幕 XML", "已删除")],
-            ),
-            status="running",
-            phase="cleanup",
-            phase_label="清理源文件",
-            message="源文件已清理",
         )
 
     progress.complete(

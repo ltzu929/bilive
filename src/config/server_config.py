@@ -252,6 +252,7 @@ def _subtitle_opt_str(key: str):
     return text or None
 
 
+SUBTITLE_FONT_NAME = _subtitle_opt_str("font_name") or "Noto Sans SC"
 SUBTITLE_FONT_SIZE = int(subtitle.get("font_size", 20))
 SUBTITLE_MARGIN_V = int(subtitle.get("margin_v", 60))
 SUBTITLE_ALIGNMENT = _subtitle_opt_int("alignment")
@@ -265,6 +266,7 @@ def default_subtitle_style():
     from src.burn.subtitle_burn import SubtitleStyle
 
     return SubtitleStyle(
+        font_name=SUBTITLE_FONT_NAME,
         font_size=SUBTITLE_FONT_SIZE,
         margin_v=SUBTITLE_MARGIN_V,
         alignment=SUBTITLE_ALIGNMENT,

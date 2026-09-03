@@ -63,10 +63,17 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   startDraft = 0;
   endDraft = 0;
   rangeDirty = false;
+  missedStartDraft = 0;
+  missedEndDraft = 10;
+  missedReason = 'mimo_missed';
+  missedNote = '';
+  subtitleFontName = 'Noto Sans SC';
   subtitleFontSize = 20;
   subtitleMarginV = 60;
   subtitleAlignment = 2;
   subtitleOutline = 2;
+  subtitleTextColor = '#ffffff';
+  subtitleOutlineColor = '#000000';
   progress: Record<string, any> = {};
   diagnostics: Record<string, any> = {};
   worker: Record<string, any> = {};
@@ -247,6 +254,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return this.actionBusy || ['pending', 'processing', 'running'].includes(this.selectedActionStatus);
   }
 
+  get subtitlePreviewShadow(): string {
+    const width = Math.max(0, Number(this.subtitleOutline || 0));
+    return width ? `0 0 ${width}px ${this.subtitleOutlineColor}` : 'none';
+  }
+
   refresh(): void {
     const requestId = ++this.requestId;
     this.loading = true;
@@ -308,10 +320,13 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.endDraft = Number(segment.end_seconds || 0);
     this.rangeDirty = false;
     const style = segment.subtitle_style || {};
+    this.subtitleFontName = String(style.font_name || 'Noto Sans SC');
     this.subtitleFontSize = Number(style.font_size || 20);
     this.subtitleMarginV = Number(style.margin_v || 60);
     this.subtitleAlignment = Number(style.alignment || 2);
     this.subtitleOutline = Number(style.outline || 2);
+    this.subtitleTextColor = this.cssColour(style.primary_colour, '#ffffff');
+    this.subtitleOutlineColor = this.cssColour(style.outline_colour, '#000000');
     this.changeDetector.markForCheck();
   }
 
@@ -417,6 +432,79 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.runSegmentAction('finalize', this.finalizePayload());
   }
 
+  approvePublish(): void {
+    if (this.selectedSegment) this.runSegmentAction('approve-publish');
+  }
+
+  markMissedBoundary(boundary: RangeBoundary): void {
+    const seconds = this.currentVideoTime();
+    if (boundary === 'start') {
+      this.missedStartDraft = seconds;
+      if (this.missedEndDraft <= seconds) this.missedEndDraft = seconds + 0.1;
+    } else {
+      this.missedEndDraft = Math.max(seconds, this.missedStartDraft + 0.1);
+    }
+    this.changeDetector.markForCheck();
+  }
+
+  addMissedSegment(): void {
+    if (!this.selectedTaskId || this.actionBusy) return;
+    if (this.missedEndDraft <= this.missedStartDraft) {
+      this.message.warning('漏切出点必须大于入点');
+      return;
+    }
+    this.actionBusy = true;
+    this.api.createMissedSegment(this.selectedTaskId, {
+      start_seconds: this.missedStartDraft,
+      end_seconds: this.missedEndDraft,
+      reason: this.missedReason,
+      note: this.missedNote,
+    }).pipe(takeUntil(this.destroyed)).subscribe({
+      next: (result) => {
+        const segment = result.segment as Record<string, unknown> | undefined;
+        const segmentId = String(segment?.segment_id || '');
+        const jobId = this.jobIdFromResult(result);
+        if (jobId && segmentId) {
+          this.message.info('已提交 Windows worker 生成人工候选');
+          this.waitForJob(jobId, segmentId);
+          return;
+        }
+        this.actionBusy = false;
+        this.message.success('已记录漏切候选');
+        this.loadDetail(this.selectedTaskId);
+        this.changeDetector.markForCheck();
+      },
+      error: (error) => {
+        this.actionBusy = false;
+        this.message.error(this.describeError(error));
+        this.changeDetector.markForCheck();
+      },
+    });
+  }
+
+  completeReview(confirmedNoContent = false): void {
+    if (!this.selectedTaskId || this.actionBusy) return;
+    this.actionBusy = true;
+    this.api.completeSourceReview(this.selectedTaskId, confirmedNoContent)
+      .pipe(takeUntil(this.destroyed))
+      .subscribe({
+        next: (result) => {
+          const jobId = this.jobIdFromResult(result);
+          if (jobId) {
+            this.message.info('整场复核已完成，已提交 Windows 回收任务');
+            this.waitForRecordingJob(jobId);
+            return;
+          }
+          this.finishRecordingAction('整场复核已完成');
+        },
+        error: (error) => {
+          this.actionBusy = false;
+          this.message.error(this.describeError(error));
+          this.changeDetector.markForCheck();
+        },
+      });
+  }
+
   private finalizePayload(): Record<string, unknown> {
     return {
       title: this.titleDraft,
@@ -426,10 +514,13 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       start_seconds: this.startDraft,
       end_seconds: this.endDraft,
       subtitle_style: {
+        font_name: this.subtitleFontName,
         font_size: this.subtitleFontSize,
         margin_v: this.subtitleMarginV,
         alignment: this.subtitleAlignment,
         outline: this.subtitleOutline,
+        primary_colour: this.assColour(this.subtitleTextColor),
+        outline_colour: this.assColour(this.subtitleOutlineColor),
       },
     };
   }
@@ -467,10 +558,13 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   saveSubtitleStyle(): void {
     if (!this.selectedSegment) return;
     this.runSegmentAction('subtitle-style', {
+      font_name: this.subtitleFontName,
       font_size: this.subtitleFontSize,
       margin_v: this.subtitleMarginV,
       alignment: this.subtitleAlignment,
       outline: this.subtitleOutline,
+      primary_colour: this.assColour(this.subtitleTextColor),
+      outline_colour: this.assColour(this.subtitleOutlineColor),
     });
   }
 
@@ -493,17 +587,69 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       manual_keep: '已保留',
       judge_failed: '判断失败',
       queue_failed: '队列失败',
+      awaiting_publish: '等待最终确认',
+      staged: '等待最终确认',
       drop: '已丢弃',
+      unprocessed: '待处理',
+      candidate_review: '候选待复核',
+      source_review: '整场待复核',
+      review_complete: '复核完成',
+      trash_pending: '等待回收源录播',
+      trash: '回收源录播',
     };
     return labels[status || ''] || status || '未知';
   }
 
   statusColor(status: string | undefined): string {
     if (['failed', 'judge_failed', 'queue_failed'].includes(status || '')) return 'error';
-    if (['done', 'keep', 'manual_keep'].includes(status || '')) return 'success';
+    if (['done', 'keep', 'manual_keep', 'review_complete'].includes(status || '')) return 'success';
     if (['pending', 'processing', 'running'].includes(status || '')) return 'processing';
     if (status === 'review' || status === 'ready') return 'warning';
     return 'default';
+  }
+
+  reviewStateLabel(state: string | undefined): string {
+    return this.statusLabel(state);
+  }
+
+  reviewStateColor(state: string | undefined): string {
+    if (['candidate_review', 'source_review', 'unprocessed'].includes(state || '')) return 'warning';
+    if (['processing', 'trash_pending'].includes(state || '')) return 'processing';
+    if (state === 'review_complete') return 'success';
+    return 'default';
+  }
+
+  canCompleteReview(): boolean {
+    return Boolean(
+      this.detail &&
+      !this.actionBusy &&
+      this.detail.trash_status !== 'done' &&
+      this.detail.review_state !== 'trash_pending' &&
+      this.detail.review_state !== 'review_complete'
+    );
+  }
+
+  canConfirmNoContent(): boolean {
+    return Boolean(
+      this.detail &&
+      !this.detail.segments?.length &&
+      this.detail.review_state === 'source_review' &&
+      this.canCompleteReview()
+    );
+  }
+
+  private assColour(value: string): string {
+    const match = String(value || '').trim().match(/^#([0-9a-f]{6})$/i);
+    if (!match) return String(value || '').trim();
+    const hex = match[1].toUpperCase();
+    return `&H00${hex.slice(4, 6)}${hex.slice(2, 4)}${hex.slice(0, 2)}`;
+  }
+
+  private cssColour(value: unknown, fallback: string): string {
+    const text = String(value || '').trim();
+    const ass = text.match(/^&H(?:[0-9a-f]{2})?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    if (ass) return `#${ass[3]}${ass[2]}${ass[1]}`.toLowerCase();
+    return /^#[0-9a-f]{6}$/i.test(text) ? text : fallback;
   }
 
   recordingSummary(item: StudioSourceRecording): string {
@@ -663,6 +809,39 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     else this.message.success(message);
     if (segmentId === this.selectedSegmentId && this.selectedTaskId) this.loadDetail(this.selectedTaskId);
     this.rangeDirty = action === 'range' ? false : this.rangeDirty;
+    this.changeDetector.markForCheck();
+  }
+
+  private waitForRecordingJob(jobId: string): void {
+    timer(0, 1500)
+      .pipe(
+        switchMap(() => this.api.getJob(jobId)),
+        filter((job) => ['done', 'failed', 'error'].includes(String(job.status || job.state || ''))),
+        take(1),
+        timeout(90000),
+        takeUntil(this.destroyed),
+        catchError((error) => {
+          this.actionBusy = false;
+          this.message.error(this.describeError(error));
+          this.changeDetector.markForCheck();
+          return of(null);
+        })
+      )
+      .subscribe((job) => {
+        if (!job) return;
+        const status = String(job.status || job.state || '');
+        this.finishRecordingAction(status === 'done' ? '整场复核完成，源录播已回收' : '源录播回收失败');
+      });
+  }
+
+  private finishRecordingAction(message: string): void {
+    this.actionBusy = false;
+    if (message.includes('失败')) this.message.error(message);
+    else this.message.success(message);
+    if (this.selectedTaskId) {
+      this.loadDetail(this.selectedTaskId);
+      this.refresh();
+    }
     this.changeDetector.markForCheck();
   }
 

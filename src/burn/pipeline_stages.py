@@ -15,6 +15,7 @@ ACTIVE_UPLOAD_STATUSES = {
     "publishing",
     "published",
 }
+STAGED_UPLOAD_STATUSES = ACTIVE_UPLOAD_STATUSES | {"staged"}
 
 
 def analyze_stage(
@@ -51,18 +52,24 @@ def analyze_clips_stage(
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
     single_clip: bool = False,
+    guidance: str = "",
     analyzer: Callable[..., Any],
 ) -> list[AnalysisResult]:
+    kwargs: dict[str, Any] = {
+        "danmaku_text": danmaku_text,
+        "candidate_start": candidate_start,
+        "candidate_end": candidate_end,
+        "candidate_duration": candidate_duration,
+        "candidate_core_start": candidate_core_start,
+        "candidate_core_end": candidate_core_end,
+        "single_clip": single_clip,
+    }
+    if str(guidance or "").strip():
+        kwargs["guidance"] = guidance
     results = analyzer(
         video_path,
         artist,
-        danmaku_text=danmaku_text,
-        candidate_start=candidate_start,
-        candidate_end=candidate_end,
-        candidate_duration=candidate_duration,
-        candidate_core_start=candidate_core_start,
-        candidate_core_end=candidate_core_end,
-        single_clip=single_clip,
+        **kwargs,
     )
     if not isinstance(results, list) or any(
         not isinstance(item, AnalysisResult) for item in results
@@ -156,4 +163,43 @@ def enqueue_stage(
         "status": existing_status or "not_queued",
         "created": False,
         "error": f"Upload queue failed: {queue_error}",
+    }
+
+
+def stage_upload_stage(
+    video_path: str,
+    *,
+    stage: Callable[[str], Any],
+    skip: bool = False,
+) -> dict[str, Any]:
+    """Create an upload row that remains invisible until publish approval."""
+    if skip:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "created": False,
+            "error": "",
+        }
+    try:
+        item = stage(video_path)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "not_queued",
+            "created": False,
+            "error": f"Upload staging failed: {exc}",
+        }
+    status = str(item.get("status") or "") if isinstance(item, dict) else ""
+    if status not in STAGED_UPLOAD_STATUSES:
+        return {
+            "ok": False,
+            "status": status or "not_queued",
+            "created": False,
+            "error": f"Upload staging returned invalid status: {status or 'empty'}",
+        }
+    return {
+        "ok": True,
+        "status": status,
+        "created": bool(item.get("created")) if isinstance(item, dict) else False,
+        "error": "",
     }

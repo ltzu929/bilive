@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import time
@@ -31,6 +32,16 @@ def _write_json_atomic(path: Path, data: dict) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
+
+
+def _task_id_for_source(source: Path, root: Path) -> str:
+    return (
+        base64.urlsafe_b64encode(
+            source.relative_to(root).as_posix().encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
 
 
 def recover_processing_markers(
@@ -160,6 +171,16 @@ def _mark_processing_skipped(
             }
         ],
     )
+    from src.dashboard.source_lifecycle import set_review_state
+
+    set_review_state(
+        root,
+        _task_id_for_source(video, root),
+        "source_review",
+        source_rel_path=video.relative_to(root).as_posix(),
+        room_id=video.parent.name,
+        recorded_at=video.name,
+    )
 
 
 def process_pending_videos(videos_dir: str | Path | None = None) -> int:
@@ -283,6 +304,23 @@ def _process_pending_root(root: Path) -> int:
                 candidate_judgments=pipeline_result.get("candidate_judgments"),
                 diagnostics=pipeline_result.get("diagnostics"),
             )
+            _record_pipeline_technical_experiences(
+                root,
+                video,
+                pipeline_result,
+            )
+            from src.dashboard.source_lifecycle import set_review_state
+
+            set_review_state(
+                root,
+                _task_id_for_source(video, root),
+                "candidate_review"
+                if pipeline_result.get("segments")
+                else "source_review",
+                source_rel_path=video.relative_to(root).as_posix(),
+                room_id=video.parent.name,
+                recorded_at=video.name,
+            )
             processed += 1
             scan_log.info(f"Successfully processed: {video}")
         except Exception as exc:
@@ -305,6 +343,26 @@ def _process_pending_root(root: Path) -> int:
                 except Exception:
                     pass
 
+                try:
+                    from src.dashboard.source_lifecycle import record_technical_experience
+
+                    record_technical_experience(
+                        root,
+                        room_id=video.parent.name,
+                        task_id=_task_id_for_source(video, root),
+                        source_rel_path=video.relative_to(root).as_posix(),
+                        segment={},
+                        failure={
+                            "stage": "worker",
+                            "code": "recording_pipeline_failed",
+                            "summary": str(exc),
+                            "technical_details": f"{type(exc).__name__}: {exc}",
+                            "recovery_action": "检查 Windows worker 技术日志后重试录播任务",
+                        },
+                    )
+                except Exception:
+                    pass
+
             failure = {
                 **marker,
                 "status": "failed",
@@ -319,6 +377,48 @@ def _process_pending_root(root: Path) -> int:
                 active_marker.unlink(missing_ok=True)
 
     return processed
+
+
+def _record_pipeline_technical_experiences(
+    root: Path,
+    video: Path,
+    pipeline_result: dict,
+) -> None:
+    """Keep candidate processing failures out of content-quality samples."""
+    segments = pipeline_result.get("segments")
+    if not isinstance(segments, list):
+        return
+    from src.dashboard.source_lifecycle import record_technical_experience
+
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        if str(segment.get("judge_status") or "") != "judge_failed":
+            continue
+        summary = str(
+            segment.get("judge_error")
+            or segment.get("quality_reason")
+            or "候选处理失败"
+        )
+        try:
+            record_technical_experience(
+                root,
+                room_id=video.parent.name,
+                task_id=_task_id_for_source(video, root),
+                source_rel_path=video.relative_to(root).as_posix(),
+                segment=segment,
+                failure={
+                    "stage": "candidate_pipeline",
+                    "code": "candidate_processing_failed",
+                    "summary": summary,
+                    "technical_details": summary,
+                    "recovery_action": "查看候选技术详情并在 Windows worker 空闲后重试",
+                },
+            )
+        except Exception:
+            # The task history and review state are authoritative; telemetry
+            # must not change the worker result.
+            continue
 
 
 def run_watcher(interval: int = 30, videos_dir: str | Path | None = None) -> None:

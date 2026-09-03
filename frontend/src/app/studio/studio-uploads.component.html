@@ -13,6 +13,7 @@
 
   <nz-spin [nzSpinning]="loading">
     <div class="upload-stats">
+      <nz-card nzSize="small" nzTitle="等待最终确认"><nz-statistic [nzValue]="count('staged')"></nz-statistic></nz-card>
       <nz-card nzSize="small" nzTitle="待上传"><nz-statistic [nzValue]="count('queued')"></nz-statistic></nz-card>
       <nz-card nzSize="small" nzTitle="上传中"><nz-statistic [nzValue]="count('uploading')"></nz-statistic></nz-card>
       <nz-card nzSize="small" nzTitle="等待投稿"><nz-statistic [nzValue]="count('uploaded')"></nz-statistic></nz-card>

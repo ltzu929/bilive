@@ -332,6 +332,42 @@ h1 {
   font-size: 12px;
 }
 
+.recording-lifecycle,
+.missed-segment-panel {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #d9d9d9;
+  background: #fafafa;
+}
+
+.recording-lifecycle-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lifecycle-blocker {
+  margin: 8px 0 0;
+  color: #cf1322;
+  font-size: 12px;
+}
+
+.lifecycle-deadline,
+.lifecycle-note {
+  margin: 8px 0 0;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.missed-segment-panel textarea {
+  margin-top: 8px;
+}
+
+.missed-actions select {
+  min-width: 130px;
+}
+
 .density-card {
   margin-top: 14px;
   padding: 12px;
@@ -543,6 +579,16 @@ h1 {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.subtitle-preview {
+  min-height: 46px;
+  margin-top: 12px;
+  padding: 10px;
+  overflow: hidden;
+  background: #111;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .inspector-action-bar {

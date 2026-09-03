@@ -320,7 +320,7 @@ def test_slice_only_routes_lower_scored_cross_candidate_duplicate_to_review(
         burned.append(analysis.title)
         return type("Burn", (), {"burned": True, "message": "ok"})()
 
-    queued = []
+    staged = []
     monkeypatch.setattr(slice_module, "judge_candidate_clips_with_mimo", fake_judge)
     monkeypatch.setattr(
         candidate_analyzer,
@@ -339,8 +339,9 @@ def test_slice_only_routes_lower_scored_cross_candidate_duplicate_to_review(
     )
     monkeypatch.setattr(
         slice_module,
-        "insert_upload_queue",
-        lambda path: queued.append(path) or True,
+        "stage_upload_stage",
+        lambda path, **_kwargs: staged.append(path)
+        or {"ok": True, "status": "staged", "created": True, "error": ""},
     )
     monkeypatch.setattr(slice_module, "get_upload_item", lambda path: None)
     monkeypatch.setattr(
@@ -361,7 +362,7 @@ def test_slice_only_routes_lower_scored_cross_candidate_duplicate_to_review(
     assert winner["start_seconds"] == 104.0
     assert winner["end_seconds"] == 156.0
     assert burned == ["同一个弹幕问题回应"]
-    assert len(queued) == 1
+    assert len(staged) == 1
 
 
 def test_dedupe_excludes_high_composite_clip_that_fails_one_quality_gate():

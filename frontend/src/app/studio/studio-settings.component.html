@@ -34,4 +34,75 @@
       </nz-spin>
     </nz-card>
   </div>
+
+  <nz-card nzTitle="主播档案" class="streamer-profile-card">
+    <div class="profile-toolbar">
+      <label for="profile-room">主播</label>
+      <nz-select
+        id="profile-room"
+        nzPlaceHolder="选择主播"
+        [(ngModel)]="profileRoomId"
+        (ngModelChange)="loadStreamerProfile()"
+        [nzDisabled]="profileBusy"
+      >
+        <nz-option *ngFor="let room of rooms" [nzValue]="room.room_id" [nzLabel]="room.name || room.room_id"></nz-option>
+      </nz-select>
+      <button nz-button (click)="loadStreamerProfile()" [disabled]="profileLoading || profileBusy || !profileRoomId">
+        <i nz-icon nzType="reload"></i>刷新档案
+      </button>
+    </div>
+
+    <nz-alert *ngIf="profileError" nzType="error" nzShowIcon [nzMessage]="profileError"></nz-alert>
+    <nz-spin [nzSpinning]="profileLoading">
+      <form nz-form nzLayout="vertical" class="profile-form" *ngIf="profileRoomId">
+        <div class="profile-field-grid">
+          <nz-form-item><nz-form-label nzFor="profile-display-name">显示名</nz-form-label><nz-form-control><input nz-input id="profile-display-name" [(ngModel)]="displayNameDraft" name="displayName"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-aliases">别名（逗号分隔）</nz-form-label><nz-form-control><input nz-input id="profile-aliases" [(ngModel)]="aliasesDraft" name="aliases"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-tags">默认投稿标签（逗号分隔）</nz-form-label><nz-form-control><input nz-input id="profile-tags" [(ngModel)]="defaultTagsDraft" name="defaultTags"></nz-form-control></nz-form-item>
+        </div>
+        <nz-form-item><nz-form-label nzFor="profile-description">默认投稿说明</nz-form-label><nz-form-control><textarea nz-input id="profile-description" rows="2" [(ngModel)]="defaultDescriptionDraft" name="defaultDescription"></textarea></nz-form-control></nz-form-item>
+        <nz-form-item><nz-form-label nzFor="profile-guidance">已批准的内容判断指导</nz-form-label><nz-form-control><textarea nz-input id="profile-guidance" rows="3" [(ngModel)]="approvedGuidanceDraft" name="approvedGuidance" placeholder="只写经过人工样本确认的主播特定判断提示"></textarea></nz-form-control></nz-form-item>
+
+        <nz-divider nzText="默认切片参数"></nz-divider>
+        <div class="profile-field-grid profile-number-grid">
+          <nz-form-item><nz-form-label nzFor="burst-ratio">爆点倍率</nz-form-label><nz-form-control><input nz-input id="burst-ratio" type="number" min="1.5" max="8" step="0.1" [(ngModel)]="burstRatioDraft" name="burstRatio"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="burst-window">爆点窗口（秒）</nz-form-label><nz-form-control><input nz-input id="burst-window" type="number" min="5" max="30" [(ngModel)]="burstWindowDraft" name="burstWindow"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="burst-context">上下文（秒）</nz-form-label><nz-form-control><input nz-input id="burst-context" type="number" min="30" max="120" [(ngModel)]="burstContextDraft" name="burstContext"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="burst-merge-gap">合并间隔（秒）</nz-form-label><nz-form-control><input nz-input id="burst-merge-gap" type="number" min="0" max="30" [(ngModel)]="burstMergeGapDraft" name="burstMergeGap"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="burst-top-n">最多候选数</nz-form-label><nz-form-control><input nz-input id="burst-top-n" type="number" min="1" max="5" [(ngModel)]="burstTopNDraft" name="burstTopN"></nz-form-control></nz-form-item>
+        </div>
+
+        <nz-divider nzText="默认字幕样式"></nz-divider>
+        <div class="profile-field-grid profile-number-grid">
+          <nz-form-item><nz-form-label nzFor="profile-font">字体</nz-form-label><nz-form-control><input nz-input id="profile-font" [(ngModel)]="subtitleFontNameDraft" name="subtitleFontName"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-font-size">字号</nz-form-label><nz-form-control><input nz-input id="profile-font-size" type="number" min="8" [(ngModel)]="subtitleFontSizeDraft" name="subtitleFontSize"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-margin">底边距</nz-form-label><nz-form-control><input nz-input id="profile-margin" type="number" min="0" [(ngModel)]="subtitleMarginVDraft" name="subtitleMarginV"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-alignment">位置（ASS 1-9）</nz-form-label><nz-form-control><input nz-input id="profile-alignment" type="number" min="1" max="9" [(ngModel)]="subtitleAlignmentDraft" name="subtitleAlignment"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-outline">描边宽度</nz-form-label><nz-form-control><input nz-input id="profile-outline" type="number" min="0" step="0.5" [(ngModel)]="subtitleOutlineDraft" name="subtitleOutline"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-text-color">文字色</nz-form-label><nz-form-control><input nz-input id="profile-text-color" type="color" [(ngModel)]="subtitleTextColorDraft" name="subtitleTextColor"></nz-form-control></nz-form-item>
+          <nz-form-item><nz-form-label nzFor="profile-outline-color">描边色</nz-form-label><nz-form-control><input nz-input id="profile-outline-color" type="color" [(ngModel)]="subtitleOutlineColorDraft" name="subtitleOutlineColor"></nz-form-control></nz-form-item>
+        </div>
+        <button nz-button nzType="primary" type="button" (click)="saveStreamerProfile()" [disabled]="profileBusy || profileLoading">保存主播档案</button>
+      </form>
+    </nz-spin>
+
+    <nz-divider *ngIf="recommendations.length" nzText="待人工批准的改进建议"></nz-divider>
+    <div class="recommendation-list" *ngIf="recommendations.length">
+      <div class="recommendation-item" *ngFor="let recommendation of recommendations">
+        <div class="recommendation-heading"><strong>{{ recommendation.status === 'applied' ? '已应用建议' : '待批准建议' }}</strong><nz-tag [nzColor]="recommendation.status === 'applied' ? 'success' : 'warning'">{{ recommendation.sample_size || 0 }} 条样本</nz-tag></div>
+        <p>{{ recommendation.changes?.['approved_guidance'] || recommendation.message || '暂无文字建议' }}</p>
+        <small>依据：{{ recommendationBasis(recommendation) || '关联人工样本' }}；正样本 {{ recommendation.positive_count || 0 }}，负样本 {{ recommendation.negative_count || 0 }}</small>
+        <div class="review-actions" *ngIf="recommendation.status !== 'applied'"><button nz-button nzSize="small" (click)="applyRecommendation(recommendation)" [disabled]="profileBusy">应用建议</button></div>
+      </div>
+    </div>
+
+    <nz-divider *ngIf="experiences.length" nzText="该主播的经验记录"></nz-divider>
+    <nz-list *ngIf="experiences.length" nzSize="small" class="experience-list">
+      <nz-list-item *ngFor="let experience of experiences | slice:0:8">
+        <span>{{ experienceLabel(experience) }} · {{ experience.reason_type || '未分类' }}</span>
+        <small>{{ experience.note || experience.reason || '无备注' }}</small>
+      </nz-list-item>
+    </nz-list>
+    <nz-empty *ngIf="profileRoomId && !profileLoading && !experiences.length && !recommendations.length" nzNotFoundContent="暂无该主播经验记录或改进建议"></nz-empty>
+  </nz-card>
 </section>

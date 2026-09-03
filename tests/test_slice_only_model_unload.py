@@ -238,7 +238,7 @@ def test_slice_only_keeps_source_by_default_after_generating_slices(tmp_path, mo
     assert xml_path.exists()
 
 
-def test_slice_only_can_delete_source_when_explicitly_enabled(tmp_path, monkeypatch):
+def test_slice_only_keeps_source_even_when_legacy_delete_flag_is_enabled(tmp_path, monkeypatch):
     source = tmp_path / "8792912" / "8792912_20260524-13-06-05.mp4"
     source.parent.mkdir()
     source.write_bytes(b"video")
@@ -272,8 +272,8 @@ def test_slice_only_can_delete_source_when_explicitly_enabled(tmp_path, monkeypa
 
     slice_only_module.slice_only(str(source))
 
-    assert not source.exists()
-    assert not xml_path.exists()
+    assert source.exists()
+    assert xml_path.exists()
 
 
 def test_slice_only_writes_diagnostics_when_video_is_too_small(tmp_path, monkeypatch):
@@ -561,6 +561,7 @@ def test_slice_only_kept_candidate_burns_metadata_and_enters_queue(
     burned = []
     metadata = []
     queued = []
+    staged = []
 
     monkeypatch.setattr(slice_only_module, "SliceProgressWriter", lambda: FakeProgressWriter())
     monkeypatch.setattr(slice_only_module, "check_file_size", lambda path: 999)
@@ -585,6 +586,12 @@ def test_slice_only_kept_candidate_burns_metadata_and_enters_queue(
         "insert_upload_queue",
         lambda path: queued.append(path) or True,
     )
+    monkeypatch.setattr(
+        slice_only_module,
+        "stage_upload_stage",
+        lambda path, **_kwargs: staged.append(path)
+        or {"ok": True, "status": "staged", "created": True, "error": ""},
+    )
     monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
     monkeypatch.delenv("BILIVE_SKIP_UPLOAD_QUEUE", raising=False)
     monkeypatch.delenv("BILIVE_DELETE_SOURCE_AFTER_SLICE", raising=False)
@@ -600,10 +607,12 @@ def test_slice_only_kept_candidate_burns_metadata_and_enters_queue(
     assert result["output_slices"] == [expected_output]
     assert burned == [(str(slice_path), analysis, expected_output)]
     assert metadata[0][0] == expected_output
-    assert queued == [expected_output]
-    assert result["segments"][0]["upload_status"] == "queued"
+    assert queued == []
+    assert staged == [expected_output]
+    assert result["segments"][0]["upload_status"] == "awaiting_publish"
     assert result["segments"][0]["start_seconds"] == 103.0
     assert result["segments"][0]["end_seconds"] == 109.5
+    assert result["segments"][0]["preview_available"] is True
 
 
 def test_slice_only_keeps_review_candidate_when_subtitle_burn_fails(tmp_path, monkeypatch):
@@ -737,6 +746,16 @@ def test_slice_only_does_not_report_queue_failure_as_queued(tmp_path, monkeypatc
     monkeypatch.setattr(slice_only_module, "burn_subtitles_from_analysis", successful_burn)
     monkeypatch.setattr(slice_only_module, "insert_upload_queue", lambda path: False)
     monkeypatch.setattr(slice_only_module, "get_upload_item", lambda path: None)
+    monkeypatch.setattr(
+        slice_only_module,
+        "stage_upload_stage",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "status": "not_queued",
+            "created": False,
+            "error": "Upload staging failed: queue insert returned false",
+        },
+    )
     monkeypatch.setattr(slice_only_module, "unload_candidate_models", lambda: None)
 
     result = slice_only_module.slice_only(str(source))

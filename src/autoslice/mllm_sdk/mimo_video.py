@@ -184,6 +184,7 @@ def judge_candidate_clips_with_mimo(
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
     single_clip: bool = False,
+    guidance: str = "",
     model: str = MIMO_MODEL,
     base_url: str = MIMO_BASE_URL,
     fps: float = MIMO_FPS,
@@ -231,6 +232,7 @@ def judge_candidate_clips_with_mimo(
                                 candidate_start=candidate_start,
                                 core_start=candidate_core_start,
                                 core_end=candidate_core_end,
+                                guidance=guidance,
                             ),
                         },
                     ],
@@ -315,6 +317,7 @@ def judge_candidate_with_mimo(
     candidate_start: float = 0.0,
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
+    guidance: str = "",
     model: str = MIMO_MODEL,
     base_url: str = MIMO_BASE_URL,
     fps: float = MIMO_FPS,
@@ -338,6 +341,7 @@ def judge_candidate_with_mimo(
         media_resolution=media_resolution,
         timeout=timeout,
         max_base64_bytes=max_base64_bytes,
+        guidance=guidance,
         client_factory=client_factory,
         encoder=encoder,
     )
@@ -361,11 +365,19 @@ def _build_prompt(
     candidate_start: float = 0.0,
     core_start: float | None = None,
     core_end: float | None = None,
+    guidance: str = "",
 ) -> str:
     core_text = (
         f"{float(core_start):.3f}-{float(core_end):.3f}s"
         if core_start is not None and core_end is not None
         else "(not available)"
+    )
+    guidance_text = str(guidance or "").strip()
+    approved_guidance = (
+        "\n已人工批准的主播指导（仅作上下文，不替代当前视频、音频和弹幕证据）:\n"
+        f"{guidance_text}\n"
+        if guidance_text
+        else ""
     )
     return (
         "候选元数据:\n"
@@ -376,6 +388,7 @@ def _build_prompt(
         " 00:00 起算，不要叠加该偏移）\n"
         f"- 弹幕检测到的爆点核心（相对候选）: {core_text}\n"
         f"- 候选范围内弹幕: {str(danmaku_text or '').strip() or '(none)'}\n\n"
+        f"{approved_guidance}"
         "你的角色:\n"
         "你是短视频剪辑师 + 严格主编。你的目标不是多产出切片，"
         "而是避免发布低质量聊天切片。弹幕峰值只是候选来源，不是保留理由。\n\n"

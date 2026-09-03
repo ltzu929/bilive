@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any, Dict, List
@@ -22,6 +23,18 @@ from src.autoslice.danmaku_slice import (
 from src.burn.task_history import lock_task_history, read_task_history
 from src.dashboard.task_state import build_task_inventory, resolve_task_id
 from src.dashboard.errors import SegmentStateConflict
+from src.dashboard.source_lifecycle import (
+    MISSED_SEGMENT_REASONS,
+    UNRESOLVED_STATUSES,
+    build_lifecycle_view,
+    profile_context_for_mimo,
+    read_recording_state,
+    record_review_experiences,
+    record_technical_experience,
+    read_streamer_profile,
+    profile_subtitle_style,
+    set_review_state,
+)
 from src.db.conn import (
     activate_staged_upload,
     delete_upload_queue,
@@ -37,6 +50,16 @@ from src.upload.slice_metadata import (
 
 
 SUMMARY_KEYS = ("keep", "manual_keep", "judge_failed", "drop", "review")
+
+
+def _task_id_for_source(source: Path, root: Path) -> str:
+    return (
+        base64.urlsafe_b64encode(
+            source.relative_to(root).as_posix().encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
 
 
 class SegmentFinalizeError(RuntimeError):
@@ -120,14 +143,21 @@ def build_source_recording_list(
         history = read_task_history(source) or {}
         segments = _normalize_segments(root, source, history.get("segments") or [])
         counts = _summary_counts(segments)
+        lifecycle = build_lifecycle_view(root, task, history, segments)
+        profile = read_streamer_profile(root, task["room_id"])
+        room_name = str(profile.get("display_name") or "").strip() or names.get(
+            task["room_id"], task.get("room_name") or task["room_id"]
+        )
         items.append(
             {
                 **task,
-                "room_name": names.get(task["room_id"], task.get("room_name") or task["room_id"]),
+                "room_name": room_name,
+                "recorded_at": _recorded_at(task.get("source_name") or ""),
                 "source_media_id": _media_id(root, source),
                 "segment_count": len(segments),
                 "summary_counts": counts,
                 "judge_failed_count": counts["judge_failed"],
+                **lifecycle,
             }
         )
     return sorted(items, key=lambda item: item.get("updated_at") or 0, reverse=True)
@@ -159,12 +189,19 @@ def build_source_recording_detail(
 
     history = read_task_history(source) or {}
     segments = _normalize_segments(root, source, history.get("segments") or [])
+    _apply_display_defaults(root, source, segments)
     counts = _summary_counts(segments)
     names = room_names or {}
+    lifecycle = build_lifecycle_view(root, task, history, segments)
+    profile = read_streamer_profile(root, task["room_id"])
+    room_name = str(profile.get("display_name") or "").strip() or names.get(
+        task["room_id"], task.get("room_name") or task["room_id"]
+    )
 
     return {
         **task,
-        "room_name": names.get(task["room_id"], task.get("room_name") or task["room_id"]),
+        "room_name": room_name,
+        "recorded_at": _recorded_at(task.get("source_name") or ""),
         "source_media_id": _media_id(root, source),
         "density_points": build_density_points(source.with_suffix(".xml")),
         "segments": segments,
@@ -173,6 +210,7 @@ def build_source_recording_detail(
         "summary_counts": counts,
         "judge_failed_count": counts["judge_failed"],
         "history_status": history.get("status", ""),
+        **lifecycle,
     }
 
 
@@ -212,7 +250,7 @@ def manual_keep_segment(
     segment_id: str,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Mark a candidate as manually kept and queue it for upload."""
+    """Mark a candidate as manually kept without exposing it to upload."""
     data = payload or {}
 
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
@@ -227,41 +265,82 @@ def manual_keep_segment(
         segment["manual_override"] = True
         segment["preview_available"] = True
         segment["preview_reason"] = ""
-        write_slice_upload_metadata(
-            candidate,
-            title=str(segment.get("title") or candidate.stem),
-            desc=str(segment.get("description") or ""),
-            tag=segment.get("tags") or ["直播切片"],
-        )
-        queue_error = ""
-        try:
-            inserted = insert_upload_queue(str(candidate))
-        except Exception as exc:
-            inserted = False
-            queue_error = str(exc)
-        if inserted:
-            segment["upload_status"] = "queued"
-            segment.pop("upload_error", None)
-        else:
-            # insert_upload_queue returns False on a duplicate video_path
-            # (unique-index IntegrityError), which means the segment is
-            # already queued -- treat that as idempotent success rather than
-            # a failure so a re-keep does not surface a false queue_failed.
-            already_queued = False
-            if not queue_error:
-                try:
-                    already_queued = get_upload_item(str(candidate)) is not None
-                except Exception as exc:
-                    queue_error = str(exc)
-            if already_queued:
-                segment["upload_status"] = "queued"
-                segment.pop("upload_error", None)
-            else:
-                segment["upload_status"] = "queue_failed"
-                segment["upload_error"] = queue_error or "upload queue insert returned false"
+        # A manually kept item is still only an internal candidate.  Upload
+        # metadata belongs to the finalization step, immediately before the
+        # staged queue row is created.
+        segment["upload_status"] = "not_queued"
+        segment.pop("upload_error", None)
         return segment
 
     return _mutate_segment(videos_root, segment_id, mutate)
+
+
+_PUBLISHING_UPLOAD_STATUSES = {
+    "queued",
+    "uploading",
+    "uploaded",
+    "publishing",
+    "published",
+}
+
+
+def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
+    """Clear an unapproved final when a review edit needs regeneration."""
+    artifacts = segment.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return False
+    final_item = artifacts.get("final_output")
+    if not isinstance(final_item, dict) or not final_item.get("rel_path"):
+        return False
+
+    final_rel = str(final_item["rel_path"])
+    final_path = _artifact_path(root, final_rel)
+    recorded_status = str(segment.get("upload_status") or "not_queued")
+    try:
+        queue_item = get_upload_item(str(final_path))
+    except Exception as exc:
+        if recorded_status in {"awaiting_publish", "staged", *_PUBLISHING_UPLOAD_STATUSES}:
+            raise SegmentStateConflict(
+                "无法确认成片上传状态，已停止修改；请先检查上传数据库"
+            ) from exc
+        queue_item = None
+
+    if queue_item is None:
+        if recorded_status in {"awaiting_publish", "staged", *_PUBLISHING_UPLOAD_STATUSES}:
+            raise SegmentStateConflict("无法确认成片上传状态，已停止修改")
+    else:
+        queue_status = str(queue_item.get("status") or "")
+        if queue_status in _PUBLISHING_UPLOAD_STATUSES:
+            raise SegmentStateConflict(
+                "成片已进入上传或发布流程，不能覆盖；请创建新的人工候选"
+            )
+        if queue_status not in {"staged", "failed"}:
+            raise SegmentStateConflict(
+                f"成片当前处于 {queue_status or '未知'} 状态，不能覆盖"
+            )
+        if not delete_upload_queue(str(final_path)):
+            raise SegmentStateConflict("无法安全撤销成片的等待确认队列项")
+        delete_slice_upload_metadata(final_path)
+
+    previous_outputs = segment.get("final_output_history")
+    if not isinstance(previous_outputs, list):
+        previous_outputs = []
+    if final_rel not in previous_outputs:
+        previous_outputs.append(final_rel)
+    segment["final_output_history"] = previous_outputs
+    updated_artifacts = dict(artifacts)
+    updated_artifacts.pop("final_output", None)
+    segment["artifacts"] = updated_artifacts
+    if _candidate_rel_path(root, segment) == final_rel:
+        segment.pop("candidate_path", None)
+        segment.pop("candidate_rel_path", None)
+        segment.pop("candidate_media_id", None)
+    segment["preview_available"] = False
+    segment["preview_reason"] = "区间或字幕样式已修改，请重新生成最终成片"
+    segment["upload_status"] = "not_queued"
+    segment["publish_approval"] = ""
+    segment.pop("publish_approved_at", None)
+    return True
 
 
 def prepare_segment_finalize(
@@ -273,8 +352,10 @@ def prepare_segment_finalize(
     data = validate_segment_finalize_payload(payload)
 
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        _invalidate_final_output(root, segment)
         _apply_optional_metadata(segment, data)
         _apply_optional_range(segment, data)
+        _apply_profile_metadata(root, source, segment, data)
         start = _float(segment.get("start_seconds"))
         end = _float(segment.get("end_seconds"))
         if end <= start:
@@ -285,14 +366,24 @@ def prepare_segment_finalize(
 
         if "subtitle_style" in data:
             style = SubtitleStyle.from_mapping(data["subtitle_style"])
-        elif isinstance(segment.get("subtitle_style"), dict):
-            style = SubtitleStyle.from_mapping(segment["subtitle_style"])
+            segment["_subtitle_style_source"] = "clip"
+        elif str(segment.get("_subtitle_style_source") or "") == "clip":
+            style = SubtitleStyle.from_mapping(segment.get("subtitle_style"))
         else:
-            style = default_subtitle_style()
+            profile_style = profile_subtitle_style(root, source.parent.name)
+            if profile_style:
+                style = SubtitleStyle.from_mapping(profile_style)
+                segment["_subtitle_style_source"] = "profile"
+            elif isinstance(segment.get("subtitle_style"), dict):
+                style = SubtitleStyle.from_mapping(segment["subtitle_style"])
+            else:
+                style = default_subtitle_style()
         segment["subtitle_style"] = style.to_mapping()
         segment["artifacts"] = _artifact_plan(root, source, segment)
         segment["manual_override"] = True
         segment["upload_status"] = "not_queued"
+        segment["publish_approval"] = ""
+        segment.pop("publish_approved_at", None)
         segment["failure"] = None
         return segment
 
@@ -383,7 +474,24 @@ def record_segment_action_state(
             segment["failure"] = None
         return segment
 
-    return _mutate_segment(videos_root, segment_id, mutate, bump_revision=False)
+    result = _mutate_segment(videos_root, segment_id, mutate, bump_revision=False)
+    if status == "failed" and failure:
+        try:
+            _root, source, failed_segment = _read_segment(videos_root, segment_id)
+            record_technical_experience(
+                _root,
+                room_id=source.parent.name,
+                task_id=_task_id_for_source(source, _root),
+                source_rel_path=source.relative_to(_root).as_posix(),
+                segment=failed_segment,
+                failure=failure,
+                job_id=job_id,
+            )
+        except Exception:
+            # The action state remains authoritative; failure telemetry must
+            # not hide the original job result.
+            pass
+    return result
 
 
 def finalize_segment(
@@ -645,11 +753,7 @@ def finalize_segment(
         if queue_status == "skipped":
             upload_status = "skipped"
         elif queue_status == "staged":
-            upload_status = (
-                "uploaded"
-                if str(queue_result.get("remote_filename") or "").strip()
-                else "queued"
-            )
+            upload_status = "awaiting_publish"
         else:
             upload_status = queue_status
     except Exception as exc:
@@ -699,14 +803,302 @@ def finalize_segment(
             delete_upload_queue(str(final_path))
         raise
 
-    # Staged rows are invisible to the consumer. Activation happens only after
-    # the segment has durably recorded done/queued. A recovered action can
-    # safely activate the same existing row.
-    if str(queue_result.get("status") or "") == "staged":
-        activated = activate_staged_upload(str(final_path))
-        if activated is None:
-            raise RuntimeError("staged upload row disappeared before activation")
     return completed
+
+
+def approve_publish_segment(
+    videos_root: str | Path,
+    segment_id: str,
+) -> dict[str, Any]:
+    """Activate one staged final artifact after an explicit human approval."""
+    root, _source, segment = _read_segment(videos_root, segment_id)
+    if str(segment.get("judge_status") or "") not in {"keep", "manual_keep"}:
+        raise SegmentStateConflict("片段未通过内容复核，不能允许发布")
+    artifacts = _normalize_artifacts(root, segment)
+    final_item = artifacts.get("final_output") or {}
+    final_rel = str(final_item.get("rel_path") or "")
+    if not final_rel or not bool(final_item.get("exists")):
+        raise SegmentStateConflict("最终成片不存在，请先生成最终成片")
+    final_path = _artifact_path(root, final_rel)
+    try:
+        queue_item = get_upload_item(str(final_path))
+    except Exception as exc:
+        raise SegmentStateConflict("无法读取上传队列，已停止允许发布") from exc
+    if queue_item is None:
+        raise SegmentStateConflict("最终成片尚未进入等待确认队列")
+    already_approved = str(segment.get("publish_approval") or "") == "approved"
+    queue_status = str(queue_item.get("status") or "")
+    if queue_status == "staged":
+        queue_item = activate_staged_upload(str(final_path))
+        if queue_item is None:
+            raise SegmentStateConflict("等待确认的上传队列项已消失")
+        queue_status = str(queue_item.get("status") or "")
+    elif queue_status in {
+        "queued",
+        "uploading",
+        "uploaded",
+        "publishing",
+        "published",
+    }:
+        # The unique video_path row makes a repeated approval a no-op.
+        pass
+    else:
+        raise SegmentStateConflict(
+            f"最终成片当前处于 {queue_status or '未知'} 状态，不能允许发布"
+        )
+
+    def mutate(_root: Path, _source_path: Path, current: dict[str, Any]) -> dict[str, Any]:
+        current["upload_status"] = queue_status
+        current["publish_approved_at"] = current.get("publish_approved_at") or _now()
+        current["publish_approval"] = "approved"
+        current["failure"] = None
+        return current
+
+    updated = _mutate_segment(videos_root, segment_id, mutate)
+    updated["publish_idempotent"] = already_approved
+    return updated
+
+
+def prepare_missed_segment(
+    videos_root: str | Path,
+    task_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a durable manual-missed segment record before Windows slicing."""
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be an object")
+    start = _finite_seconds(payload.get("start_seconds", payload.get("start")))
+    end = _finite_seconds(payload.get("end_seconds", payload.get("end")))
+    if start is None or end is None:
+        raise ValueError("start_seconds and end_seconds must be numeric")
+    if end <= start:
+        raise ValueError("end_seconds must be greater than start_seconds")
+    reason = str(payload.get("reason") or "").strip()
+    if reason not in MISSED_SEGMENT_REASONS:
+        raise ValueError(
+            "reason must be one of: " + ", ".join(sorted(MISSED_SEGMENT_REASONS))
+        )
+    note = str(payload.get("note") or payload.get("review_note") or "").strip()
+
+    root = Path(videos_root).expanduser().resolve()
+    source = resolve_task_id(root, task_id)
+    tasks = build_task_inventory(root, room_id=source.parent.name)
+    task = next((item for item in tasks if item.get("task_id") == task_id), None)
+    if task is None:
+        raise FileNotFoundError(f"Source recording not found: {task_id}")
+    if str(task.get("status") or "") in {"pending", "processing", "running"}:
+        raise SegmentStateConflict("录播切片任务正在运行，暂不能补标")
+
+    history_path = source.with_suffix(".mp4.task.json")
+    with lock_task_history(source):
+        try:
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            history = {
+                "source_rel_path": source.relative_to(root).as_posix(),
+                "status": "done",
+            }
+        segments = history.get("segments")
+        if not isinstance(segments, list):
+            segments = []
+        segment_id = uuid.uuid4().hex
+        candidate_name = (
+            f"{format_seconds_for_filename(start)}s_{source.stem}"
+            f"_manual_{segment_id}.mp4"
+        )
+        candidate = source.with_name(candidate_name)
+        segment = {
+            "segment_id": segment_id,
+            "source_rel_path": source.relative_to(root).as_posix(),
+            "candidate_path": str(candidate),
+            "candidate_rel_path": candidate.relative_to(root).as_posix(),
+            "start_seconds": start,
+            "end_seconds": end,
+            "candidate_start_seconds": start,
+            "candidate_end_seconds": end,
+            "judge_status": "manual_keep",
+            "judge_error": "",
+            "quality_reason": MISSED_SEGMENT_REASONS[reason],
+            "missed_reason": reason,
+            "review_note": note,
+            "manual_origin": "missed_segment",
+            "manual_override": True,
+            "preview_available": False,
+            "preview_reason": "等待 Windows worker 生成人工候选",
+            "upload_status": "not_queued",
+            "action_state": {
+                "action": "create_missed_segment",
+                "status": "pending",
+                "job_id": "",
+                "updated_at": _now(),
+            },
+        }
+        segments.append(segment)
+        history["segments"] = segments
+        history["source_rel_path"] = source.relative_to(root).as_posix()
+        _write_history(history_path, history)
+
+    set_review_state(
+        root,
+        task_id,
+        "source_review",
+        source_rel_path=source.relative_to(root).as_posix(),
+        room_id=source.parent.name,
+    )
+    return _normalize_segments(root, source, [segment])[0]
+
+
+def create_missed_segment(
+    videos_root: str | Path,
+    segment_id: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Render a manual missed interval into a reviewable candidate on Windows."""
+    root, source, segment = _read_segment(videos_root, segment_id)
+    candidate = _segment_candidate_path(root, segment)
+    start = _float(segment.get("start_seconds"))
+    end = _float(segment.get("end_seconds"))
+    if end <= start:
+        raise ValueError("manual candidate range is invalid")
+    if not _nonempty_file(candidate):
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        temporary = candidate.with_name(
+            f"{candidate.stem}.{os.getpid()}.{uuid.uuid4().hex}.tmp{candidate.suffix}"
+        )
+        try:
+            slice_video(source, temporary, start, end - start)
+            if not _nonempty_file(temporary):
+                raise RuntimeError("manual candidate renderer produced no media")
+            os.replace(temporary, candidate)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def mutate(_root: Path, _source: Path, current: dict[str, Any]) -> dict[str, Any]:
+        current["candidate_path"] = str(candidate)
+        current["candidate_rel_path"] = candidate.relative_to(_root).as_posix()
+        current["candidate_media_id"] = _media_id(_root, candidate)
+        current["preview_available"] = True
+        current["preview_reason"] = ""
+        current["judge_status"] = "manual_keep"
+        current["upload_status"] = "not_queued"
+        current["failure"] = None
+        current["action_state"] = _next_action_state(
+            current,
+            "done",
+            action="create_missed_segment",
+        )
+        return current
+
+    return _mutate_segment(videos_root, segment_id, mutate)
+
+
+def prepare_source_review_completion(
+    videos_root: str | Path,
+    task_id: str,
+    *,
+    confirmed_no_content: bool = False,
+) -> dict[str, Any]:
+    """Validate and close one recording's human review.
+
+    A recording can close only after every candidate has a terminal human
+    decision and every kept candidate has gone through final generation and
+    the separate publish approval.  An empty result requires an explicit
+    whole-recording confirmation from the user.
+    """
+    root = Path(videos_root).expanduser().resolve()
+    source = resolve_task_id(root, task_id)
+    tasks = build_task_inventory(root, room_id=source.parent.name)
+    task = next((item for item in tasks if item.get("task_id") == task_id), None)
+    if task is None:
+        raise FileNotFoundError(f"Source recording not found: {task_id}")
+    history = read_task_history(source) or {}
+    lifecycle_state = read_recording_state(root, task_id) or {}
+    segments = _normalize_segments(root, source, history.get("segments") or [])
+    if str(task.get("status") or "") in {"pending", "processing", "running"}:
+        raise SegmentStateConflict("录播切片任务正在运行，不能完成整场复核")
+    if str(history.get("status") or "") in {"pending", "processing"}:
+        raise SegmentStateConflict("录播任务历史仍显示处理中，不能完成整场复核")
+    if str(lifecycle_state.get("review_state") or "") == "processing":
+        raise SegmentStateConflict("录播任务仍处于处理中，不能完成整场复核")
+    if source.with_suffix(".mp4.pending").is_file() or source.with_suffix(
+        ".mp4.processing"
+    ).is_file():
+        raise SegmentStateConflict("录播仍有活跃任务标记，不能完成整场复核")
+    if not segments and not confirmed_no_content:
+        raise SegmentStateConflict("零候选录播需要明确确认整场没有精彩片段")
+
+    from src.server.action_jobs import find_active_segment_job
+
+    for segment in segments:
+        segment_id = str(segment.get("segment_id") or "")
+        if segment_id and find_active_segment_job(root, segment_id) is not None:
+            raise SegmentStateConflict("仍有片段任务正在运行，不能完成整场复核")
+        action_state = segment.get("action_state")
+        if isinstance(action_state, dict) and str(action_state.get("status") or "") in {
+            "pending",
+            "processing",
+        }:
+            raise SegmentStateConflict("仍有片段任务未完成，不能完成整场复核")
+        status = str(segment.get("judge_status") or "review")
+        if status in UNRESOLVED_STATUSES or status not in {
+            "keep",
+            "manual_keep",
+            "drop",
+        }:
+            raise SegmentStateConflict("仍有候选片段未完成内容复核")
+        if status == "drop":
+            continue
+        if str(segment.get("publish_approval") or "") != "approved":
+            raise SegmentStateConflict("仍有成片未完成第二次发布确认")
+        if str(segment.get("upload_status") or "") not in {
+            "queued",
+            "uploaded",
+            "uploading",
+            "publishing",
+            "published",
+        }:
+            raise SegmentStateConflict("已保留片段尚未进入可发布状态")
+        final_item = (segment.get("artifacts") or {}).get("final_output")
+        if not isinstance(final_item, dict) or not bool(final_item.get("exists")):
+            raise SegmentStateConflict("已保留片段缺少最终成片")
+
+    source_rel_path = source.relative_to(root).as_posix()
+    completion = {
+        "confirmed_no_content": bool(not segments and confirmed_no_content),
+        "segment_count": len(segments),
+        "kept_count": sum(
+            str(item.get("judge_status") or "") in {"keep", "manual_keep"}
+            for item in segments
+        ),
+        "dropped_count": sum(
+            str(item.get("judge_status") or "") == "drop" for item in segments
+        ),
+    }
+    state = set_review_state(
+        root,
+        task_id,
+        "review_complete",
+        source_rel_path=source_rel_path,
+        room_id=source.parent.name,
+        recorded_at=str(task.get("recorded_at") or ""),
+        completion=completion,
+    )
+    experiences = record_review_experiences(
+        root,
+        room_id=source.parent.name,
+        task_id=task_id,
+        source_rel_path=source_rel_path,
+        segments=segments,
+    )
+    return {
+        "task_id": task_id,
+        "source_rel_path": source_rel_path,
+        "review_state": "review_complete",
+        "state": state,
+        "segments": segments,
+        "experiences": experiences,
+    }
 
 
 def drop_segment(
@@ -745,13 +1137,16 @@ def drop_segment(
                 raise SegmentStateConflict(
                     f"片段已处于 {upload_state} 状态，不能直接丢弃"
                 )
-            if upload_state in {"queued", "failed"}:
+            if upload_state in {"staged", "queued", "failed"}:
                 if not delete_upload_queue(str(candidate)):
                     raise SegmentStateConflict("无法安全撤销片段的上传队列项")
                 delete_slice_upload_metadata(candidate)
+        previous_status = str(segment.get("judge_status") or "")
         segment["judge_status"] = "drop"
         segment["upload_status"] = "not_queued"
         segment["manual_override"] = True
+        if previous_status == "judge_failed" or isinstance(segment.get("failure"), dict):
+            segment["_technical_failure"] = True
         reason = str(data.get("reason") or "").strip()
         if reason:
             segment["quality_reason"] = reason
@@ -776,6 +1171,7 @@ def update_segment_range(
         raise ValueError("end_seconds must be greater than start_seconds")
 
     def mutate(_root: Path, _source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        _invalidate_final_output(_root, segment)
         segment["start_seconds"] = start
         segment["end_seconds"] = end
         segment["manual_override"] = True
@@ -794,11 +1190,11 @@ def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, A
         start = _float(segment.get("start_seconds"))
         end = _float(segment.get("end_seconds"))
         danmaku_text = extract_danmaku_text(str(source.with_suffix(".xml")), start, end)
-        result = analyze_candidate(
-            str(candidate),
-            source.parent.name,
-            danmaku_text=danmaku_text,
-        )
+        analyze_kwargs: dict[str, Any] = {"danmaku_text": danmaku_text}
+        guidance = profile_context_for_mimo(root, source.parent.name)
+        if guidance:
+            analyze_kwargs["guidance"] = guidance
+        result = analyze_candidate(str(candidate), source.parent.name, **analyze_kwargs)
         segment["judge_status"] = result.judge_status or (
             "keep" if result.retain_recommendation else "drop"
         )
@@ -810,6 +1206,7 @@ def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, A
         segment["tags"] = result.tags
         segment["manual_override"] = False
         segment["upload_status"] = "not_queued"
+        segment.pop("failure", None)
         return segment
 
     return _mutate_segment(videos_root, segment_id, mutate)
@@ -853,7 +1250,9 @@ def update_segment_subtitle_style(
     style = SubtitleStyle.from_mapping(payload)
 
     def mutate(_root: Path, _source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        _invalidate_final_output(_root, segment)
         segment["subtitle_style"] = style.to_mapping()
+        segment["_subtitle_style_source"] = "clip"
         segment["manual_override"] = True
         return segment
 
@@ -1286,7 +1685,12 @@ def _fail_finalize(
     raise SegmentFinalizeError(failure)
 
 
-def _next_action_state(segment: dict[str, Any], status: str) -> dict[str, Any]:
+def _next_action_state(
+    segment: dict[str, Any],
+    status: str,
+    *,
+    action: str | None = None,
+) -> dict[str, Any]:
     state = (
         dict(segment.get("action_state"))
         if isinstance(segment.get("action_state"), dict)
@@ -1294,7 +1698,7 @@ def _next_action_state(segment: dict[str, Any], status: str) -> dict[str, Any]:
     )
     state.update(
         {
-            "action": "finalize_segment",
+            "action": str(action or state.get("action") or "finalize_segment"),
             "status": status,
             "updated_at": _now(),
         }
@@ -1532,6 +1936,14 @@ def _mutate_segment(
                     updated["revision"] = previous_revision
                 segments[index] = updated
                 _write_history(history_path, history)
+                set_review_state(
+                    root,
+                    str(task.get("task_id") or ""),
+                    "candidate_review",
+                    source_rel_path=source.relative_to(root).as_posix(),
+                    room_id=source.parent.name,
+                    recorded_at=str(task.get("recorded_at") or ""),
+                )
                 return _normalize_segments(root, source, [updated])[0]
     raise FileNotFoundError(f"Segment not found: {segment_id}")
 
@@ -1559,6 +1971,56 @@ def _apply_optional_metadata(segment: dict[str, Any], payload: dict[str, Any]) -
             segment["tags"] = [str(item).strip() for item in tags if str(item).strip()]
         else:
             segment["tags"] = [str(tags).strip()] if str(tags).strip() else []
+
+
+def _apply_profile_metadata(
+    root: Path,
+    source: Path,
+    segment: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    """Apply streamer defaults only when this clip has no explicit edit."""
+    profile = read_streamer_profile(root, source.parent.name)
+    if (
+        "tags" not in payload
+        and not segment.get("tags")
+        and profile.get("default_tags")
+    ):
+        segment["tags"] = list(profile["default_tags"])
+        segment["_metadata_source"] = "profile"
+    if (
+        "description" not in payload
+        and not str(segment.get("description") or "").strip()
+        and str(profile.get("default_description") or "").strip()
+    ):
+        segment["description"] = str(profile["default_description"])
+        segment["_metadata_source"] = "profile"
+
+
+def _apply_display_defaults(
+    root: Path,
+    source: Path,
+    segments: list[dict[str, Any]],
+) -> None:
+    """Expose effective subtitle defaults without mutating task history."""
+    from src.burn.subtitle_burn import SubtitleStyle
+    from src.config import default_subtitle_style
+
+    profile_style = profile_subtitle_style(root, source.parent.name)
+    for segment in segments:
+        source_name = str(segment.get("_subtitle_style_source") or "")
+        if source_name == "clip" and isinstance(segment.get("subtitle_style"), dict):
+            segment["subtitle_style"] = SubtitleStyle.from_mapping(
+                segment["subtitle_style"]
+            ).to_mapping()
+        elif profile_style:
+            segment["subtitle_style"] = SubtitleStyle.from_mapping(
+                profile_style
+            ).to_mapping()
+            segment["_subtitle_style_source"] = "profile"
+        else:
+            segment["subtitle_style"] = default_subtitle_style().to_mapping()
+            segment["_subtitle_style_source"] = "global"
 
 
 def _segment_tags(segment: dict[str, Any]) -> list[str]:
@@ -1664,3 +2126,25 @@ def _float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _finite_seconds(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _recorded_at(source_name: str) -> str:
+    match = re.search(
+        r"(?P<date>\d{8})-(?P<hour>\d{2})-(?P<minute>\d{2})-(?P<second>\d{2})",
+        Path(str(source_name)).name,
+    )
+    if not match:
+        return ""
+    date = match.group("date")
+    return (
+        f"{date[:4]}-{date[4:6]}-{date[6:8]} "
+        f"{match.group('hour')}:{match.group('minute')}:{match.group('second')}"
+    )

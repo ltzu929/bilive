@@ -128,6 +128,7 @@ def read_upload_dashboard() -> Dict[str, Any]:
         return {
             "queue_counts": {
                 "queued": 0,
+                "staged": 0,
                 "uploading": 0,
                 "uploaded": 0,
                 "publishing": 0,
@@ -145,7 +146,7 @@ def read_upload_dashboard() -> Dict[str, Any]:
         rows = upload_conn.list_upload_queue()
         database = "ready"
     except Exception as exc:
-        counts = {"queued": 0, "uploading": 0, "uploaded": 0, "publishing": 0, "published": 0, "failed": 0, "total": 0}
+        counts = {"queued": 0, "staged": 0, "uploading": 0, "uploaded": 0, "publishing": 0, "published": 0, "failed": 0, "total": 0}
         rows = []
         database = f"unavailable: {exc}"
 

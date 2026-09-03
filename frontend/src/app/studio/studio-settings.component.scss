@@ -16,8 +16,75 @@
   font-size: 12px;
 }
 
+.streamer-profile-card {
+  margin-top: 16px;
+}
+
+.profile-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.profile-toolbar nz-select {
+  min-width: 220px;
+}
+
+.profile-form {
+  max-width: 1000px;
+}
+
+.profile-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.profile-number-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.recommendation-list,
+.experience-list {
+  max-width: 1000px;
+}
+
+.recommendation-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.recommendation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recommendation-item p {
+  margin: 8px 0;
+}
+
+.recommendation-item small,
+.experience-list small {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.experience-list small {
+  margin-left: 12px;
+}
+
 @media (max-width: 800px) {
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .profile-toolbar,
+  .profile-field-grid,
+  .profile-number-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
   }
 }

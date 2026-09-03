@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -10,6 +11,16 @@ from typing import Any
 from src.burn.task_history import write_task_history
 from src.config import MIN_VIDEO_SIZE
 from src.dashboard.task_state import resolve_task_id
+
+
+def _task_id_for_source(source: Path, root: Path) -> str:
+    return (
+        base64.urlsafe_b64encode(
+            source.relative_to(root).as_posix().encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
 
 
 SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
@@ -34,6 +45,7 @@ def start_slice_scan(
     root = root.expanduser().resolve()
     queued_paths: list[str] = []
     skipped = 0
+    deferred = 0
 
     if not root.is_dir():
         return {
@@ -47,11 +59,20 @@ def start_slice_scan(
     if task_id:
         video_path = resolve_task_id(root, task_id)
         if _is_queue_candidate(video_path):
-            pending_path = _write_pending_marker(video_path, root, slice_options=slice_options)
+            pending_path = _write_pending_marker(
+                video_path,
+                root,
+                slice_options=_effective_slice_options(
+                    root,
+                    video_path,
+                    slice_options,
+                ),
+            )
             queued_paths.append(str(pending_path))
         else:
             skipped += 1
     else:
+        candidates: list[Path] = []
         for room_dir in sorted(root.iterdir(), key=lambda item: item.name):
             if not room_dir.is_dir() or not room_dir.name.isdigit():
                 continue
@@ -59,14 +80,29 @@ def start_slice_scan(
                 if not _is_queue_candidate(video_path):
                     skipped += 1
                     continue
-                pending_path = _write_pending_marker(video_path, root, slice_options=slice_options)
-                queued_paths.append(str(pending_path))
+                candidates.append(video_path)
+        # The evening entry point handles the newest recording only.  The
+        # explicit task_id path remains available when the user wants to work
+        # through an older recording one at a time.
+        if candidates:
+            selected = max(
+                candidates,
+                key=lambda item: (item.stat().st_mtime, str(item)),
+            )
+            pending_path = _write_pending_marker(
+                selected,
+                root,
+                slice_options=_effective_slice_options(root, selected, slice_options),
+            )
+            queued_paths.append(str(pending_path))
+            deferred = len(candidates) - 1
 
     return {
         "status": "queued" if queued_paths or existing_pending else "empty",
         "queued": len(queued_paths),
         "pending_tasks": existing_pending + len(queued_paths),
         "skipped": skipped,
+        "deferred": deferred,
         "videos_root": str(root),
         "pending_paths": queued_paths,
     }
@@ -115,6 +151,17 @@ def _is_queue_candidate(video_path: Path) -> bool:
     return True
 
 
+def _effective_slice_options(
+    videos_root: Path,
+    video_path: Path,
+    explicit: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    from src.dashboard.source_lifecycle import profile_slice_options
+
+    profile = profile_slice_options(videos_root, video_path.parent.name)
+    return {**profile, **(explicit or {})} or None
+
+
 def _meets_min_source_size(video_path: Path) -> bool:
     minimum = float(MIN_SOURCE_RECORDING_SIZE_MB or 0)
     if minimum <= 0:
@@ -157,4 +204,14 @@ def _write_pending_marker(
     except Exception:
         pending_path.unlink(missing_ok=True)
         raise
+    from src.dashboard.source_lifecycle import set_review_state
+
+    set_review_state(
+        videos_root,
+        _task_id_for_source(video_path, videos_root),
+        "processing",
+        source_rel_path=rel_path,
+        room_id=video_path.parent.name,
+        recorded_at=video_path.name,
+    )
     return pending_path

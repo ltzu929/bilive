@@ -29,12 +29,12 @@ def _format_style_number(value: float) -> str:
 class SubtitleStyle:
     """Configurable burned-subtitle appearance.
 
-    Only ``font_size`` and ``margin_v`` are emitted by default so the produced
-    ``force_style`` string stays byte-equivalent to the historical
-    ``Fontsize=20,MarginV=60``. Optional fields are omitted from the filter
-    when unset.
+    ``font_name`` is explicit because the browser preview and the final
+    libass/ffmpeg render must use the same intended font. Optional placement,
+    colour, and outline fields are omitted from the filter when unset.
     """
 
+    font_name: str = "Noto Sans SC"
     font_size: int = 20
     margin_v: int = 60
     alignment: int | None = None      # ASS numpad alignment (1-9)
@@ -43,7 +43,11 @@ class SubtitleStyle:
     outline_colour: str | None = None  # ASS &HAABBGGRR
 
     def to_force_style(self) -> str:
-        parts = [f"Fontsize={int(self.font_size)}", f"MarginV={int(self.margin_v)}"]
+        parts = [
+            f"FontName={self.font_name}",
+            f"Fontsize={int(self.font_size)}",
+            f"MarginV={int(self.margin_v)}",
+        ]
         if self.alignment is not None:
             parts.append(f"Alignment={int(self.alignment)}")
         if self.outline is not None:
@@ -88,6 +92,7 @@ class SubtitleStyle:
             return text or None
 
         return cls(
+            font_name=_opt_str("font_name") or base.font_name,
             font_size=_int("font_size", base.font_size),
             margin_v=_int("margin_v", base.margin_v),
             alignment=_opt_int("alignment"),
@@ -98,7 +103,11 @@ class SubtitleStyle:
 
     def to_mapping(self) -> dict:
         """Serialise non-default fields for persistence in task metadata."""
-        data: dict = {"font_size": int(self.font_size), "margin_v": int(self.margin_v)}
+        data: dict = {
+            "font_name": self.font_name,
+            "font_size": int(self.font_size),
+            "margin_v": int(self.margin_v),
+        }
         if self.alignment is not None:
             data["alignment"] = int(self.alignment)
         if self.outline is not None:

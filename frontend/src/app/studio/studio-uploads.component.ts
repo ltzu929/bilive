@@ -85,12 +85,14 @@ export class StudioUploadsComponent implements OnInit {
   statusColor(status: string | undefined): string {
     if (status === 'failed') return 'error';
     if (status === 'published') return 'success';
+    if (status === 'staged') return 'warning';
     if (['uploading', 'publishing'].includes(status || '')) return 'processing';
     return 'default';
   }
 
   statusLabel(status: string | undefined): string {
     const labels: Record<string, string> = {
+      staged: '等待最终确认',
       queued: '等待上传',
       uploading: '上传中',
       uploaded: '等待投稿',

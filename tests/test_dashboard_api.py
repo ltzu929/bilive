@@ -470,7 +470,9 @@ async def test_segment_action_apis_update_segment_sidecar(
 
     assert keep.status_code == 200
     assert keep.json()["judge_status"] == "manual_keep"
-    assert queued
+    assert queued == []
+    keep_sidecar = Path(keep.json()["candidate_path"])
+    assert not keep_sidecar.with_suffix(".upload.json").exists()
     assert ranged.json()["start_seconds"] == 5.0
     assert dropped.json()["judge_status"] == "drop"
     assert retried.status_code == 200
