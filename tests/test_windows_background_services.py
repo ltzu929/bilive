@@ -1,4 +1,6 @@
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -6,6 +8,7 @@ import pytest
 from src.server.dashboard_server import configure_dashboard_environment
 from src.server.recorder_server import (
     configure_recorder_environment,
+    install_secret_cookie,
     persistent_settings_payload,
     read_secret_cookie,
 )
@@ -68,6 +71,45 @@ def test_persistent_settings_payload_removes_runtime_cookie():
 
     assert payload["header"]["cookie"] == ""
     assert payload["version"] == "1.0"
+
+
+def test_recorder_settings_dump_does_not_truncate_on_serialization_failure(
+    tmp_path, monkeypatch
+):
+    class FakeSettings:
+        @classmethod
+        def load(cls, _path):
+            return cls()
+
+        def dict(self, *, exclude_none):
+            assert exclude_none is True
+            return {"header": {"cookie": "runtime-cookie"}, "version": "1.0"}
+
+    blrec_module = types.ModuleType("blrec")
+    setting_module = types.ModuleType("blrec.setting")
+    setting_module.Settings = FakeSettings
+    monkeypatch.setitem(sys.modules, "blrec", blrec_module)
+    monkeypatch.setitem(sys.modules, "blrec.setting", setting_module)
+
+    assert install_secret_cookie("runtime-cookie") is True
+
+    settings_path = tmp_path / "settings.toml"
+    settings_path.write_text("original", encoding="utf-8")
+
+    settings = FakeSettings()
+    settings._path = settings_path
+
+    def fail_during_serialization(_payload):
+        raise RuntimeError("serialization failed")
+
+    import toml
+
+    monkeypatch.setattr(toml, "dumps", fail_during_serialization)
+
+    with pytest.raises(RuntimeError, match="serialization failed"):
+        FakeSettings.dump(settings)
+
+    assert settings_path.read_text(encoding="utf-8") == "original"
 
 
 def test_recorder_app_uses_native_blrec_shell_and_api_gateway_without_injection():

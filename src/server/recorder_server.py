@@ -103,8 +103,11 @@ def install_secret_cookie(settings_cookie: str) -> bool:
         return settings
 
     def dump_without_secret(settings: Any) -> None:
-        with open(settings._path, "wt", encoding="utf8") as file:
-            toml.dump(persistent_settings_payload(settings), file)
+        settings_path = Path(settings._path)
+        serialized = toml.dumps(persistent_settings_payload(settings))
+        temporary = settings_path.with_suffix(settings_path.suffix + ".bilive-tmp")
+        temporary.write_text(serialized, encoding="utf8", newline="")
+        os.replace(temporary, settings_path)
 
     Settings.load = load_with_secret
     Settings.dump = dump_without_secret
