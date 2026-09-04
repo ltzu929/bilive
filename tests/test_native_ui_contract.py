@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 
-WHEEL = Path("wheel/blrec-2.0.0b4+bilive.5-py3-none-any.whl")
+WHEEL = Path("wheel/blrec-2.0.0b4+bilive.6-py3-none-any.whl")
 
 
 def test_dashboard_service_is_api_only():
@@ -76,6 +76,21 @@ def test_native_wheel_includes_source_built_queue_sorting():
     assert rb"\u6700\u65b0\u5f55\u64ad\u4f18\u5148" in javascript
     assert rb"\u6700\u65e9\u5f55\u64ad\u4f18\u5148" in javascript
     assert rb"\u6309 UP \u4e3b\u5206\u7ec4" in javascript
+
+
+def test_native_wheel_includes_streamer_subtitle_preview():
+    with zipfile.ZipFile(WHEEL) as archive:
+        javascript = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/") and name.endswith(".js")
+        )
+
+    assert (
+        rb"\u793a\u4f8b\u5b57\u5e55\uff1a\u8fd9\u662f\u4e00\u6761"
+        rb"\u4e3b\u64ad\u4e13\u5c5e\u5b57\u5e55"
+    ) in javascript
+    assert rb"\u6d4f\u89c8\u5668\u5185\u5373\u65f6\u9884\u89c8" in javascript
 
 
 def test_native_wheel_service_worker_tracks_patched_assets():

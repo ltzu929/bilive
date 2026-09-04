@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-WHEEL = Path("wheel/blrec-2.0.0b4+bilive.5-py3-none-any.whl")
+WHEEL = Path("wheel/blrec-2.0.0b4+bilive.6-py3-none-any.whl")
 
 
 def _load_modules():

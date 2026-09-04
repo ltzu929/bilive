@@ -11,7 +11,7 @@ $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvDir = Join-Path $ProjectDir ".venv-recorder"
 $Python = Join-Path $VenvDir "Scripts\python.exe"
 $Requirements = Join-Path $ProjectDir "requirements\recorder-windows.txt"
-$BlrecWheel = Join-Path $ProjectDir "wheel\blrec-2.0.0b4+bilive.5-py3-none-any.whl"
+$BlrecWheel = Join-Path $ProjectDir "wheel\blrec-2.0.0b4+bilive.6-py3-none-any.whl"
 $Settings = Join-Path $ProjectDir "settings.toml"
 $SettingsTemplate = Join-Path $ProjectDir "settings.example.toml"
 
