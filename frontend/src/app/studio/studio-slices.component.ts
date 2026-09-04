@@ -181,6 +181,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       }));
   }
 
+  trackByGroup(_index: number, group: { room: string }): string {
+    return group.room || 'all';
+  }
+
+  trackByRecording(_index: number, item: StudioSourceRecording): string {
+    return item.task_id;
+  }
+
   get selectedSegment(): StudioSegment | null {
     return (
       this.detail?.segments?.find(

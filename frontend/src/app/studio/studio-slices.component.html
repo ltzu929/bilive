@@ -78,13 +78,13 @@
     [class.queue-collapsed]="!queueOpen"
     [class.inspector-empty]="!selectedSegment"
   >
-    <nz-card *ngIf="queueOpen" class="queue-panel panel" nzTitle="UP 主队列" [nzExtra]="queueExtra">
+    <nz-card *ngIf="queueOpen" class="queue-panel panel" nzTitle="UP 主队列" [nzExtra]="queueExtra" [nzBodyStyle]="{ padding: '24px 0' }">
       <ng-template #queueExtra><span class="panel-meta">{{ filteredRecordings.length }} 场录播</span></ng-template>
       <nz-spin [nzSpinning]="loading">
         <ng-container *ngIf="groupedRecordings.length; else noRecordings">
-          <div class="source-group" *ngFor="let group of groupedRecordings">
+          <div class="source-group" *ngFor="let group of groupedRecordings; trackBy: trackByGroup">
             <div class="source-group-header" *ngIf="group.room"><strong>{{ group.room }}</strong><span>{{ group.items.length }} 场</span></div>
-            <button class="source-row" *ngFor="let item of group.items" type="button" [class.selected]="item.task_id === selectedTaskId" (click)="selectRecording(item.task_id)">
+            <button class="source-row" *ngFor="let item of group.items; trackBy: trackByRecording" type="button" [class.selected]="item.task_id === selectedTaskId" (click)="selectRecording(item.task_id)">
               <span class="source-row-main"><strong>{{ item.source_name || item.source_rel_path }}</strong><small>{{ sourceDateLabel(item) }}</small><small>{{ recordingSummary(item) }}</small></span>
               <nz-tag [nzColor]="reviewStateColor(item.review_state)">{{ reviewStateLabel(item.review_state || item.status) }}</nz-tag>
             </button>

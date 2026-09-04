@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 
-WHEEL = Path("wheel/blrec-2.0.0b4+bilive.7-py3-none-any.whl")
+WHEEL = Path("wheel/blrec-2.0.0b4+bilive.8-py3-none-any.whl")
 
 
 def test_dashboard_service_is_api_only():
@@ -49,6 +49,31 @@ def test_native_source_video_only_loads_on_demand():
     assert 'preload="none"' in template
     assert 'preload="metadata"' not in template
     assert b'"preload","none"' in javascript
+
+
+def test_native_source_queue_tracks_stable_group_and_recording_ids():
+    template = Path(
+        "frontend/src/app/studio/studio-slices.component.html"
+    ).read_text(encoding="utf-8")
+    component = Path(
+        "frontend/src/app/studio/studio-slices.component.ts"
+    ).read_text(encoding="utf-8")
+    with zipfile.ZipFile(WHEEL) as archive:
+        javascript = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/") and name.endswith(".js")
+        )
+
+    assert "trackBy: trackByGroup" in template
+    assert "trackBy: trackByRecording" in template
+    assert "trackByGroup(_index: number, group: { room: string }): string" in component
+    assert "return group.room || 'all';" in component
+    assert "trackByRecording(_index: number, item: StudioSourceRecording): string" in component
+    assert "return item.task_id;" in component
+    assert b"trackByGroup" in javascript
+    assert b"trackByRecording" in javascript
+    assert b"24px 0" in javascript
 
 
 def test_native_wheel_uses_studio_api_namespace():
