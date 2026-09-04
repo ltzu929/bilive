@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 
-WHEEL = Path("wheel/blrec-2.0.0b4+bilive.7-py3-none-any.whl")
+WHEEL = Path("wheel/blrec-2.0.0b4+bilive.8-py3-none-any.whl")
 
 
 def test_dashboard_service_is_api_only():
@@ -49,6 +49,22 @@ def test_native_source_video_only_loads_on_demand():
     assert 'preload="none"' in template
     assert 'preload="metadata"' not in template
     assert b'"preload","none"' in javascript
+
+
+def test_native_source_queue_rows_cover_card_gutter():
+    template = Path(
+        "frontend/src/app/studio/studio-slices.component.html"
+    ).read_text(encoding="utf-8")
+    with zipfile.ZipFile(WHEEL) as archive:
+        javascript = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("blrec/data/webapp/") and name.endswith(".js")
+        )
+
+    assert '[nzBodyStyle]="{ padding: \'24px 0\' }"' in template
+    assert '(click)="selectRecording(item.task_id)"' in template
+    assert b"24px 0" in javascript
 
 
 def test_native_wheel_uses_studio_api_namespace():

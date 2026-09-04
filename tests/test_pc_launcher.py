@@ -114,7 +114,7 @@ def test_recorder_environment_is_separate_and_applies_blrec_hardening():
     assert "settings.example.toml" in text
     assert "Copy-Item" in text
     assert "-m pip check" in text
-    assert "blrec-2.0.0b4+bilive.7-py3-none-any.whl" in text
+    assert "blrec-2.0.0b4+bilive.8-py3-none-any.whl" in text
     assert "fastapi==0.88.0" in requirements
     assert "uvicorn[standard]==0.20.0" in requirements
     assert "setuptools==80.9.0" in requirements
