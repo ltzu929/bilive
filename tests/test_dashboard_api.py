@@ -172,6 +172,48 @@ def test_media_open_ended_ranges_are_bounded_and_contiguous(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_media_range_closes_file_when_stream_is_cancelled(tmp_path, monkeypatch):
+    import asyncio
+
+    from src.dashboard.routes import media as media_routes
+
+    started = asyncio.Event()
+
+    class FakeFile:
+        def __init__(self):
+            self.closed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            self.closed = True
+
+        async def seek(self, _offset):
+            return None
+
+        async def read(self, _size):
+            started.set()
+            await asyncio.Event().wait()
+
+    file = FakeFile()
+
+    async def open_file(*_args, **_kwargs):
+        return file
+
+    monkeypatch.setattr(media_routes.anyio, "open_file", open_file)
+    stream = media_routes._iter_file_range(tmp_path / "large.mp4", 0, 100)
+    read_task = asyncio.create_task(anext(stream))
+    await started.wait()
+    read_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await read_task
+
+    assert file.closed is True
+
+
+@pytest.mark.anyio
 async def test_media_api_serves_mp4_source(videos_root, write_slice, dashboard_client):
     write_slice(content=b"mp4")
 

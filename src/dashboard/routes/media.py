@@ -6,6 +6,7 @@ from __future__ import annotations
 import mimetypes
 from pathlib import Path
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
@@ -18,12 +19,12 @@ CHUNK_SIZE = 1024 * 1024
 MAX_RANGE_BYTES = 16 * 1024 * 1024
 
 
-def _iter_file_range(path: Path, start: int, end: int):
-    with path.open("rb") as file:
-        file.seek(start)
+async def _iter_file_range(path: Path, start: int, end: int):
+    async with await anyio.open_file(path, "rb") as file:
+        await file.seek(start)
         remaining = end - start + 1
         while remaining > 0:
-            chunk = file.read(min(CHUNK_SIZE, remaining))
+            chunk = await file.read(min(CHUNK_SIZE, remaining))
             if not chunk:
                 break
             remaining -= len(chunk)
