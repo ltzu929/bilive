@@ -78,7 +78,7 @@
     [class.queue-collapsed]="!queueOpen"
     [class.inspector-empty]="!selectedSegment"
   >
-    <nz-card *ngIf="queueOpen" class="queue-panel panel" nzTitle="UP 主队列" [nzExtra]="queueExtra" [nzBodyStyle]="{ padding: '24px 0' }">
+    <nz-card *ngIf="queueOpen" class="queue-panel panel" nzTitle="UP 主队列" [nzExtra]="queueExtra">
       <ng-template #queueExtra><span class="panel-meta">{{ filteredRecordings.length }} 场录播</span></ng-template>
       <nz-spin [nzSpinning]="loading">
         <ng-container *ngIf="groupedRecordings.length; else noRecordings">
