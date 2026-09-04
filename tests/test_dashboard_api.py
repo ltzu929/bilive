@@ -104,7 +104,7 @@ def test_media_range_response_streams_instead_of_buffering(tmp_path):
     from fastapi import Request
     from fastapi.responses import StreamingResponse
 
-    from src.dashboard.app import media_response
+    from src.dashboard.routes.media import _media_response as media_response
 
     media = tmp_path / "large.mp4"
     media.write_bytes(b"0123456789")
@@ -125,6 +125,50 @@ def test_media_range_response_streams_instead_of_buffering(tmp_path):
     assert isinstance(response, StreamingResponse)
     assert response.status_code == 206
     assert response.headers["content-length"] == "10"
+
+
+def test_media_open_ended_ranges_are_bounded_and_contiguous(tmp_path):
+    from fastapi import Request
+
+    from src.dashboard.routes.media import MAX_RANGE_BYTES
+    from src.dashboard.routes.media import _media_response as media_response
+
+    media = tmp_path / "large.mp4"
+    with media.open("wb") as handle:
+        handle.truncate(MAX_RANGE_BYTES * 3)
+
+    def response_for(value: bytes):
+        request = Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/api/media/test",
+            "headers": [(b"range", value)],
+            "query_string": b"",
+            "server": ("test", 80),
+            "client": ("test", 1234),
+            "scheme": "http",
+            "http_version": "1.1",
+        })
+        return media_response(media, request)
+
+    first = response_for(b"bytes=0-")
+    second = response_for(f"bytes={MAX_RANGE_BYTES}-".encode())
+    suffix = response_for(f"bytes=-{MAX_RANGE_BYTES + 123}".encode())
+
+    assert first.headers["content-range"] == (
+        f"bytes 0-{MAX_RANGE_BYTES - 1}/{MAX_RANGE_BYTES * 3}"
+    )
+    assert second.headers["content-range"] == (
+        f"bytes {MAX_RANGE_BYTES}-{MAX_RANGE_BYTES * 2 - 1}/"
+        f"{MAX_RANGE_BYTES * 3}"
+    )
+    assert suffix.headers["content-range"] == (
+        f"bytes {MAX_RANGE_BYTES * 2}-{MAX_RANGE_BYTES * 3 - 1}/"
+        f"{MAX_RANGE_BYTES * 3}"
+    )
+    assert first.headers["content-length"] == str(MAX_RANGE_BYTES)
+    assert second.headers["content-length"] == str(MAX_RANGE_BYTES)
+    assert suffix.headers["content-length"] == str(MAX_RANGE_BYTES)
 
 
 @pytest.mark.anyio

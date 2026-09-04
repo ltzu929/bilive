@@ -15,6 +15,7 @@ from src.dashboard._context import DashboardContext, get_context
 router = APIRouter()
 
 CHUNK_SIZE = 1024 * 1024
+MAX_RANGE_BYTES = 16 * 1024 * 1024
 
 
 def _iter_file_range(path: Path, start: int, end: int):
@@ -70,7 +71,7 @@ def _media_response(
             suffix_size = int(end_text)
             if suffix_size <= 0:
                 raise ValueError
-            start = max(file_size - suffix_size, 0)
+            start = max(file_size - min(suffix_size, MAX_RANGE_BYTES), 0)
             end = file_size - 1
         else:
             start = int(start_text)
@@ -80,7 +81,7 @@ def _media_response(
     except (TypeError, ValueError):
         return _bad_range()
 
-    end = min(end, file_size - 1)
+    end = min(end, file_size - 1, start + MAX_RANGE_BYTES - 1)
     content_length = end - start + 1
     headers = {
         **common_headers,

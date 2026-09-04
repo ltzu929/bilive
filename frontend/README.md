@@ -27,9 +27,9 @@ cd D:\alldata\pi\bilive\frontend
 npm ci
 npm run build
 python build_wheel.py `
-  ..\wheel\blrec-2.0.0b4+bilive.5-py3-none-any.whl `
   ..\wheel\blrec-2.0.0b4+bilive.6-py3-none-any.whl `
-  2.0.0b4+bilive.6
+  ..\wheel\blrec-2.0.0b4+bilive.7-py3-none-any.whl `
+  2.0.0b4+bilive.7
 ```
 
 The production build is written to `frontend/dist/blrec`. Building here does

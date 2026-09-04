@@ -104,7 +104,7 @@
     <nz-card class="preview-panel panel" nzTitle="片段预览" [nzExtra]="previewExtra">
       <ng-template #previewExtra><span class="panel-meta">{{ detail?.source_size_mb || 0 }} MB</span></ng-template>
       <nz-spin [nzSpinning]="detailLoading">
-        <video #sourceVideo *ngIf="selectedMediaUrl; else noPreview" class="source-video" controls preload="metadata" [src]="selectedMediaUrl"></video>
+        <video #sourceVideo *ngIf="selectedMediaUrl; else noPreview" class="source-video" controls preload="none" [src]="selectedMediaUrl"></video>
         <ng-template #noPreview><div class="empty-preview"><nz-empty nzNotFoundContent="从左侧选择录播后显示预览"></nz-empty></div></ng-template>
         <div class="source-meta" *ngIf="detail"><strong>{{ detail.source_name }}</strong><span>{{ detail.message || statusLabel(detail.status) }}</span></div>
 

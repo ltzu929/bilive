@@ -9,6 +9,8 @@ there is no referer or iframe compatibility path to maintain.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 import json
 import os
 from typing import Iterable
@@ -100,6 +102,50 @@ async def _send_error(send: Send, status_code: int, detail: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+async def _wait_for_disconnect(receive: Receive) -> None:
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            return
+
+
+async def _stream_response(
+    response: aiohttp.ClientResponse,
+    receive: Receive,
+    send: Send,
+) -> None:
+    disconnect_task = asyncio.create_task(_wait_for_disconnect(receive))
+    try:
+        while True:
+            read_task = asyncio.create_task(response.content.read(64 * 1024))
+            done, _ = await asyncio.wait(
+                {read_task, disconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if disconnect_task in done:
+                read_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await read_task
+                response.close()
+                return
+
+            chunk = read_task.result()
+            if not chunk:
+                break
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": chunk,
+                    "more_body": True,
+                }
+            )
+        await send({"type": "http.response.body", "body": b""})
+    finally:
+        disconnect_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnect_task
+
+
 def _request_headers(scope: Scope, upstream_origin: str) -> list[tuple[str, str]]:
     headers: list[tuple[str, str]] = []
     for raw_name, raw_value in scope.get("headers", []):
@@ -166,6 +212,7 @@ class StudioApiMiddleware:
         method = scope.get("method", "GET")
         target = f"{self._upstream}{upstream_path(scope, prefix=self._prefix)}"
         body = await _read_body(receive) if method not in {"GET", "HEAD"} else b""
+        response_started = False
         try:
             timeout = aiohttp.ClientTimeout(total=None)
             async with aiohttp.ClientSession(
@@ -185,19 +232,14 @@ class StudioApiMiddleware:
                             "headers": list(_response_headers(response, self._prefix)),
                         }
                     )
+                    response_started = True
                     if method == "HEAD":
                         await send({"type": "http.response.body", "body": b""})
                         return
-                    async for chunk in response.content.iter_chunked(64 * 1024):
-                        await send(
-                            {
-                                "type": "http.response.body",
-                                "body": chunk,
-                                "more_body": True,
-                            }
-                        )
-                    await send({"type": "http.response.body", "body": b""})
+                    await _stream_response(response, receive, send)
         except (aiohttp.ClientError, OSError) as exc:
+            if response_started:
+                return
             await _send_error(send, 502, f"Studio dashboard unavailable: {exc}")
 
 
