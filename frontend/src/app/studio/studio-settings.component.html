@@ -89,6 +89,21 @@
           <nz-form-item><nz-form-label nzFor="profile-text-color">文字色</nz-form-label><nz-form-control><input nz-input id="profile-text-color" type="color" [(ngModel)]="subtitleTextColorDraft" name="subtitleTextColor"></nz-form-control></nz-form-item>
           <nz-form-item><nz-form-label nzFor="profile-outline-color">描边色</nz-form-label><nz-form-control><input nz-input id="profile-outline-color" type="color" [(ngModel)]="subtitleOutlineColorDraft" name="subtitleOutlineColor"></nz-form-control></nz-form-item>
         </div>
+        <div
+          class="profile-subtitle-preview"
+          [style.justify-content]="subtitlePreviewJustifyContent"
+          [style.align-items]="subtitlePreviewAlignItems"
+        >
+          <span
+            [style.font-family]="subtitleFontNameDraft"
+            [style.font-size.px]="subtitlePreviewFontSize"
+            [style.margin-top.px]="subtitlePreviewMarginTop"
+            [style.margin-bottom.px]="subtitlePreviewMarginBottom"
+            [style.color]="subtitleTextColorDraft"
+            [style.text-shadow]="subtitlePreviewShadow"
+          >示例字幕：这是一条主播专属字幕</span>
+        </div>
+        <p class="subtitle-preview-hint">浏览器内即时预览；最终效果以 Windows ffmpeg 成片为准。</p>
         <button nz-button nzType="primary" type="button" (click)="saveStreamerProfile()" [disabled]="profileBusy || profileLoading">保存主播档案</button>
       </form>
     </nz-spin>

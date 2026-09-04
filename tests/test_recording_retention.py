@@ -56,7 +56,6 @@ def test_retention_warns_on_day_11_and_enqueues_day_14_recycle(tmp_path):
     warning = maintain_recording_retention(
         videos,
         now=start + 11 * 86400,
-        execute=False,
     )
     assert [item["task_id"] for item in warning["warnings"]] == [task["task_id"]]
     assert warning["scheduled"] == []
@@ -64,7 +63,6 @@ def test_retention_warns_on_day_11_and_enqueues_day_14_recycle(tmp_path):
     scheduled = maintain_recording_retention(
         videos,
         now=start + 14 * 86400,
-        execute=False,
     )
     assert scheduled["warnings"] == []
     assert len(scheduled["scheduled"]) == 1
@@ -77,6 +75,33 @@ def test_retention_warns_on_day_11_and_enqueues_day_14_recycle(tmp_path):
             encoding="utf-8"
         )
     )["recording_id"] == task["task_id"]
+
+
+def test_retention_enqueues_without_draining_unrelated_action_jobs(tmp_path):
+    videos = tmp_path / "Videos"
+    source = _source(videos)
+    task = build_task_inventory(videos)[0]
+    start = 1_000_000.0
+    _set_retention_window(
+        videos,
+        task["task_id"],
+        task["source_rel_path"],
+        task["room_id"],
+        start,
+    )
+    unrelated = enqueue_action_job(
+        videos,
+        action="finalize_segment",
+        segment_id="segment-1",
+    )["job"]
+    result = maintain_recording_retention(
+        videos,
+        now=start + 14 * 86400,
+    )
+
+    assert (videos / ".bilive-jobs" / f"{unrelated['job_id']}.pending.json").is_file()
+    trash_job_id = result["scheduled"][0]["job_id"]
+    assert (videos / ".bilive-jobs" / f"{trash_job_id}.pending.json").is_file()
 
 
 def test_retention_keeps_reason_when_active_recording_action_blocks_recycle(tmp_path):
@@ -100,7 +125,6 @@ def test_retention_keeps_reason_when_active_recording_action_blocks_recycle(tmp_
     result = maintain_recording_retention(
         videos,
         now=start + 14 * 86400,
-        execute=False,
     )
 
     assert result["scheduled"] == []

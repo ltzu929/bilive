@@ -55,6 +55,45 @@ export class StudioSettingsComponent implements OnInit {
   subtitleOutlineColorDraft = '#000000';
   private profileRequestId = 0;
 
+  get subtitlePreviewFontSize(): number {
+    return Math.max(8, Number(this.subtitleFontSizeDraft) || 20);
+  }
+
+  get subtitlePreviewShadow(): string {
+    const width = Math.max(0, Number(this.subtitleOutlineDraft) || 0);
+    return width ? `0 0 ${width}px ${this.subtitleOutlineColorDraft}` : 'none';
+  }
+
+  get subtitlePreviewJustifyContent(): string {
+    const column = this.subtitlePreviewAlignment % 3;
+    if (column === 1) return 'flex-start';
+    if (column === 0) return 'flex-end';
+    return 'center';
+  }
+
+  get subtitlePreviewAlignItems(): string {
+    if (this.subtitlePreviewAlignment >= 7) return 'flex-start';
+    if (this.subtitlePreviewAlignment >= 4) return 'center';
+    return 'flex-end';
+  }
+
+  get subtitlePreviewMarginTop(): number {
+    return this.subtitlePreviewAlignment >= 7 ? this.scaledSubtitleMargin : 0;
+  }
+
+  get subtitlePreviewMarginBottom(): number {
+    return this.subtitlePreviewAlignment <= 3 ? this.scaledSubtitleMargin : 0;
+  }
+
+  private get subtitlePreviewAlignment(): number {
+    const alignment = Number(this.subtitleAlignmentDraft) || 2;
+    return Math.min(9, Math.max(1, alignment));
+  }
+
+  private get scaledSubtitleMargin(): number {
+    return Math.min(48, Math.max(0, Number(this.subtitleMarginVDraft) || 0) / 4);
+  }
+
   constructor(
     private api: StudioApiService,
     private message: NzMessageService,

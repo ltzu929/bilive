@@ -23,7 +23,6 @@ from src.dashboard.task_state import build_task_inventory
 from src.server.action_jobs import (
     enqueue_action_job,
     find_active_recording_job,
-    process_action_jobs,
 )
 
 
@@ -31,13 +30,13 @@ def maintain_recording_retention(
     videos_root: str | Path,
     *,
     now: float | None = None,
-    execute: bool = True,
 ) -> dict[str, Any]:
     """Warn at day 11 and enqueue day-14 recycle-bin actions.
 
     The maintenance pass never moves files itself. It creates the same
-    Windows-only ``trash_recording`` action consumed by the existing worker;
-    ``execute`` controls whether that worker loop is drained in this process.
+    Windows-only ``trash_recording`` action for the normal worker to consume.
+    It deliberately does not execute or wake that worker, so a maintenance pass
+    cannot make unrelated pending actions run.
     """
     root = Path(videos_root).expanduser().resolve()
     current_time = time.time() if now is None else float(now)
@@ -137,13 +136,11 @@ def maintain_recording_retention(
             }
         )
 
-    processed = process_action_jobs(root) if execute and scheduled else 0
     return {
         "status": "ok",
         "warnings": warnings,
         "scheduled": scheduled,
         "blocked": blocked,
-        "processed": processed,
     }
 
 
@@ -191,13 +188,8 @@ def _default_videos_root() -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run bilive recording retention maintenance")
     parser.add_argument("--videos-root", default=str(_default_videos_root()))
-    parser.add_argument(
-        "--enqueue-only",
-        action="store_true",
-        help="Create retention action jobs without draining the Windows worker loop",
-    )
     args = parser.parse_args(argv)
-    result = maintain_recording_retention(args.videos_root, execute=not args.enqueue_only)
+    result = maintain_recording_retention(args.videos_root)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if not result["blocked"] else 2
 

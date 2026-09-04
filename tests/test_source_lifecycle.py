@@ -163,6 +163,46 @@ def test_technical_failure_dropped_after_review_is_not_negative_content_sample(t
     assert not any(item["experience_type"] == "negative" for item in records)
 
 
+def test_dropped_missed_segment_is_recorded_as_negative_content_sample(tmp_path):
+    records = source_lifecycle.record_review_experiences(
+        tmp_path / "Videos",
+        room_id="22384516",
+        task_id="recording-1",
+        source_rel_path="22384516/source.mp4",
+        segments=[
+            {
+                "segment_id": "seg1",
+                "judge_status": "drop",
+                "manual_origin": "missed_segment",
+                "manual_reason": "mimo_missed",
+            }
+        ],
+    )
+
+    assert records[0]["experience_type"] == "negative"
+    assert records[0]["conclusion"] == "negative"
+
+
+def test_kept_missed_segment_is_recorded_as_missed_positive(tmp_path):
+    records = source_lifecycle.record_review_experiences(
+        tmp_path / "Videos",
+        room_id="22384516",
+        task_id="recording-1",
+        source_rel_path="22384516/source.mp4",
+        segments=[
+            {
+                "segment_id": "seg1",
+                "judge_status": "manual_keep",
+                "manual_origin": "missed_segment",
+                "manual_reason": "mimo_missed",
+            }
+        ],
+    )
+
+    assert records[0]["experience_type"] == "missed_segment_positive"
+    assert records[0]["conclusion"] == "positive"
+
+
 def test_review_experience_preserves_bounded_analysis_and_danmaku_evidence(tmp_path):
     videos = tmp_path / "Videos"
     source = _source(videos)

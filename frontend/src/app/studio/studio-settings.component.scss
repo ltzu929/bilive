@@ -45,6 +45,30 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.profile-subtitle-preview {
+  display: flex;
+  width: min(100%, 720px);
+  aspect-ratio: 16 / 9;
+  margin-top: 4px;
+  padding: 16px;
+  overflow: hidden;
+  background: #111;
+}
+
+.profile-subtitle-preview span {
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.subtitle-preview-hint {
+  margin: 6px 0 12px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
 .recommendation-list,
 .experience-list {
   max-width: 1000px;

@@ -612,7 +612,10 @@ def record_review_experiences(
         elif status in UNRESOLVED_STATUSES:
             experience_type = "unresolved"
             conclusion = "unresolved"
-        elif str(segment.get("manual_origin") or "") == "missed_segment":
+        elif (
+            str(segment.get("manual_origin") or "") == "missed_segment"
+            and status in {"keep", "manual_keep"}
+        ):
             experience_type = "missed_segment_positive"
             conclusion = "positive"
         elif status in {"keep", "manual_keep"}:
