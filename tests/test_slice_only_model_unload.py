@@ -47,6 +47,7 @@ def test_build_segment_record_records_mimo_trim_ranges(tmp_path):
         tags=["live"],
         retain_recommendation=True,
         judge_status="keep",
+        transcript="第一句",
     )
     analysis.suggested_trim = SimpleNamespace(
         trim_start=3.0,
@@ -58,6 +59,7 @@ def test_build_segment_record_records_mimo_trim_ranges(tmp_path):
         str(source),
         generated,
         analysis,
+        danmaku_text="弹幕摘要",
     )
 
     assert record["candidate_start_seconds"] == 100.0
@@ -66,6 +68,8 @@ def test_build_segment_record_records_mimo_trim_ranges(tmp_path):
     assert record["mimo_trim_end"] == 9.5
     assert record["start_seconds"] == 103.0
     assert record["end_seconds"] == 109.5
+    assert record["transcript_summary"] == "第一句"
+    assert record["danmaku_summary"] == "弹幕摘要"
 
 
 def test_build_segment_record_preserves_trim_audit_on_downstream_failure(tmp_path):

@@ -10,6 +10,7 @@ from src.dashboard.source_lifecycle import (
     build_lifecycle_view,
     default_recording_state,
     generate_streamer_recommendation,
+    append_experience,
     mutate_recording_state,
     patch_streamer_profile,
     read_experiences,
@@ -160,6 +161,93 @@ def test_technical_failure_dropped_after_review_is_not_negative_content_sample(t
     assert records[0]["conclusion"] == "technical_failure"
     assert records[0]["reason_type"] == "judge:judge_failed"
     assert not any(item["experience_type"] == "negative" for item in records)
+
+
+def test_review_experience_preserves_bounded_analysis_and_danmaku_evidence(tmp_path):
+    videos = tmp_path / "Videos"
+    source = _source(videos)
+    source.with_suffix(".xml").write_text(
+        '<i><d p="12,1,25,16711680,0,0,0,0">弹幕证据</d></i>',
+        encoding="utf-8",
+    )
+    analysis = source.with_name("10s_candidate_analysis.json")
+    analysis.write_text(
+        json.dumps({"transcript": "主播的转录证据"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    records = source_lifecycle.record_review_experiences(
+        videos,
+        room_id="22384516",
+        task_id="recording-1",
+        source_rel_path=source.relative_to(videos).as_posix(),
+        segments=[
+            {
+                "segment_id": "seg1",
+                "judge_status": "keep",
+                "start_seconds": 10,
+                "end_seconds": 20,
+                "danmaku_count": 1,
+                "artifacts": {
+                    "analysis_sidecar": {
+                        "rel_path": analysis.relative_to(videos).as_posix(),
+                    }
+                },
+            }
+        ],
+    )
+
+    assert records[0]["transcript_summary"] == "主播的转录证据"
+    assert records[0]["danmaku_summary"] == {
+        "count": 1,
+        "text": "弹幕证据",
+    }
+
+
+def test_streamer_evidence_summary_and_recommendation_basis_are_explicit(tmp_path):
+    videos = tmp_path / "Videos"
+    for index in range(4):
+        append_experience(
+            videos,
+            {
+                "room_id": "22384516",
+                "task_id": f"positive-{index}",
+                "source_rel_path": f"22384516/positive-{index}.mp4",
+                "start_seconds": 10,
+                "end_seconds": 20,
+                "experience_type": "positive",
+                "conclusion": "positive",
+                "reason_type": "content_review",
+                "note": "保留",
+                "dedupe_key": f"positive-{index}",
+            },
+        )
+    append_experience(
+        videos,
+        {
+            "room_id": "22384516",
+            "task_id": "negative-1",
+            "source_rel_path": "22384516/negative-1.mp4",
+            "start_seconds": 30,
+            "end_seconds": 40,
+            "experience_type": "negative",
+            "conclusion": "negative",
+            "reason_type": "boundary_incomplete",
+            "note": "边界不完整",
+            "dedupe_key": "negative-1",
+        },
+    )
+
+    summary = source_lifecycle.streamer_evidence_summary(videos, "22384516")
+    assert summary["evidence_status"] == "ready"
+    assert summary["sample_size"] == 5
+    recommendation_state = generate_streamer_recommendation(videos, "22384516")
+    recommendation = recommendation_state["recommendations"][-1]
+    assert recommendation["evidence_status"] == "ready"
+    assert recommendation["basis"][0]["task_id"] == "positive-0"
+    assert recommendation["basis"][-1]["decision"] == "negative"
+    assert recommendation["basis"][-1]["source_rel_path"] == (
+        "22384516/negative-1.mp4"
+    )
 
 
 def test_streamer_profile_defaults_are_isolated_and_recommendation_needs_evidence(tmp_path):

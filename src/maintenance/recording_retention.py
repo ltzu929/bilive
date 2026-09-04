@@ -75,10 +75,18 @@ def maintain_recording_retention(
 
         active = find_active_recording_job(root, task_id)
         if active is not None:
+            reason = "trash_action_active"
+            set_trash_job_state(
+                root,
+                task_id,
+                status="blocked",
+                job_id=str(active.get("job_id") or ""),
+                reason=reason,
+            )
             blocked.append(
                 {
                     "task_id": task_id,
-                    "reason": "trash_action_active",
+                    "reason": reason,
                     "job_id": str(active.get("job_id") or ""),
                 }
             )

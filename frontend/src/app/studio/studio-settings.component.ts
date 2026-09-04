@@ -8,6 +8,7 @@ import { NzMessageService } from 'ng-zorro-antd/message';
 import {
   StudioApiService,
   StudioRoom,
+  StudioStreamerEvidenceSummary,
   StudioStreamerProfile,
   StudioStreamerProfileResponse,
   StudioStreamerRecommendation,
@@ -32,6 +33,7 @@ export class StudioSettingsComponent implements OnInit {
   profileBusy = false;
   profileError = '';
   profile: StudioStreamerProfile = {};
+  evidence: StudioStreamerEvidenceSummary = {};
   recommendations: StudioStreamerRecommendation[] = [];
   experiences: Array<Record<string, unknown>> = [];
   displayNameDraft = '';
@@ -220,6 +222,40 @@ export class StudioSettingsComponent implements OnInit {
       .join('、');
   }
 
+  recommendationRules(recommendation: StudioStreamerRecommendation): string {
+    const labels: Record<string, string> = {
+      approved_guidance: '内容判断指导',
+      default_slice_options: '默认切片参数',
+    };
+    return Object.keys(recommendation.changes || {})
+      .map((key) => labels[key] || key)
+      .join('、') || '主播档案';
+  }
+
+  recommendationSamples(recommendation: StudioStreamerRecommendation): string {
+    return (recommendation.basis || [])
+      .map((item) => {
+        const experience = this.experiences.find(
+          (candidate) => candidate.experience_id === item.experience_id
+        );
+        const source = String(
+          item.source_rel_path ||
+            experience?.source_rel_path ||
+            item.task_id ||
+            experience?.task_id ||
+            '录播'
+        );
+        const start = Number(item.start_seconds ?? experience?.start_seconds);
+        const end = Number(item.end_seconds ?? experience?.end_seconds);
+        const interval =
+          Number.isFinite(start) && Number.isFinite(end)
+            ? `${start.toFixed(1)}-${end.toFixed(1)} 秒`
+            : '整场';
+        return `${source}（${interval}）`;
+      })
+      .join('；');
+  }
+
   experienceLabel(experience: Record<string, unknown>): string {
     const type = String(experience.experience_type || '');
     const labels: Record<string, string> = {
@@ -256,6 +292,7 @@ export class StudioSettingsComponent implements OnInit {
       this.subtitleOutlineColorDraft = this.cssColour(style.outline_colour, '#000000');
     }
     if (response.recommendations) this.recommendations = response.recommendations;
+    if (response.evidence) this.evidence = response.evidence;
   }
 
   private splitList(value: string): string[] {

@@ -1048,6 +1048,7 @@ def slice_only(video_path, **_slice_options):
                     generated_slice,
                     result,
                     upload_status="not_queued",
+                    danmaku_text=danmaku_text,
                 )
                 segment["timings_ms"] = dict(candidate_timings)
                 if result.judge_status in {"judge_failed", "review"}:
@@ -1082,6 +1083,7 @@ def slice_only(video_path, **_slice_options):
                     result,
                     upload_status="not_queued",
                     candidate_path_override=output_path,
+                    danmaku_text=danmaku_text,
                 )
                 segment["artifacts"] = {
                     "final_output": {
@@ -1288,6 +1290,7 @@ def slice_only(video_path, **_slice_options):
                     generated_slice,
                     None,
                     upload_status="not_queued",
+                    danmaku_text=danmaku_text,
                 )
                 segment["timings_ms"] = dict(candidate_timings)
             segment["judge_status"] = "judge_failed"
@@ -1419,6 +1422,7 @@ def build_segment_record(
     analysis,
     upload_status="not_queued",
     candidate_path_override=None,
+    danmaku_text="",
 ):
     slice_path = str(candidate_path_override or generated_slice.path)
     candidate_start = float(getattr(generated_slice, "context_start", 0.0) or 0.0)
@@ -1512,6 +1516,10 @@ def build_segment_record(
         "quality_reason": quality_reason,
         "mimo_raw_response": raw_model_response,
         "rejection_reasons": rejection_reasons,
+        "transcript_summary": _bounded_summary(
+            getattr(analysis, "transcript", "") if analysis is not None else ""
+        ),
+        "danmaku_summary": _bounded_summary(danmaku_text),
         "preview_available": preview_available,
         "preview_reason": "" if preview_available else (
             "; ".join(rejection_reasons)
@@ -1523,6 +1531,10 @@ def build_segment_record(
         "upload_status": upload_status,
         "manual_override": manual_override,
     }
+
+
+def _bounded_summary(value, limit=1000):
+    return " ".join(str(value or "").split())[:limit]
 
 
 def segment_id_for(source_path, start, end):

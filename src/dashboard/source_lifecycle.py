@@ -41,6 +41,9 @@ MISSED_SEGMENT_REASONS = {
     "low_danmaku_signal": "弹幕信号弱",
     "other": "其他",
 }
+VALID_CONTENT_EXPERIENCE_TYPES = frozenset(
+    {"positive", "negative", "missed_segment_positive"}
+)
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _ROOM_ID_RE = re.compile(r"^\d+$")
 _SOURCE_RE = re.compile(
@@ -653,6 +656,11 @@ def record_review_experiences(
                 or failure.get("technical_details")
                 or note
             ).strip()
+        transcript_summary, danmaku_summary = _experience_evidence(
+            videos_root,
+            source_rel_path,
+            segment,
+        )
         records.append(
             append_experience(
                 videos_root,
@@ -674,15 +682,8 @@ def record_review_experiences(
                         for key in ("quality_score", "completeness_score", "confidence")
                         if segment.get(key) is not None
                     },
-                    "transcript_summary": _text_summary(
-                        segment.get("transcript") or segment.get("transcript_summary")
-                    ),
-                    "danmaku_summary": {
-                        "count": int(_number(segment.get("danmaku_count")) or 0),
-                        "text": _text_summary(
-                            segment.get("danmaku_text") or segment.get("danmaku_summary")
-                        ),
-                    },
+                    "transcript_summary": transcript_summary,
+                    "danmaku_summary": danmaku_summary,
                     "dedupe_key": f"{task_id}:{segment_id}:{experience_type}:{segment.get('revision', 0)}",
                 },
             )
@@ -729,6 +730,11 @@ def record_technical_experience(
     code = str(failure.get("code") or "technical_failure")
     segment_id = str(segment.get("segment_id") or "")
     dedupe = job_id or str(segment.get("revision") or "0")
+    transcript_summary, danmaku_summary = _experience_evidence(
+        videos_root,
+        source_rel_path,
+        segment,
+    )
     record = append_experience(
         videos_root,
         {
@@ -753,15 +759,8 @@ def record_technical_experience(
                 for key in ("quality_score", "completeness_score", "confidence")
                 if segment.get(key) is not None
             },
-            "transcript_summary": _text_summary(
-                segment.get("transcript") or segment.get("transcript_summary")
-            ),
-            "danmaku_summary": {
-                "count": int(_number(segment.get("danmaku_count")) or 0),
-                "text": _text_summary(
-                    segment.get("danmaku_text") or segment.get("danmaku_summary")
-                ),
-            },
+            "transcript_summary": transcript_summary,
+            "danmaku_summary": danmaku_summary,
             "dedupe_key": f"{task_id}:{segment_id}:technical_failure:{dedupe}",
         },
     )
@@ -786,6 +785,38 @@ def record_technical_experience(
     return record
 
 
+def streamer_evidence_summary(
+    videos_root: str | Path,
+    room_id: str,
+    *,
+    min_samples: int = 5,
+) -> dict[str, Any]:
+    """Return the read-only evidence gate shown before recommendations."""
+    room = _validate_room_id(room_id)
+    required = max(1, int(min_samples))
+    experiences = read_experiences(videos_root, room_id=room)
+    valid = [
+        item
+        for item in experiences
+        if item.get("experience_type") in VALID_CONTENT_EXPERIENCE_TYPES
+    ]
+    positive = [item for item in valid if item.get("conclusion") == "positive"]
+    negative = [item for item in valid if item.get("conclusion") == "negative"]
+    ready = len(valid) >= required and bool(positive) and bool(negative)
+    return {
+        "evidence_status": "ready" if ready else "insufficient_evidence",
+        "sample_size": len(valid),
+        "positive_count": len(positive),
+        "negative_count": len(negative),
+        "minimum_samples": required,
+        "message": (
+            "证据已达到主播建议生成条件"
+            if ready
+            else f"证据不足：至少需要 {required} 条有效人工样本，且同时包含正、负样本"
+        ),
+    }
+
+
 def generate_streamer_recommendation(
     videos_root: str | Path,
     room_id: str,
@@ -797,11 +828,7 @@ def generate_streamer_recommendation(
     valid = [
         item
         for item in experiences
-        if item.get("experience_type") in {
-            "positive",
-            "negative",
-            "missed_segment_positive",
-        }
+        if item.get("experience_type") in VALID_CONTENT_EXPERIENCE_TYPES
     ]
     positive = [
         item
@@ -813,14 +840,12 @@ def generate_streamer_recommendation(
         for item in valid
         if item.get("conclusion") == "negative"
     ]
-    base = {
-        "evidence_status": "insufficient_evidence",
-        "sample_size": len(valid),
-        "positive_count": len(positive),
-        "negative_count": len(negative),
-        "message": "证据不足：至少需要 5 条有效人工样本，且同时包含正、负样本",
-    }
-    if len(valid) < max(1, int(min_samples)) or not positive or not negative:
+    base = streamer_evidence_summary(
+        videos_root,
+        room,
+        min_samples=min_samples,
+    )
+    if base["evidence_status"] != "ready":
         return base
 
     reason_counts = Counter(
@@ -855,9 +880,17 @@ def generate_streamer_recommendation(
                 "basis": [
                     {
                         "experience_id": item.get("experience_id"),
+                        "task_id": item.get("task_id"),
+                        "source_rel_path": item.get("source_rel_path"),
+                        "segment_id": item.get("segment_id"),
+                        "start_seconds": item.get("start_seconds"),
+                        "end_seconds": item.get("end_seconds"),
                         "experience_type": item.get("experience_type"),
+                        "decision": item.get("conclusion"),
                         "conclusion": item.get("conclusion"),
                         "reason_type": item.get("reason_type"),
+                        "reason": item.get("reason"),
+                        "note": item.get("note"),
                     }
                     for item in valid
                 ],
@@ -1132,3 +1165,119 @@ def _number(value: Any) -> float | None:
 def _text_summary(value: Any, limit: int = 1000) -> str:
     text = " ".join(str(value or "").split())
     return text[:limit]
+
+
+def _experience_evidence(
+    videos_root: str | Path,
+    source_rel_path: str,
+    segment: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Capture bounded transcript and danmaku evidence before source cleanup."""
+    transcript = _text_summary(
+        _evidence_text(segment.get("transcript") or segment.get("transcript_summary"))
+    )
+    root = Path(videos_root).expanduser().resolve()
+    source = (root / str(source_rel_path)).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError:
+        source = None
+
+    if not transcript:
+        for path in _experience_analysis_paths(root, source, segment):
+            analysis = _read_json(path)
+            if not analysis:
+                continue
+            transcript = _text_summary(
+                analysis.get("transcript")
+                or " ".join(
+                    str(item.get("text") or "")
+                    for item in analysis.get("transcript_segments", [])
+                    if isinstance(item, dict)
+                )
+            )
+            if transcript:
+                break
+
+    danmaku_text = _text_summary(
+        _evidence_text(segment.get("danmaku_text") or segment.get("danmaku_summary"))
+    )
+    danmaku_count = int(_number(segment.get("danmaku_count")) or 0)
+    start = _number(segment.get("start_seconds"))
+    end = _number(segment.get("end_seconds"))
+    refresh_danmaku = bool(
+        not danmaku_text
+        or segment.get("manual_override")
+        or segment.get("manual_origin")
+    )
+    if (
+        refresh_danmaku
+        and source is not None
+        and start is not None
+        and end is not None
+        and end > start
+    ):
+        xml_path = source.with_suffix(".xml")
+        if xml_path.is_file():
+            from src.autoslice.danmaku_slice import extract_danmaku_text
+
+            extracted = extract_danmaku_text(
+                str(xml_path),
+                start,
+                end,
+                max_chars=1000,
+                with_timestamps=False,
+            )
+            if extracted:
+                danmaku_text = _text_summary(extracted)
+
+    return transcript, {"count": danmaku_count, "text": danmaku_text}
+
+
+def _experience_analysis_paths(
+    root: Path,
+    source: Path | None,
+    segment: dict[str, Any],
+) -> list[Path]:
+    candidates: list[Path] = []
+    raw_analysis = str(segment.get("analysis_path") or "").strip()
+    if raw_analysis:
+        path = Path(raw_analysis).expanduser()
+        candidates.append(path if path.is_absolute() else root / path)
+    artifacts = segment.get("artifacts")
+    if isinstance(artifacts, dict):
+        analysis_item = artifacts.get("analysis_sidecar")
+        if isinstance(analysis_item, dict) and analysis_item.get("rel_path"):
+            candidates.append(root / str(analysis_item["rel_path"]))
+    candidate_rel = str(segment.get("candidate_rel_path") or "").strip()
+    if candidate_rel:
+        candidates.append((root / candidate_rel).with_name(
+            f"{Path(candidate_rel).stem}_analysis.json"
+        ))
+    if source is not None:
+        candidate_path = str(segment.get("candidate_path") or "").strip()
+        if candidate_path:
+            candidates.append(Path(candidate_path).expanduser().with_name(
+                f"{Path(candidate_path).stem}_analysis.json"
+            ))
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(resolved)
+    return paths
+
+
+def _evidence_text(value: Any) -> Any:
+    if isinstance(value, dict):
+        return value.get("text") or value.get("summary") or ""
+    return value

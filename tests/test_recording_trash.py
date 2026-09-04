@@ -16,6 +16,8 @@ def _recording(videos: Path):
     source = room / "22384516_20260602-12-56-49.mp4"
     source.write_bytes(b"source")
     source.with_suffix(".flv").write_bytes(b"flv")
+    source.with_suffix(".flv.meta").write_text("meta", encoding="utf-8")
+    source.with_suffix(".flv.meta.json").write_text("{}", encoding="utf-8")
     source.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
     source.with_suffix(".ass").write_text("ass", encoding="utf-8")
     source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
@@ -41,6 +43,8 @@ def test_trash_plan_protects_final_output_and_upload_metadata(tmp_path, monkeypa
     source = _recording(videos)
     final = source.with_name("20s_final.mp4")
     final.write_bytes(b"final")
+    previous_final = source.with_name("15s_previous_final.mp4")
+    previous_final.write_bytes(b"previous final")
     upload_metadata = final.with_suffix(".upload.json")
     upload_metadata.write_text("{}", encoding="utf-8")
     intermediate = source.with_name("10s_source_context.mp4")
@@ -63,6 +67,9 @@ def test_trash_plan_protects_final_output_and_upload_metadata(tmp_path, monkeypa
                         "rel_path": final.relative_to(videos).as_posix(),
                     }
                 },
+                "final_output_history": [
+                    previous_final.relative_to(videos).as_posix(),
+                ],
             }
         ],
     }
@@ -74,8 +81,31 @@ def test_trash_plan_protects_final_output_and_upload_metadata(tmp_path, monkeypa
             "candidate_path": str(intermediate),
             "candidate_start_seconds": 10,
             "candidate_end_seconds": 20,
-        }
+        },
+        {
+            "candidate_path": str(previous_final),
+        },
     ]
+    legacy_final = source.with_name("25s_legacy_final.mp4")
+    legacy_final.write_bytes(b"legacy final")
+    stored_history["output_slices"] = [
+        legacy_final.relative_to(videos).as_posix(),
+    ]
+    other_source = source.with_name("22384516_20260603-12-56-49.mp4")
+    other_source.write_bytes(b"other")
+    other_candidate = source.with_name("10s_22384516_20260603-12-56-49.mp4")
+    other_candidate.write_bytes(b"other candidate")
+    stored_history["temporary_files"] = [
+        upload_metadata.relative_to(videos).as_posix(),
+        other_source.relative_to(videos).as_posix(),
+        other_candidate.relative_to(videos).as_posix(),
+        ".bilive-state/streamers/22384516.json",
+    ]
+    source_lifecycle.patch_streamer_profile(
+        videos,
+        "22384516",
+        {"display_name": "主播 A"},
+    )
     history_path.write_text(
         json.dumps(stored_history, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -96,11 +126,19 @@ def test_trash_plan_protects_final_output_and_upload_metadata(tmp_path, monkeypa
 
     paths = set(plan["files"])
     assert "22384516/20s_final.mp4" not in paths
+    assert "22384516/15s_previous_final.mp4" not in paths
+    assert "22384516/25s_legacy_final.mp4" not in paths
     assert "22384516/20s_final.upload.json" not in paths
     assert "22384516/10s_source_context.mp4" in paths
     assert "22384516/10s_source_context_analysis.json" in paths
     assert "22384516/22384516_20260602-12-56-49.mp4" in paths
+    assert "22384516/22384516_20260602-12-56-49.flv" in paths
+    assert "22384516/22384516_20260602-12-56-49.flv.meta" in paths
+    assert "22384516/22384516_20260602-12-56-49.flv.meta.json" in paths
     assert "22384516/22384516_20260602-12-56-49.mp4.task.json" in paths
+    assert "22384516/22384516_20260603-12-56-49.mp4" not in paths
+    assert "22384516/10s_22384516_20260603-12-56-49.mp4" not in paths
+    assert ".bilive-state/streamers/22384516.json" not in paths
 
 
 def test_trash_recording_uses_injected_reversible_mover_and_is_idempotent(tmp_path):

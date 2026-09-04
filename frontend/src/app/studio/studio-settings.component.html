@@ -53,6 +53,13 @@
     </div>
 
     <nz-alert *ngIf="profileError" nzType="error" nzShowIcon [nzMessage]="profileError"></nz-alert>
+    <nz-alert
+      *ngIf="evidence.evidence_status === 'insufficient_evidence'"
+      nzType="info"
+      nzShowIcon
+      nzMessage="主播建议暂不生成"
+      [nzDescription]="evidence.message || '证据不足'"
+    ></nz-alert>
     <nz-spin [nzSpinning]="profileLoading">
       <form nz-form nzLayout="vertical" class="profile-form" *ngIf="profileRoomId">
         <div class="profile-field-grid">
@@ -91,7 +98,8 @@
       <div class="recommendation-item" *ngFor="let recommendation of recommendations">
         <div class="recommendation-heading"><strong>{{ recommendation.status === 'applied' ? '已应用建议' : '待批准建议' }}</strong><nz-tag [nzColor]="recommendation.status === 'applied' ? 'success' : 'warning'">{{ recommendation.sample_size || 0 }} 条样本</nz-tag></div>
         <p>{{ recommendation.changes?.['approved_guidance'] || recommendation.message || '暂无文字建议' }}</p>
-        <small>依据：{{ recommendationBasis(recommendation) || '关联人工样本' }}；正样本 {{ recommendation.positive_count || 0 }}，负样本 {{ recommendation.negative_count || 0 }}</small>
+        <small>受影响规则：{{ recommendationRules(recommendation) }}；依据：{{ recommendationBasis(recommendation) || '关联人工样本' }}；正样本 {{ recommendation.positive_count || 0 }}，负样本 {{ recommendation.negative_count || 0 }}</small>
+        <small>关联样本：{{ recommendationSamples(recommendation) || '暂无样本定位信息' }}</small>
         <div class="review-actions" *ngIf="recommendation.status !== 'applied'"><button nz-button nzSize="small" (click)="applyRecommendation(recommendation)" [disabled]="profileBusy">应用建议</button></div>
       </div>
     </div>

@@ -113,4 +113,5 @@ async def test_streamer_profile_api_is_room_scoped(tmp_path, dashboard_client):
     assert updated.status_code == 200
     assert profile.json()["profile"]["display_name"] == "主播 A"
     assert profile.json()["profile"]["default_tags"] == ["A风格"]
+    assert profile.json()["evidence"]["evidence_status"] == "insufficient_evidence"
     assert other.json()["profile"]["default_tags"] == []

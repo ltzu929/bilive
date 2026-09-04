@@ -14,6 +14,7 @@ from src.dashboard.source_lifecycle import (
     read_streamer_profile,
     read_streamer_recommendations,
     read_experiences,
+    streamer_evidence_summary,
 )
 
 
@@ -41,6 +42,10 @@ async def get_streamer_profile(
                 ctx.store.videos_root,
                 room_id,
             ),
+            "evidence": streamer_evidence_summary(
+                ctx.store.videos_root,
+                room_id,
+            ),
         }
     )
 
@@ -59,6 +64,10 @@ async def update_streamer_profile(
                 payload,
             ),
             "recommendations": read_streamer_recommendations(
+                ctx.store.videos_root,
+                room_id,
+            ),
+            "evidence": streamer_evidence_summary(
                 ctx.store.videos_root,
                 room_id,
             ),

@@ -111,3 +111,6 @@ def test_retention_keeps_reason_when_active_recording_action_blocks_recycle(tmp_
             "job_id": find_active_recording_job(videos, task["task_id"])["job_id"],
         }
     ]
+    state = read_recording_state(videos, task["task_id"])
+    assert state["trash_status"] == "blocked"
+    assert state["trash_block_reason"] == "trash_action_active"

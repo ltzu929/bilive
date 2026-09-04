@@ -11,6 +11,7 @@ import ctypes
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import re
 import time
 from typing import Any, Callable
 
@@ -30,8 +31,19 @@ from src.server.action_jobs import find_active_segment_job, find_active_recordin
 
 _ACTIVE_UPLOAD_STATUSES = {"uploading", "publishing"}
 _MARKER_SUFFIXES = (".mp4.pending", ".mp4.processing", ".mp4.failed", ".mp4.done")
-_SOURCE_SIDECAR_SUFFIXES = (".xml", ".json", ".ass")
+_SOURCE_SIDECAR_SUFFIXES = (
+    ".xml",
+    ".flv.meta",
+    ".flv.meta.json",
+    ".json",
+    ".ass",
+)
 _CANDIDATE_SIDECAR_SUFFIXES = ("_analysis.json", "_asr.srt", ".features.json")
+_SOURCE_RECORDING_RE = re.compile(
+    r"(?P<room>\d+)_(?P<stamp>\d{8}-\d{2}-\d{2}-\d{2})"
+    r"(?:_\(\d+\))?",
+    re.IGNORECASE,
+)
 
 
 def build_trash_plan(
@@ -291,6 +303,10 @@ def _resolve_package_files(
                 "任务历史包含 Videos 目录外文件",
                 blockers=["path_outside_videos"],
             )
+        if _is_protected_package_path(root, resolved) or _is_other_recording(
+            source, resolved
+        ):
+            return
         if final:
             final_paths.add(resolved)
             files.discard(resolved)
@@ -329,8 +345,11 @@ def _resolve_package_files(
 
     for raw in history.get("output_slices") or []:
         path = _history_path(root, raw, None)
-        if path is not None and not _path_is_final_from_history(root, path, history):
-            add(path)
+        if path is not None:
+            # ``output_slices`` is the legacy history field for successfully
+            # rendered user-facing clips. Treat it as a final boundary even
+            # when the newer ``artifacts.final_output`` record is absent.
+            add(path, final=True)
 
     # MiMo candidate records retain the generated context-window path even
     # when no publishable clip was returned.  Those files are intermediate
@@ -393,17 +412,43 @@ def _path_is_final_from_history(
     path: Path,
     history: dict[str, Any],
 ) -> bool:
+    for raw in history.get("output_slices") or []:
+        output = _history_path(root, raw, None)
+        if output is not None and path == output:
+            return True
     for raw in history.get("segments") or []:
         if not isinstance(raw, dict):
             continue
         artifacts = raw.get("artifacts")
-        if not isinstance(artifacts, dict):
-            continue
-        item = artifacts.get("final_output")
-        if isinstance(item, dict) and str(item.get("rel_path") or ""):
-            if path == (root / str(item["rel_path"])).resolve():
+        if isinstance(artifacts, dict):
+            item = artifacts.get("final_output")
+            if isinstance(item, dict) and str(item.get("rel_path") or ""):
+                if path == (root / str(item["rel_path"])).resolve():
+                    return True
+        for raw_path in raw.get("final_output_history") or []:
+            output = _history_path(root, raw_path, None)
+            if output is not None and path == output:
                 return True
     return False
+
+
+def _is_protected_package_path(root: Path, path: Path) -> bool:
+    """Keep lifecycle/action state and per-clip upload metadata out of trash."""
+    relative = path.relative_to(root)
+    if relative.parts and relative.parts[0] in {".bilive-state", ".bilive-jobs"}:
+        return True
+    return path.name.lower().endswith(".upload.json")
+
+
+def _recording_identities(path: Path) -> set[str]:
+    return {
+        match.group(0).lower()
+        for match in _SOURCE_RECORDING_RE.finditer(path.name)
+    }
+
+
+def _is_other_recording(source: Path, path: Path) -> bool:
+    return bool(_recording_identities(path) - _recording_identities(source))
 
 
 def _segment_paths(root: Path, segment: dict[str, Any]) -> list[Path]:

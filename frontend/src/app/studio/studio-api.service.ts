@@ -128,9 +128,19 @@ export interface StudioStreamerRecommendation {
   message?: string;
 }
 
+export interface StudioStreamerEvidenceSummary {
+  evidence_status?: string;
+  sample_size?: number;
+  positive_count?: number;
+  negative_count?: number;
+  minimum_samples?: number;
+  message?: string;
+}
+
 export interface StudioStreamerProfileResponse {
   profile?: StudioStreamerProfile;
   recommendations?: StudioStreamerRecommendation[];
+  evidence?: StudioStreamerEvidenceSummary;
 }
 
 @Injectable({ providedIn: 'root' })
