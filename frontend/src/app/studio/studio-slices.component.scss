@@ -401,6 +401,8 @@ h1 {
   fill: rgba(24, 144, 255, 0.14);
   stroke: #1890ff;
   stroke-width: 0.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .segment-overlay-keep {

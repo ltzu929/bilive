@@ -243,10 +243,25 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     const top = points.map((point) => {
       const x = this.densityX(Number(point.start_seconds || 0));
       const y = 38 - Number(point.normalized || 0) * 34;
-      return `${x.toFixed(2)} ${y.toFixed(2)}`;
+      return { x, y };
     });
     const lastX = this.densityX(Number(points[points.length - 1].end_seconds || this.densityMaxEnd));
-    return `M 0 38 L ${top.join(' L ')} L ${lastX.toFixed(2)} 38 Z`;
+    const first = top[0];
+    if (top.length === 1) {
+      return `M 0 38 L ${first.x.toFixed(2)} ${first.y.toFixed(2)} L ${lastX.toFixed(2)} 38 Z`;
+    }
+
+    let curve = `L ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
+    for (let index = 1; index < top.length - 1; index += 1) {
+      const point = top[index];
+      const next = top[index + 1];
+      const midpointX = (point.x + next.x) / 2;
+      const midpointY = (point.y + next.y) / 2;
+      curve += ` Q ${point.x.toFixed(2)} ${point.y.toFixed(2)} ${midpointX.toFixed(2)} ${midpointY.toFixed(2)}`;
+    }
+    const last = top[top.length - 1];
+    curve += ` Q ${last.x.toFixed(2)} ${last.y.toFixed(2)} ${last.x.toFixed(2)} ${last.y.toFixed(2)}`;
+    return `M 0 38 ${curve} L ${lastX.toFixed(2)} 38 Z`;
   }
 
   get selectedRangeLabel(): string {

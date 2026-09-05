@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 
-WHEEL = Path("wheel/blrec-2.0.0b4+bilive.8-py3-none-any.whl")
+WHEEL = Path("wheel/blrec-2.0.0b4+bilive.9-py3-none-any.whl")
 
 
 def test_dashboard_service_is_api_only():
