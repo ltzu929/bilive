@@ -75,3 +75,13 @@ def default_source_recording_size_threshold(monkeypatch):
     monkeypatch.setattr(slice_control, "MIN_SOURCE_RECORDING_SIZE_MB", 0, raising=False)
     monkeypatch.setattr(task_state, "MIN_SOURCE_RECORDING_SIZE_MB", 0, raising=False)
     monkeypatch.setattr(watcher, "MIN_SOURCE_RECORDING_SIZE_MB", 0, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolated_default_database(tmp_path, monkeypatch):
+    """Never let a test's implicit queue operation reach the production database."""
+    from src.db import conn
+    path = tmp_path / "default-test.db"
+    monkeypatch.setenv("BILIVE_DB_PATH", str(path))
+    monkeypatch.setattr(conn, "DATA_BASE_FILE", str(path))
+    conn.migrate_upload_queue(path)

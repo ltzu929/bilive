@@ -1399,3 +1399,28 @@ async def test_slice_options_accept_chat_context_120(videos_root, dashboard_clie
             json={"slice_options": {"burst_context": 120}},
         )
     assert response.status_code != 400
+
+
+def test_upload_dashboard_reads_windows_sidecar_from_local_media_root(tmp_path, monkeypatch):
+    from src.dashboard._helpers import read_upload_dashboard
+    from src.db import conn
+    from src.upload.slice_metadata import write_slice_upload_metadata
+    root = tmp_path / "Videos"
+    video = root / "123" / "final.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"fixture")
+    write_slice_upload_metadata(video, title="fixture", source_task_id="source", segment_id="segment")
+    monkeypatch.setenv("BILIVE_VIDEOS_DIR", str(root))
+    conn.insert_upload_queue(r"D:\alldata\pi\bilive\Videos\123\final.mp4")
+    item = read_upload_dashboard()["items"][0]
+    assert item["source_task_id"] == "source"
+    assert item["segment_id"] == "segment"
+
+
+def test_upload_metadata_inaccessible_path_does_not_break_list(monkeypatch):
+    from pathlib import Path
+    from src.upload.slice_metadata import read_slice_upload_metadata
+    def invalid(_path):
+        raise OSError(22, "Invalid argument")
+    monkeypatch.setattr(Path, "is_file", invalid)
+    assert read_slice_upload_metadata("invalid.mp4") is None

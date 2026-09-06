@@ -106,10 +106,9 @@ def write_slice_upload_metadata(
 
 def read_slice_upload_metadata(video_path: str | Path) -> dict[str, Any] | None:
     path = slice_upload_metadata_path(video_path)
-    if not path.is_file():
-        return None
-
     try:
+        if not path.is_file():
+            return None
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None

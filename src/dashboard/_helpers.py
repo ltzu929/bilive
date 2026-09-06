@@ -154,8 +154,9 @@ def read_upload_dashboard(*, status: str = "", limit: int = 50, offset: int = 0)
     items = []
     from src.upload.slice_metadata import read_slice_upload_metadata
     for row in rows:
-        metadata = read_slice_upload_metadata(str(row.get("video_path") or "")) or {}
         name, room = upload_path_parts(str(row.get("video_path") or ""))
+        # Queue paths belong to Windows; read sidecars in this node's media root.
+        metadata = (read_slice_upload_metadata(default_videos_root() / room / name) or {}) if room.isdigit() else {}
         items.append({
             "id": row.get("id"),
             "source_task_id": str(metadata.get("source_task_id") or ""),
