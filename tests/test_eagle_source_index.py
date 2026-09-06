@@ -85,7 +85,7 @@ async def test_eagle_source_recordings_api_returns_lightweight_index(
             "review_count": 2,
             "keep_count": 1,
             "thumbnail_url": "",
-            "workspace_url": "/tasks?source_task_id=MjIzODQ1MTYvMjIzODQ1MTZfMjAyNjA2MDItMTItNTYtNDkubXA0",
+            "workspace_url": "/studio/slices?source_task_id=MjIzODQ1MTYvMjIzODQ1MTZfMjAyNjA2MDItMTItNTYtNDkubXA0",
         }
     ]
 

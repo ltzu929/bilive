@@ -12,17 +12,18 @@
         </nz-form-item>
         <nz-form-item>
           <nz-form-label>紧凑队列</nz-form-label>
-          <nz-form-control><nz-switch [(ngModel)]="compactQueue" name="compactQueue"></nz-switch></nz-form-control>
+          <nz-form-control><nz-switch aria-label="紧凑队列" [(ngModel)]="compactQueue" name="compactQueue"></nz-switch></nz-form-control>
         </nz-form-item>
         <nz-form-item>
           <nz-form-label>默认收起侧栏</nz-form-label>
-          <nz-form-control><nz-switch [(ngModel)]="collapseSidebar" name="collapseSidebar"></nz-switch></nz-form-control>
+          <nz-form-control><nz-switch aria-label="默认收起侧栏" [(ngModel)]="collapseSidebar" name="collapseSidebar"></nz-switch></nz-form-control>
         </nz-form-item>
         <button nz-button nzType="primary" type="button" (click)="save()">保存浏览器偏好</button>
       </form>
     </nz-card>
 
     <nz-card nzTitle="处理链路（只读）">
+      <nz-alert *ngIf="settingsError" nzType="error" [nzMessage]="settingsError"></nz-alert><button nz-button *ngIf="settingsError" (click)="loadSettings()">重新读取</button>
       <nz-spin [nzSpinning]="loading">
         <nz-descriptions nzSize="small" [nzColumn]="1">
           <nz-descriptions-item nzTitle="MiMo 模型">{{ dashboardSettings.mimo?.model || '-' }}</nz-descriptions-item>

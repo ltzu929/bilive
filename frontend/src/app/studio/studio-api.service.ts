@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, forkJoin } from 'rxjs';
 
 export interface StudioRoom {
   room_id: string;
@@ -17,6 +17,8 @@ export interface StudioSourceRecording {
   source_media_id?: string;
   status?: string;
   message?: string;
+  processing_eligible?: boolean;
+  skip_reason?: string;
   source_size_mb?: number;
   segment_count?: number;
   summary_counts?: Record<string, number>;
@@ -44,6 +46,9 @@ export interface StudioSegment {
   start_seconds?: number;
   end_seconds?: number;
   candidate_media_id?: string;
+  final_media_id?: string;
+  revision?: number;
+  duplicate_of?: string;
   quality_score?: number;
   completeness_score?: number;
   confidence?: number;
@@ -80,9 +85,13 @@ export interface StudioSourceDetail extends StudioSourceRecording {
 }
 
 export interface UploadDashboard {
+  filtered_total?: number;
   queue_counts?: Record<string, number>;
   items?: Array<{
     id?: number;
+    source_task_id?: string;
+    segment_id?: string;
+    retry_allowed?: boolean;
     name?: string;
     room?: string;
     status?: string;
@@ -167,6 +176,10 @@ export class StudioApiService {
     return this.http.get<StudioSourceDetail>(
       this.path(`/source-recordings/${encodeURIComponent(taskId)}`)
     );
+  }
+
+  getReviewStatus(): Observable<{progress: Record<string, any>; diagnostics: Record<string, any>; worker: Record<string, any>}> {
+    return forkJoin({progress: this.getSliceProgress(), diagnostics: this.getSliceDiagnostics(), worker: this.getWorkerStatus()});
   }
 
   getSliceProgress(): Observable<Record<string, unknown>> {

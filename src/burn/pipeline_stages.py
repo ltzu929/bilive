@@ -100,14 +100,18 @@ def metadata_stage(
     *,
     room_id: str,
     writer: Callable[..., Any],
+    source_task_id: str = "",
+    segment_id: str = "",
 ) -> dict[str, Any]:
     try:
+        links = {"source_task_id": source_task_id, "segment_id": segment_id} if source_task_id else {}
         writer(
             video_path,
             title=analysis.title,
             desc=analysis.description,
             tag=analysis.tags,
             source=f"https://live.bilibili.com/{room_id}",
+            **links,
         )
     except Exception as exc:
         return {"ok": False, "error": f"Upload metadata failed: {exc}"}

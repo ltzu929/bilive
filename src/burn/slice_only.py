@@ -1179,6 +1179,8 @@ def slice_only(video_path, **_slice_options):
                     result,
                     room_id=room_id,
                     writer=write_slice_upload_metadata,
+                    source_task_id=base64.urlsafe_b64encode(str(segment["source_rel_path"]).encode()).decode().rstrip("="),
+                    segment_id=str(segment["segment_id"]),
                 )
                 segment["timings_ms"]["metadata"] = round(
                     (time.perf_counter() - metadata_started) * 1000,

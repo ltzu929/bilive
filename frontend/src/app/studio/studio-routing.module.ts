@@ -9,6 +9,7 @@ const routes: Routes = [
   {
     path: 'slices',
     component: StudioSlicesComponent,
+    canDeactivate: [(component: StudioSlicesComponent) => component.canLeave()],
   },
   {
     path: 'uploads',

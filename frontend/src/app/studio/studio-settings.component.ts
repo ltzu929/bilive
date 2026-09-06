@@ -13,6 +13,7 @@ import {
   StudioStreamerProfileResponse,
   StudioStreamerRecommendation,
 } from './studio-api.service';
+import { subtitlePosition } from './subtitle-position';
 import { StudioPreferencesService } from './studio-preferences.service';
 
 @Component({
@@ -22,6 +23,7 @@ import { StudioPreferencesService } from './studio-preferences.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class StudioSettingsComponent implements OnInit {
+  settingsError = '';
   loading = true;
   dashboardSettings: Record<string, any> = {};
   refreshInterval = 30;
@@ -65,16 +67,11 @@ export class StudioSettingsComponent implements OnInit {
   }
 
   get subtitlePreviewJustifyContent(): string {
-    const column = this.subtitlePreviewAlignment % 3;
-    if (column === 1) return 'flex-start';
-    if (column === 0) return 'flex-end';
-    return 'center';
+    return subtitlePosition(this.subtitlePreviewAlignment).horizontal;
   }
 
   get subtitlePreviewAlignItems(): string {
-    if (this.subtitlePreviewAlignment >= 7) return 'flex-start';
-    if (this.subtitlePreviewAlignment >= 4) return 'center';
-    return 'flex-end';
+    return subtitlePosition(this.subtitlePreviewAlignment).vertical;
   }
 
   get subtitlePreviewMarginTop(): number {
@@ -106,17 +103,7 @@ export class StudioSettingsComponent implements OnInit {
     this.refreshInterval = stored.refreshInterval;
     this.compactQueue = stored.compactQueue;
     this.collapseSidebar = stored.collapseSidebar;
-    this.api.getDashboardSettings().subscribe({
-      next: (settings) => {
-        this.dashboardSettings = settings || {};
-        this.loading = false;
-        this.changeDetector.markForCheck();
-      },
-      error: () => {
-        this.loading = false;
-        this.changeDetector.markForCheck();
-      },
-    });
+    this.loadSettings();
     this.api.getRooms().subscribe({
       next: (rooms) => {
         this.rooms = rooms || [];
@@ -126,6 +113,23 @@ export class StudioSettingsComponent implements OnInit {
       },
       error: (error) => {
         this.profileError = this.describeError(error);
+        this.changeDetector.markForCheck();
+      },
+    });
+  }
+
+  loadSettings(): void {
+    this.loading = true;
+    this.api.getDashboardSettings().subscribe({
+      next: (settings) => {
+        this.settingsError = '';
+        this.dashboardSettings = settings || {};
+        this.loading = false;
+        this.changeDetector.markForCheck();
+      },
+      error: (error) => {
+        this.settingsError = this.describeError(error);
+        this.loading = false;
         this.changeDetector.markForCheck();
       },
     });

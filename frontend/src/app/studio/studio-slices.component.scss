@@ -723,3 +723,6 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+.subtitle-preview-frame { display: flex; height: 140px; overflow: hidden; background: #111; margin-top: 12px; }
+.subtitle-preview-frame .subtitle-preview { margin-top: 0; min-height: 0; }

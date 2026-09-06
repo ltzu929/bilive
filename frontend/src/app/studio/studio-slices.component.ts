@@ -17,7 +17,6 @@ import {
   switchMap,
   take,
   takeUntil,
-  timeout,
 } from 'rxjs/operators';
 
 import {
@@ -29,8 +28,12 @@ import {
 } from './studio-api.service';
 import { StudioPreferencesService } from './studio-preferences.service';
 
+import { subtitlePosition } from './subtitle-position';
+
 type InspectorTab = 'content' | 'subtitles' | 'technical';
 type RangeBoundary = 'start' | 'end';
+const draftFields = ['titleDraft', 'descriptionDraft', 'tagsDraft', 'qualityReasonDraft', 'startDraft', 'endDraft', 'subtitleFontName', 'subtitleFontSize', 'subtitleMarginV', 'subtitleAlignment', 'subtitleOutline', 'subtitleTextColor', 'subtitleOutlineColor'] as const;
+
 type QueueOrder = 'newest' | 'oldest' | 'grouped';
 
 @Component({
@@ -78,8 +81,18 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   diagnostics: Record<string, any> = {};
   worker: Record<string, any> = {};
   dropPending = false;
-  private pendingDropSegmentId = '';
-  private dropTimer?: ReturnType<typeof setTimeout>;
+  mediaMode: 'source' | 'final' = 'source';
+  draftConflict = false;
+  observationError = '';
+  private draftKey = '';
+  private draftRevision = 0;
+  private baseline = '';
+  private readonly storageKey = 'bilive.review.session';
+  private drafts: Record<string, {revision: number; values: Record<string, any>}> = {};
+  pendingDrops: Record<string, {taskId: string; reason: string; revision: number; due: number; uncertain?: boolean}> = {};
+  private dropTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private observedJobs = new Set<string>();
+  busySegments = new Set<string>();
   private requestId = 0;
   private detailRequestId = 0;
   private dragBoundary: RangeBoundary | null = null;
@@ -95,6 +108,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.restoreSession();
+    const query = new URL(window.location.href).searchParams;
+    this.selectedTaskId = query.get('source_task_id') || '';
+    this.selectedSegmentId = query.get('segment_id') || '';
     this.breakpointObserver
       .observe('(max-width: 1320px) and (min-width: 901px)')
       .pipe(take(1), takeUntil(this.destroyed))
@@ -108,13 +125,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         switchMap((preferences) =>
           timer(0, preferences.refreshInterval * 1000).pipe(
             switchMap(() =>
-              forkJoin({
-                progress: this.api.getSliceProgress().pipe(catchError(() => of({}))),
-                diagnostics: this.api
-                  .getSliceDiagnostics()
-                  .pipe(catchError(() => of({}))),
-                worker: this.api.getWorkerStatus().pipe(catchError(() => of({}))),
-              })
+              this.api.getReviewStatus().pipe(catchError(() => {
+                this.observationError = '状态读取失败，显示上次结果';
+                return of({progress: this.progress, diagnostics: this.diagnostics, worker: this.worker});
+              }))
             )
           )
         ),
@@ -129,7 +143,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    if (this.dropTimer) clearTimeout(this.dropTimer);
+    this.saveDraft();
+    for (const timer of this.dropTimers.values()) clearTimeout(timer);
     this.destroyed.next();
     this.destroyed.complete();
   }
@@ -155,10 +170,12 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   get filteredRecordings(): StudioSourceRecording[] {
     const items = this.recordings.filter((item) => this.recordingMatchesStatus(item));
-    if (this.queueOrder === 'grouped') return items;
     const direction = this.queueOrder === 'oldest' ? 1 : -1;
     return [...items].sort(
-      (left, right) => direction * (this.recordedAt(right) - this.recordedAt(left))
+      (left, right) => {
+        const a = this.recordedAt(left), b = this.recordedAt(right);
+        return (!a && b ? 1 : a && !b ? -1 : direction * (a - b)) || left.task_id.localeCompare(right.task_id);
+      }
     );
   }
 
@@ -175,9 +192,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       .sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
       .map(([room, items]) => ({
         room,
-        items: [...items].sort(
-          (left, right) => this.recordedAt(right) - this.recordedAt(left)
-        ),
+        items,
       }));
   }
 
@@ -198,9 +213,72 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   get selectedMediaUrl(): string {
-    return this.detail?.source_media_id
-      ? this.api.getMediaUrl(this.detail.source_media_id)
-      : '';
+    const id = this.mediaMode === 'final' ? this.selectedSegment?.final_media_id : this.detail?.source_media_id;
+    return id ? this.api.getMediaUrl(id) : '';
+  }
+
+  setMediaMode(mode: 'source' | 'final'): void {
+    this.mediaMode = mode;
+    this.positionVideo();
+  }
+
+  positionVideo(): void {
+    this.seekTo(this.mediaMode === 'final' ? 0 : Number(this.selectedSegment?.start_seconds || 0));
+  }
+
+  get hasDraft(): boolean {
+    return !!this.draftKey && JSON.stringify(this.draftValues()) !== this.baseline;
+  }
+
+  private draftValues(): Record<string, any> {
+    const values: Record<string, any> = {};
+    for (const field of draftFields) values[field] = this[field];
+    return values;
+  }
+
+  saveDraft(): void {
+    if (!this.draftKey) return;
+    if (this.hasDraft) this.drafts[this.draftKey] = {revision: this.draftRevision, values: this.draftValues()};
+    else delete this.drafts[this.draftKey];
+    this.persistSession();
+  }
+
+  private persistSession(): void {
+    try { sessionStorage.setItem(this.storageKey, JSON.stringify({drafts: this.drafts, drops: this.pendingDrops})); }
+    catch { this.error = '浏览器无法保存会话草稿，请勿刷新或关闭页面'; }
+  }
+
+  private restoreSession(): void {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(this.storageKey) || '{}');
+      this.drafts = saved.drafts || {};
+      this.pendingDrops = saved.drops || {};
+      for (const [id, drop] of Object.entries(this.pendingDrops)) {
+        if (!drop.uncertain && drop.due > Date.now()) this.armDrop(id);
+      }
+      this.dropPending = Object.keys(this.pendingDrops).length > 0;
+    } catch { this.error = '会话草稿无法读取，请核对后重新编辑'; }
+  }
+
+  discardDraft(): void {
+    delete this.drafts[this.draftKey];
+    this.draftKey = '';
+    if (this.selectedSegment) this.selectSegment(this.selectedSegment);
+    this.persistSession();
+  }
+
+  @HostListener('window:beforeunload', ['$event'])
+  beforeUnload(event: BeforeUnloadEvent): void {
+    this.saveDraft();
+    if (Object.keys(this.drafts).length || Object.keys(this.pendingDrops).length) {
+      event.preventDefault(); event.returnValue = '';
+    }
+  }
+
+  canLeave(): boolean {
+    this.saveDraft();
+    return !(Object.keys(this.drafts).length || Object.keys(this.pendingDrops).length)
+      || window.confirm('仍有未提交草稿或丢弃操作，确定离开？同一标签页返回可继续审核。');
   }
 
   get diagnosticItems(): Array<{ status?: string; title?: string; message?: string }> {
@@ -225,6 +303,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       const counts = item.summary_counts || {};
       return total + Number(counts.keep || 0) + Number(counts.manual_keep || 0);
     }, 0);
+  }
+
+  get awaitingPublishCount(): number {
+    return this.recordings.reduce((total, item) => total + Number(item.summary_counts?.['awaiting_publish'] || 0), 0);
+  }
+
+  get repairCount(): number {
+    return this.recordings.reduce((total, item) => total + Number(item.summary_counts?.['needs_repair'] || 0), 0);
   }
 
   get densityMaxEnd(): number {
@@ -274,8 +360,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   get selectedActionBusy(): boolean {
-    return this.actionBusy || ['pending', 'processing', 'running'].includes(this.selectedActionStatus);
+    return this.selectedSegment?.publish_approval === 'approved' || ['queued', 'uploading', 'uploaded', 'publishing', 'published', 'failed'].includes(this.selectedSegment?.upload_status || '') || this.detailLoading || this.draftConflict || this.busySegments.has(this.selectedSegmentId) || ['pending', 'processing', 'running', 'blocked'].includes(this.selectedActionStatus);
   }
+
+  get subtitlePosition() { return subtitlePosition(this.subtitleAlignment); }
 
   get subtitlePreviewShadow(): string {
     const width = Math.max(0, Number(this.subtitleOutline || 0));
@@ -283,6 +371,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   refresh(): void {
+    this.saveDraft();
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = '';
@@ -302,10 +391,12 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         this.recordings = recordings;
         this.loading = false;
         if (!this.recordings.some((item) => item.task_id === this.selectedTaskId)) {
-          this.selectedTaskId = this.filteredRecordings[0]?.task_id || '';
+          if (this.selectedTaskId) this.error = '选中的源录播已不在清单中，请重新选择';
+          this.selectedTaskId = this.selectedTaskId ? '' : this.filteredRecordings[0]?.task_id || '';
           this.selectedSegmentId = '';
         }
         if (this.selectedTaskId) this.loadDetail(this.selectedTaskId);
+        else this.clearDetail();
         this.changeDetector.markForCheck();
       });
   }
@@ -318,15 +409,18 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   onStatusChanged(): void {
+    this.saveDraft();
     if (!this.filteredRecordings.some((item) => item.task_id === this.selectedTaskId)) {
       this.selectedTaskId = this.filteredRecordings[0]?.task_id || '';
       this.selectedSegmentId = '';
       if (this.selectedTaskId) this.loadDetail(this.selectedTaskId);
+      else this.clearDetail();
     }
     this.changeDetector.markForCheck();
   }
 
   selectRecording(taskId: string): void {
+    this.saveDraft();
     if (taskId === this.selectedTaskId && this.detail) return;
     this.selectedTaskId = taskId;
     this.selectedSegmentId = '';
@@ -334,6 +428,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   selectSegment(segment: StudioSegment): void {
+    this.saveDraft();
     this.selectedSegmentId = segment.segment_id;
     this.titleDraft = segment.title || '';
     this.descriptionDraft = segment.description || '';
@@ -350,6 +445,24 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.subtitleOutline = Number(style.outline || 2);
     this.subtitleTextColor = this.cssColour(style.primary_colour, '#ffffff');
     this.subtitleOutlineColor = this.cssColour(style.outline_colour, '#000000');
+    this.draftKey = `${this.selectedTaskId}:${segment.segment_id}`;
+    this.draftRevision = Number(segment.revision || 0);
+    this.baseline = JSON.stringify(this.draftValues());
+    const saved = this.drafts[this.draftKey];
+    this.draftConflict = !!saved && saved.revision !== this.draftRevision;
+    if (saved) {
+      for (const field of draftFields) if (field in saved.values) (this as any)[field] = saved.values[field];
+      this.draftRevision = saved.revision;
+    }
+    this.mediaMode = segment.final_media_id && segment.upload_status === 'awaiting_publish' ? 'final' : 'source';
+    const url = new URL(window.location.href);
+    url.searchParams.set('source_task_id', this.selectedTaskId);
+    url.searchParams.set('segment_id', segment.segment_id);
+    window.history.replaceState(window.history.state, '', url);
+    this.positionVideo();
+    if (segment.action_state?.job_id && ['pending', 'processing'].includes(segment.action_state.status || '')) {
+      this.waitForJob(segment.action_state.job_id, segment.segment_id);
+    }
     this.changeDetector.markForCheck();
   }
 
@@ -456,10 +569,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   approvePublish(): void {
-    if (this.selectedSegment) this.runSegmentAction('approve-publish');
+    if (this.selectedSegment?.final_media_id && !this.hasDraft) this.runSegmentAction('approve-publish', {
+      expected_revision: this.selectedSegment.revision,
+      final_media_id: this.selectedSegment.final_media_id,
+    });
   }
 
   markMissedBoundary(boundary: RangeBoundary): void {
+    if (this.mediaMode !== 'source') return;
     const seconds = this.currentVideoTime();
     if (boundary === 'start') {
       this.missedStartDraft = seconds;
@@ -530,6 +647,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   private finalizePayload(): Record<string, unknown> {
     return {
+      expected_revision: this.draftRevision,
       title: this.titleDraft,
       description: this.descriptionDraft,
       tags: this.tagsDraft.split(',').map((tag) => tag.trim()).filter(Boolean),
@@ -551,24 +669,41 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   scheduleDrop(): void {
     const segment = this.selectedSegment;
     if (!segment || this.selectedActionBusy) return;
-    if (this.dropTimer) clearTimeout(this.dropTimer);
-    this.pendingDropSegmentId = segment.segment_id;
+    const id = segment.segment_id;
+    this.pendingDrops[id] = {taskId: this.selectedTaskId, reason: this.qualityReasonDraft,
+      revision: Number(segment.revision || 0), due: Date.now() + 5000};
     this.dropPending = true;
-    this.dropTimer = setTimeout(() => {
-      this.dropPending = false;
-      this.runSegmentAction('drop', { reason: this.qualityReasonDraft }, this.pendingDropSegmentId);
-      this.pendingDropSegmentId = '';
-    }, 5000);
+    this.persistSession();
+    this.armDrop(id);
   }
 
-  undoDrop(): void {
-    if (!this.dropPending) return;
-    if (this.dropTimer) clearTimeout(this.dropTimer);
-    this.dropPending = false;
-    this.pendingDropSegmentId = '';
-    this.message.info('已撤销丢弃操作');
+  private armDrop(id: string): void {
+    if (this.dropTimers.has(id)) clearTimeout(this.dropTimers.get(id));
+    this.dropTimers.set(id, setTimeout(() => this.submitDrop(id), Math.max(0, this.pendingDrops[id].due - Date.now())));
+  }
+
+  submitDrop(id: string): void {
+    const drop = this.pendingDrops[id];
+    if (!drop || drop.uncertain) return;
+    drop.uncertain = true;
+    this.persistSession();
+    this.api.segmentAction(id, 'drop', {reason: drop.reason, expected_revision: drop.revision})
+      .pipe(takeUntil(this.destroyed)).subscribe({
+        next: () => { this.undoDrop(id); this.refresh(); },
+        error: () => { this.error = `片段 ${id} 丢弃结果未确认，请刷新核对后撤销本地记录或重新操作`; this.changeDetector.markForCheck(); }
+      });
+  }
+
+  undoDrop(id = this.selectedSegmentId): void {
+    clearTimeout(this.dropTimers.get(id));
+    this.dropTimers.delete(id);
+    delete this.pendingDrops[id];
+    this.dropPending = Object.keys(this.pendingDrops).length > 0;
+    this.persistSession();
     this.changeDetector.markForCheck();
   }
+
+  get pendingDropIds(): string[] { return Object.keys(this.pendingDrops); }
 
   retrySegment(): void {
     if (this.selectedSegment) this.runSegmentAction('retry-judge');
@@ -703,7 +838,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   @HostListener('document:keydown', ['$event'])
   onShortcut(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+    if (target?.closest('input, textarea, select, button, [contenteditable], [role=combobox]')) return;
+    if (event.code === 'Space') {
+      if (target?.tagName === 'VIDEO') return;
+      const video = document.querySelector<HTMLVideoElement>('.source-video');
+      if (video) { event.preventDefault(); if (video.paused) void video.play(); else video.pause(); }
+      return;
+    }
+    if (this.mediaMode === 'final' && ['i', 'o'].includes(event.key.toLowerCase())) return;
     if (event.key.toLowerCase() === 'j') {
       event.preventDefault();
       this.nextSegment(1);
@@ -734,6 +876,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       const counts = item.summary_counts || {};
       return Number(counts.keep || 0) + Number(counts.manual_keep || 0) > 0;
     }
+    if (this.statusFilter === 'awaiting_publish') return Number(item.summary_counts?.['awaiting_publish'] || 0) > 0;
+    if (this.statusFilter === 'needs_repair') return Number(item.summary_counts?.['needs_repair'] || 0) > 0;
     if (this.statusFilter === 'todo') return ['ready', 'review'].includes(status);
     if (this.statusFilter === 'processing') return ['processing', 'running', 'pending'].includes(status);
     return status === this.statusFilter;
@@ -756,7 +900,18 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     ).getTime();
   }
 
+  private clearDetail(): void {
+    ++this.detailRequestId;
+    this.detail = null;
+    this.selectedSegmentId = '';
+    this.draftKey = '';
+    this.detailLoading = false;
+  }
+
   private loadDetail(taskId: string): void {
+    this.saveDraft();
+    this.draftKey = '';
+    this.detail = null;
     const requestId = ++this.detailRequestId;
     this.detailLoading = true;
     this.api.getSourceRecording(taskId).pipe(takeUntil(this.destroyed)).subscribe({
@@ -764,6 +919,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         if (requestId !== this.detailRequestId || taskId !== this.selectedTaskId) return;
         this.detail = detail;
         this.detailLoading = false;
+        if (detail.trash_job_id && ['pending', 'processing'].includes(detail.trash_status || '')) this.waitForRecordingJob(detail.trash_job_id);
         const selected = detail.segments?.find((segment) => segment.segment_id === this.selectedSegmentId);
         const first = selected || detail.segments?.[0];
         if (first) this.selectSegment(first);
@@ -772,7 +928,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       },
       error: (error) => {
         if (requestId !== this.detailRequestId) return;
-        this.detailLoading = false;
+        this.clearDetail();
         this.error = this.describeError(error);
         this.changeDetector.markForCheck();
       },
@@ -784,10 +940,28 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     payload?: Record<string, unknown>,
     segmentId = this.selectedSegment?.segment_id
   ): void {
-    if (!segmentId || this.actionBusy) return;
-    this.actionBusy = true;
+    if (!segmentId || this.busySegments.has(segmentId) || this.selectedActionBusy) return;
+    const taskId = this.selectedTaskId;
+    const key = `${taskId}:${segmentId}`;
+    const submitted = this.draftValues();
+    this.busySegments.add(segmentId);
     this.api.segmentAction(segmentId, action, payload).pipe(takeUntil(this.destroyed)).subscribe({
       next: (result) => {
+        if (key === this.draftKey) {
+          const accepted = action === 'finalize' ? [...draftFields]
+            : action === 'range' ? ['startDraft', 'endDraft']
+            : action === 'subtitle-style' ? draftFields.filter(field => field.startsWith('subtitle')) : [];
+          const baseline = JSON.parse(this.baseline || '{}');
+          for (const field of accepted) baseline[field] = submitted[field];
+          this.baseline = JSON.stringify(baseline);
+          const updated = (result.segment || result) as Record<string, any>;
+          if (typeof updated.revision === 'number') this.draftRevision = updated.revision;
+          this.saveDraft();
+        } else if (action === 'finalize') {
+          const draft = this.drafts[key];
+          if (draft && JSON.stringify(draft.values) === JSON.stringify(submitted)) delete this.drafts[key];
+        }
+        this.persistSession();
         const jobId = this.jobIdFromResult(result);
         if (jobId) {
           this.message.info('已提交 Windows worker 处理');
@@ -797,7 +971,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         this.finishAction(segmentId, action, '操作已保存');
       },
       error: (error) => {
-        this.actionBusy = false;
+        this.busySegments.delete(segmentId);
         this.message.error(this.describeError(error));
         this.changeDetector.markForCheck();
       },
@@ -805,43 +979,42 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   private waitForJob(jobId: string, segmentId: string): void {
-    timer(0, 1500)
-      .pipe(
-        switchMap(() => this.api.getJob(jobId)),
-        filter((job) => ['done', 'failed', 'error'].includes(String(job.status || job.state || ''))),
-        take(1),
-        timeout(90000),
-        takeUntil(this.destroyed),
-        catchError((error) => {
-          this.actionBusy = false;
-          this.message.error(this.describeError(error));
-          this.changeDetector.markForCheck();
-          return of(null);
-        })
-      )
-      .subscribe((job) => {
-        if (!job) return;
-        const status = String(job.status || job.state || '');
-        this.finishAction(segmentId, 'job', status === 'done' ? '处理完成' : '处理失败');
-      });
+    if (this.observedJobs.has(jobId)) return;
+    this.observedJobs.add(jobId);
+    this.busySegments.add(segmentId);
+    this.actionBusy = false;
+    timer(0, 1500).pipe(
+      switchMap(() => this.api.getJob(jobId).pipe(catchError(() => {
+        this.observationError = '后台任务仍需跟踪，暂时无法获取状态';
+        this.changeDetector.markForCheck();
+        return of(null);
+      }))),
+      filter((job): job is Record<string, unknown> => !!job && ['done', 'failed', 'blocked'].includes(String(job.status || ''))),
+      take(1), takeUntil(this.destroyed)
+    ).subscribe(job => {
+      this.observedJobs.delete(jobId);
+      this.observationError = '';
+      this.finishAction(segmentId, 'job', job.status === 'done' ? '处理完成' : '处理失败');
+    });
   }
 
   private finishAction(segmentId: string, action: string, message: string): void {
-    this.actionBusy = false;
+    this.busySegments.delete(segmentId);
     if (message === '处理失败') this.message.error(message);
     else this.message.success(message);
-    if (segmentId === this.selectedSegmentId && this.selectedTaskId) this.loadDetail(this.selectedTaskId);
-    this.rangeDirty = action === 'range' ? false : this.rangeDirty;
+    this.refresh();
     this.changeDetector.markForCheck();
   }
 
   private waitForRecordingJob(jobId: string): void {
+    if (this.observedJobs.has(jobId)) return;
+    this.observedJobs.add(jobId);
+    this.actionBusy = false;
     timer(0, 1500)
       .pipe(
-        switchMap(() => this.api.getJob(jobId)),
-        filter((job) => ['done', 'failed', 'error'].includes(String(job.status || job.state || ''))),
+        switchMap(() => this.api.getJob(jobId).pipe(catchError(() => of<Record<string, unknown>>({status: "unknown"})))),
+        filter((job) => ['done', 'failed', 'error', 'blocked'].includes(String(job.status || job.state || ''))),
         take(1),
-        timeout(90000),
         takeUntil(this.destroyed),
         catchError((error) => {
           this.actionBusy = false;
@@ -853,6 +1026,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       .subscribe((job) => {
         if (!job) return;
         const status = String(job.status || job.state || '');
+        this.observedJobs.delete(jobId);
         this.finishRecordingAction(status === 'done' ? '整场复核完成，源录播已回收' : '源录播回收失败');
       });
   }
@@ -879,8 +1053,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   private runRequest<T>(request: Observable<T>, successMessage: string, after?: () => void): void {
     this.actionBusy = true;
     request.pipe(takeUntil(this.destroyed)).subscribe({
-      next: () => {
+      next: (result) => {
         this.actionBusy = false;
+        const state = result as Record<string, any>;
+        if (['unavailable', 'empty', 'dependency_unavailable', 'failed', 'missing_videos_root'].includes(state?.status)) {
+          this.message.warning(String(state.message || state.status));
+          after?.();
+          return;
+        }
         this.message.success(successMessage);
         after?.();
         this.changeDetector.markForCheck();

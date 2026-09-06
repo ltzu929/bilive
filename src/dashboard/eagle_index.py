@@ -60,7 +60,7 @@ def _eagle_item(recording: dict[str, Any]) -> dict[str, Any]:
         "review_count": int(counts.get("review") or 0) + int(counts.get("judge_failed") or 0),
         "keep_count": int(counts.get("keep") or 0) + int(counts.get("manual_keep") or 0),
         "thumbnail_url": _cached_cover(room_id),
-        "workspace_url": f"/tasks?source_task_id={task_id}",
+        "workspace_url": f"/studio/slices?source_task_id={task_id}",
     }
 
 

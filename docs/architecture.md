@@ -85,11 +85,11 @@ Dashboard 提供桌面优先的三栏审核工作台，但不改变运行边界�
 - `POST /api/segments/{segment_id}/finalize` 是工作台的人工成片闸门：先保存轻量编辑，再创建 `finalize_segment` 动作任务。ASR、字幕、元数据和入队都在 Windows 完成。
 - `manual-keep` 作为兼容接口保留；新工作台使用异步 finalize。drop/range 仍是轻量状态修改，retry/render/reburn 创建 Windows 动作任务。
 - `/api/upload-dashboard` 和 `/api/slice-performance` 都是只读状态接口；数据库或表不存在时返回 unavailable，不创建 SQLite 文件、不迁移 schema。
-- `/uploads` 保留完整投稿队列；任务详情、发布表现和技术诊断在 `/tasks` 中作为次级折叠面板呈现。
+- `/studio/uploads` 提供有界分页、状态筛选和源片段回链；`/studio/slices` 是人工审核入口。
 
 ## Eagle 原始录播镜像
 
-Pi dashboard 额外提供 `/api/eagle/source-recordings`，这是给 Eagle 插件使用的只读索引接口。它复用 `/api/source-recordings` 的任务库存和片段统计，只把字段整理为 Eagle 同步需要的 `source_task_id`、`source_rel_path`、房间、录制时间、状态、审核计数和 `/tasks?source_task_id=...` 跳转链接。
+Pi dashboard 额外提供 `/api/eagle/source-recordings`，这是给 Eagle 插件使用的只读索引接口。它复用 `/api/source-recordings` 的任务库存和片段统计，只把字段整理为 Eagle 同步需要的 `source_task_id`、`source_rel_path`、房间、录制时间、状态、审核计数和 `/studio/slices?source_task_id=...` 跳转链接。
 
 Eagle 插件不扫描 `Videos/`，不写 bilive 任务文件，也不复制原始视频。同步时它查询当前 bilive 清单和 Eagle 中已有的 `bilive`、`原始录播` 卡片，按 `source_task_id` 做增量镜像：新增当前录播、更新仍存在录播、把已不存在源文件的旧卡片移入 Eagle 废纸篓。
 
