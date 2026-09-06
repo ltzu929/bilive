@@ -62,3 +62,15 @@ W01 与 P03 按计划只测量，不调整 ASR 预转录策略、720p/码率、M
 ## 阶段提交组织
 
 提交按“正确性与恢复 → 审核工作台闭环 → 请求与查询优化”组织。成片身份、版本和动作状态等后端契约作为第一阶段前置基础；前端局部修复与审核闭环在第二阶段一起交付；上传回链/重试与分页在第三阶段一起交付。第二阶段使用现有三个状态接口，第三阶段再切换共享快照，避免中间提交请求尚不存在的接口。三个提交是连续实现步骤，不代表三个阶段均已完成生产验收。
+
+## 树莓派部署记录（2026-09-06）
+
+用户随后授权部署，以上“未部署”描述为此前交付时的状态。本次已安装 `2.0.0b4+bilive.10`，同步 SMB 恢复脚本与 unit，重启 recorder、Dashboard 并恢复 recovery timer；三者均 active。Pi 上实际执行 systemd unit 校验及 pip check 通过。安装包中 1615 个前端文件与部署文件逐字节一致。
+
+部署后 `/studio/slices`、`/studio-api/source-recordings`、`/studio-api/review-status`、`/studio-api/upload-dashboard`，以及 Dashboard 的源列表、审核状态接口均返回 200；源列表读取到 194 项。三个房间仍为停用录制、waiting，Windows Worker 计划任务为 Ready，2235 未启动。本次未执行真实成片、ASR 或上传验收。
+
+现场修复了上传列表读取 Windows 绝对路径侧车文件导致 Pi 返回 500 的问题：按房间与文件名映射到当前节点媒体根目录，并将文件存在性检查纳入已有 OSError 处理。发现生产队列中已有测试临时路径后，为默认测试数据库增加独立临时库隔离；现有生产队列保留，未自动清理或启动上传。
+
+验证：针对性测试 69 项通过；全量测试首次为 617 passed、1 failed、1 deselected，唯一失败为安装测试仍断言旧 wheel 版本；更新该断言后对应文件 13 项全部通过。compileall、本地及 Pi pip check、安装 shell 的 bash -n、PowerShell 语法解析通过。未再次重复运行完整测试。
+
+旧包、恢复脚本和 unit 的回滚备份保存在 Pi `/tmp/bilive-before-audit-GbLCg4Rw`；pip 更新遗留的 31 个临时旧包目录移入同目录保留。该临时备份可能随系统清理失效。现场日志与前后快照保存在本地忽略目录 `artifacts/audit-implementation/`。
