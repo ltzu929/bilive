@@ -47,7 +47,7 @@ def _create_processed_source(videos, *, failed_preview=False):
                 "start_seconds": 10.0,
                 "end_seconds": 70.0,
                 "judge_status": "keep",
-                "upload_status": "queued",
+                "upload_status": "not_queued",
             },
             {
                 "segment_id": "seg_failed",
@@ -244,7 +244,7 @@ def test_manual_keep_segment_is_idempotent_before_finalization(tmp_path, monkeyp
     monkeypatch.setattr(
         source_workbench,
         "get_upload_item",
-        lambda path: {"video_path": str(path), "status": "queued"},
+        lambda path: None,
     )
 
     updated = source_workbench.manual_keep_segment(videos, "seg_keep")
@@ -277,16 +277,17 @@ def test_finalize_segment_separates_artifacts_and_queues_after_success(
         assert (start, duration) == (42.0, 18.0)
         output.write_bytes(b"raw")
 
-    def fake_asr(path, duration):
+    def fake_asr(path, duration, *, start_seconds=0):
         calls["asr"] += 1
-        assert Path(path).read_bytes() == b"raw"
+        assert Path(path).read_bytes() == b"video"
+        assert start_seconds == 42.0
         assert duration == 18.0
         return {
             "transcript": "完整的一句话",
             "segments": [{"start": 0.0, "end": 2.0, "text": "完整的一句话"}],
         }
 
-    def fake_burn(raw_path, analysis, output_path, style):
+    def fake_burn(raw_path, analysis, output_path, style, *, source_range=None):
         assert raw_path != output_path
         assert analysis.transcript == "完整的一句话"
         output_path.write_bytes(b"final")
@@ -441,14 +442,14 @@ def test_finalize_retry_reuses_raw_and_asr_after_subtitle_failure(
         calls["slice"] += 1
         output.write_bytes(b"raw")
 
-    def fake_asr(_path, _duration):
+    def fake_asr(_path, _duration, *, start_seconds=0):
         calls["asr"] += 1
         return {
             "transcript": "可复用字幕",
             "segments": [{"start": 0.0, "end": 1.0, "text": "可复用字幕"}],
         }
 
-    def fake_burn(_raw, _analysis, output, _style):
+    def fake_burn(_raw, _analysis, output, _style, *, source_range=None):
         calls["burn"] += 1
         if calls["burn"] == 1:
             return SimpleNamespace(burned=False, message="ffmpeg interrupted")
@@ -505,7 +506,7 @@ def test_finalize_honors_skip_upload_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(
         source_workbench,
         "transcribe_segment_audio",
-        lambda _path, _duration: {
+        lambda _path, _duration, **_kwargs: {
             "transcript": "本地验证",
             "segments": [{"start": 0.0, "end": 1.0, "text": "本地验证"}],
         },
@@ -513,7 +514,7 @@ def test_finalize_honors_skip_upload_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(
         source_workbench,
         "burn_final_subtitles",
-        lambda _raw, _analysis, output, _style: (
+        lambda _raw, _analysis, output, _style, **_kwargs: (
             output.write_bytes(b"final")
             and SimpleNamespace(burned=True, message="ok")
         ),
@@ -568,13 +569,13 @@ def test_finalize_metadata_failure_is_fail_closed_and_recoverable(
     monkeypatch.setattr(
         source_workbench,
         "transcribe_segment_audio",
-        lambda _path, _duration: {
+        lambda _path, _duration, **_kwargs: {
             "transcript": "待发布字幕",
             "segments": [{"start": 0.0, "end": 1.0, "text": "待发布字幕"}],
         },
     )
 
-    def fake_burn(_raw, _analysis, output, _style):
+    def fake_burn(_raw, _analysis, output, _style, *, source_range=None):
         output.write_bytes(b"final")
         return SimpleNamespace(burned=True, message="ok")
 
@@ -655,39 +656,14 @@ def test_concurrent_segment_mutations_preserve_both_updates(tmp_path):
     assert by_id["seg_failed"]["revision"] == 1
 
 
-def test_drop_cancels_queued_upload_but_rejects_active_upload(tmp_path, monkeypatch):
+@pytest.mark.parametrize("status", ["queued", "uploading", "uploaded", "publishing", "published", "failed"])
+def test_drop_rejects_activated_upload(tmp_path, monkeypatch, status):
     videos = tmp_path / "Videos"
     source = _create_processed_source(videos)
-    deleted = []
-    metadata_deleted = []
-    statuses = iter(({"status": "queued"}, {"status": "uploading"}))
-    monkeypatch.setattr(
-        source_workbench,
-        "get_upload_item",
-        lambda _path: next(statuses),
-    )
-    monkeypatch.setattr(
-        source_workbench,
-        "delete_upload_queue",
-        lambda path: deleted.append(path) or True,
-    )
-    monkeypatch.setattr(
-        source_workbench,
-        "delete_slice_upload_metadata",
-        lambda path: metadata_deleted.append(str(path)),
-    )
-
-    dropped = source_workbench.drop_segment(videos, "seg_keep", {"reason": "bad"})
-
-    assert dropped["judge_status"] == "drop"
-    assert deleted == [
-        str(videos / "22384516" / "10s_22384516_20260602-12-56-49.mp4")
-    ]
-    assert metadata_deleted == deleted
-
+    monkeypatch.setattr(source_workbench, "get_upload_item", lambda _: {"status": status})
     before = source.with_suffix(".mp4.task.json").read_bytes()
     with pytest.raises(source_workbench.SegmentStateConflict):
-        source_workbench.drop_segment(videos, "seg_failed", {"reason": "late"})
+        source_workbench.drop_segment(videos, "seg_keep", {"reason": "bad"})
     assert source.with_suffix(".mp4.task.json").read_bytes() == before
 
 
@@ -822,23 +798,11 @@ def test_retry_judge_uses_approved_streamer_guidance(tmp_path, monkeypatch):
     assert updated["judge_status"] == "keep"
 
 
-def test_render_segment_regenerates_candidate_path(tmp_path, monkeypatch):
-    videos = tmp_path / "Videos"
-    _create_processed_source(videos)
+def test_render_uses_canonical_finalize(tmp_path, monkeypatch):
     calls = []
-
-    def fake_slice(video_path, output_path, start_time, duration):
-        calls.append((video_path, output_path, start_time, duration))
-        output_path.write_bytes(b"rendered")
-
-    monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
-
-    updated = source_workbench.render_segment(videos, "seg_failed")
-
-    assert calls
-    assert calls[0][2:] == (40.0, 60.0)
-    assert updated["candidate_rel_path"] == "22384516/40s_22384516_20260602-12-56-49.mp4"
-    assert (videos / updated["candidate_rel_path"]).read_bytes() == b"rendered"
+    monkeypatch.setattr(source_workbench, "finalize_segment", lambda root, segment: calls.append((root, segment)) or {})
+    source_workbench.render_segment(tmp_path, "seg")
+    assert calls == [(tmp_path, "seg")]
 
 
 def test_update_segment_subtitle_style_persists_mapping(tmp_path):
@@ -862,62 +826,8 @@ def test_update_segment_subtitle_style_persists_mapping(tmp_path):
     assert history["segments"][0]["subtitle_style"]["font_size"] == 26
 
 
-def test_reburn_segment_subtitles_reslices_and_burns(tmp_path, monkeypatch):
-    from src.burn import subtitle_burn
-    from src.burn.subtitle_burn import BurnSubtitleResult
-
-    videos = tmp_path / "Videos"
-    room = videos / "22384516"
-    room.mkdir(parents=True)
-    source = room / "22384516_20260602-12-56-49.mp4"
-    source.write_bytes(b"video")
-    _write_danmaku_xml(source.with_suffix(".xml"))
-    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
-    candidate = room / "10s_22384516_20260602-12-56-49.mp4"
-    candidate.write_bytes(b"subtitled")
-    AnalysisResult(
-        title="Clip",
-        description="Desc",
-        transcript="hello",
-    ).to_json_file(str(room / "10s_22384516_20260602-12-56-49_analysis.json"))
-    write_task_history(
-        source,
-        status="done",
-        videos_root=videos,
-        segments=[
-            {
-                "segment_id": "seg_keep",
-                "source_rel_path": "22384516/22384516_20260602-12-56-49.mp4",
-                "candidate_path": str(candidate),
-                "candidate_rel_path": "22384516/10s_22384516_20260602-12-56-49.mp4",
-                "candidate_start_seconds": 10.0,
-                "candidate_end_seconds": 70.0,
-                "start_seconds": 13.0,
-                "end_seconds": 19.5,
-                "judge_status": "keep",
-                "upload_status": "queued",
-                "subtitle_style": {"font_size": 28, "margin_v": 90},
-            },
-        ],
-    )
-    calls = {}
-
-    def fake_slice(video_path, output_path, start_time, duration):
-        calls["slice"] = (start_time, duration)
-        output_path.write_bytes(b"raw")
-
-    def fake_burn(video_path, analysis, *, output_path=None, style=None):
-        calls["style"] = style
-        calls["burn_output"] = output_path
-        Path(output_path).write_bytes(b"reburned")
-        return BurnSubtitleResult(burned=True, video_path=str(output_path), message="ok")
-
-    monkeypatch.setattr(source_workbench, "slice_video", fake_slice)
-    monkeypatch.setattr(subtitle_burn, "burn_subtitles_from_analysis", fake_burn)
-
-    updated = source_workbench.reburn_segment_subtitles(videos, "seg_keep")
-
-    assert calls["slice"] == (10.0, 60.0)
-    assert calls["style"].font_size == 28
-    assert calls["style"].margin_v == 90
-    assert updated["subtitle_style"]["font_size"] == 28
+def test_reburn_uses_canonical_finalize(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(source_workbench, "finalize_segment", lambda root, segment: calls.append((root, segment)) or {"upload_status": "awaiting_publish"})
+    assert source_workbench.reburn_segment_subtitles(tmp_path, "seg") == {"upload_status": "awaiting_publish"}
+    assert calls == [(tmp_path, "seg")]

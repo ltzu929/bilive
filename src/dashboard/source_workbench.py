@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+from functools import wraps
+from src.server.action_jobs import action_submission_lock
 from collections import Counter
 import hashlib
 import json
@@ -37,6 +39,7 @@ from src.dashboard.source_lifecycle import (
 )
 from src.db.conn import (
     activate_staged_upload,
+    withdraw_staged_upload,
     delete_upload_queue,
     get_upload_item,
     insert_upload_queue,
@@ -50,6 +53,14 @@ from src.upload.slice_metadata import (
 
 
 SUMMARY_KEYS = ("keep", "manual_keep", "judge_failed", "drop", "review")
+
+
+def _review_write(function):
+    @wraps(function)
+    def locked(videos_root, *args, **kwargs):
+        with action_submission_lock(videos_root):
+            return function(videos_root, *args, **kwargs)
+    return locked
 
 
 def _task_id_for_source(source: Path, root: Path) -> str:
@@ -83,18 +94,11 @@ def analyze_candidate(*args, **kwargs):
 
 
 def slice_video(*args, **kwargs):
-    from src.autoslice.auto_slice_video.autosv.slice.slice_video import (
-        slice_video as render,
-    )
-
-    result = render(*args, **kwargs)
-    output_path = args[1] if len(args) > 1 else kwargs.get("output_path")
-    if output_path and not _nonempty_file(Path(output_path)):
-        raise RuntimeError("ffmpeg slicer produced no media")
-    return result
+    from src.autoslice.danmaku_slice import slice_video as render
+    return render(*args, **kwargs)
 
 
-def transcribe_segment_audio(video_path: str, duration_seconds: float) -> dict[str, Any]:
+def transcribe_segment_audio(video_path: str, duration_seconds: float, *, start_seconds: float = 0.0) -> dict[str, Any]:
     """Run the configured ASR for one already-trimmed raw artifact."""
     from src.autoslice.mllm_sdk.audio_analyzer import analyze_audio
     from src.config import (
@@ -108,7 +112,7 @@ def transcribe_segment_audio(video_path: str, duration_seconds: float) -> dict[s
         MULTI_MODAL_WHISPER_MODEL,
         whisper_device=WHISPER_DEVICE,
         whisper_compute_type=WHISPER_COMPUTE_TYPE,
-        start_seconds=0.0,
+        start_seconds=start_seconds,
         duration_seconds=duration_seconds,
     )
 
@@ -118,6 +122,7 @@ def burn_final_subtitles(
     analysis: AnalysisResult,
     output_path: Path,
     style,
+    *, source_range=None,
 ):
     from src.burn.subtitle_burn import burn_subtitles_from_analysis
 
@@ -126,6 +131,7 @@ def burn_final_subtitles(
         analysis,
         output_path=output_path,
         style=style,
+        source_range=source_range,
     )
 
 
@@ -245,6 +251,7 @@ def build_density_points(xml_path: str | Path, window_seconds: int = 10) -> list
     return points
 
 
+@_review_write
 def manual_keep_segment(
     videos_root: str | Path,
     segment_id: str,
@@ -254,6 +261,7 @@ def manual_keep_segment(
     data = payload or {}
 
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        _ensure_unpublished(root, segment)
         _apply_optional_metadata(segment, data)
         _apply_optional_range(segment, data)
         if not _preview_allowed(segment):
@@ -284,8 +292,29 @@ _PUBLISHING_UPLOAD_STATUSES = {
 }
 
 
+def _ensure_unpublished(root: Path, segment: dict[str, Any]) -> None:
+    """Protect both canonical and historical candidate-as-final records."""
+    if segment.get("publish_approval") == "approved":
+        raise SegmentStateConflict("成片已经允许发布；请创建新的人工候选")
+    status = str(segment.get("upload_status") or "not_queued")
+    if status in _PUBLISHING_UPLOAD_STATUSES or status == "failed":
+        raise SegmentStateConflict("成片已进入发布流程，不能覆盖")
+    paths = {_candidate_rel_path(root, segment)}
+    paths.add(str((segment.get("artifacts") or {}).get("final_output", {}).get("rel_path") or ""))
+    for rel in paths - {""}:
+        try:
+            item = get_upload_item(str(_artifact_path(root, rel)))
+        except Exception as exc:
+            if status not in {"", "not_queued", "skipped"}:
+                raise SegmentStateConflict("无法确认上传状态，已停止修改") from exc
+            continue
+        if item and (item.get("status") != "staged" or item.get("remote_filename")):
+            raise SegmentStateConflict("成片已进入发布流程，不能覆盖")
+
+
 def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
     """Clear an unapproved final when a review edit needs regeneration."""
+    _ensure_unpublished(root, segment)
     artifacts = segment.get("artifacts")
     if not isinstance(artifacts, dict):
         return False
@@ -318,7 +347,7 @@ def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
             raise SegmentStateConflict(
                 f"成片当前处于 {queue_status or '未知'} 状态，不能覆盖"
             )
-        if not delete_upload_queue(str(final_path)):
+        if not withdraw_staged_upload(str(final_path)):
             raise SegmentStateConflict("无法安全撤销成片的等待确认队列项")
         delete_slice_upload_metadata(final_path)
 
@@ -343,6 +372,7 @@ def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
     return True
 
 
+@_review_write
 def prepare_segment_finalize(
     videos_root: str | Path,
     segment_id: str,
@@ -352,6 +382,8 @@ def prepare_segment_finalize(
     data = validate_segment_finalize_payload(payload)
 
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        if "expected_revision" in data and data["expected_revision"] != int(segment.get("revision") or 0):
+            raise SegmentStateConflict("片段已改变，请先核对草稿与当前版本")
         _invalidate_final_output(root, segment)
         _apply_optional_metadata(segment, data)
         _apply_optional_range(segment, data)
@@ -603,7 +635,7 @@ def finalize_segment(
     if analysis is None:
         stage_started = time.perf_counter()
         try:
-            audio = transcribe_segment_audio(str(raw_path), duration)
+            audio = transcribe_segment_audio(str(source), duration, start_seconds=start)
             analysis = _analysis_from_audio(segment, audio, start=start, end=end)
         except Exception as exc:
             _fail_finalize(
@@ -652,10 +684,11 @@ def finalize_segment(
             )
             temporary_final.unlink(missing_ok=True)
             burn_result = burn_final_subtitles(
-                raw_path,
+                source,
                 analysis,
                 temporary_final,
                 style,
+                source_range=(start, end),
             )
             if not bool(getattr(burn_result, "burned", False)):
                 raise RuntimeError(
@@ -692,6 +725,8 @@ def finalize_segment(
             desc=str(segment.get("description") or ""),
             tag=_segment_tags(segment),
             source=f"https://live.bilibili.com/{source.parent.name}",
+            source_task_id=_task_id_for_source(source, root),
+            segment_id=segment_id,
         )
     except Exception as exc:
         _fail_finalize(
@@ -806,20 +841,28 @@ def finalize_segment(
     return completed
 
 
+@_review_write
 def approve_publish_segment(
     videos_root: str | Path,
     segment_id: str,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Activate one staged final artifact after an explicit human approval."""
     root, _source, segment = _read_segment(videos_root, segment_id)
     if str(segment.get("judge_status") or "") not in {"keep", "manual_keep"}:
         raise SegmentStateConflict("片段未通过内容复核，不能允许发布")
+    if (segment.get("action_state") or {}).get("status") in {"pending", "processing"}:
+        raise SegmentStateConflict("成片仍在后台处理，不能允许发布")
     artifacts = _normalize_artifacts(root, segment)
     final_item = artifacts.get("final_output") or {}
     final_rel = str(final_item.get("rel_path") or "")
-    if not final_rel or not bool(final_item.get("exists")):
+    if not segment.get("final_media_id") or not final_rel or not bool(final_item.get("exists")):
         raise SegmentStateConflict("最终成片不存在，请先生成最终成片")
     final_path = _artifact_path(root, final_rel)
+    if payload is not None:
+        if ((payload.get("expected_revision") != segment.get("revision") and segment.get("publish_approval") != "approved")
+                or payload.get("final_media_id") != _media_id(root, final_path)):
+            raise SegmentStateConflict("成片版本已改变，请重新预览后允许发布")
     try:
         queue_item = get_upload_item(str(final_path))
     except Exception as exc:
@@ -1101,6 +1144,7 @@ def prepare_source_review_completion(
     }
 
 
+@_review_write
 def drop_segment(
     videos_root: str | Path,
     segment_id: str,
@@ -1110,6 +1154,9 @@ def drop_segment(
     data = payload or {}
 
     def mutate(root: Path, _source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        if "expected_revision" in data and data["expected_revision"] != int(segment.get("revision") or 0):
+            raise SegmentStateConflict("片段已改变，未执行丢弃")
+        _ensure_unpublished(root, segment)
         candidate = (
             _segment_candidate_path(root, segment)
             if _candidate_rel_path(root, segment)
@@ -1138,7 +1185,7 @@ def drop_segment(
                     f"片段已处于 {upload_state} 状态，不能直接丢弃"
                 )
             if upload_state in {"staged", "queued", "failed"}:
-                if not delete_upload_queue(str(candidate)):
+                if not withdraw_staged_upload(str(candidate)):
                     raise SegmentStateConflict("无法安全撤销片段的上传队列项")
                 delete_slice_upload_metadata(candidate)
         previous_status = str(segment.get("judge_status") or "")
@@ -1155,6 +1202,7 @@ def drop_segment(
     return _mutate_segment(videos_root, segment_id, mutate)
 
 
+@_review_write
 def update_segment_range(
     videos_root: str | Path,
     segment_id: str,
@@ -1180,10 +1228,12 @@ def update_segment_range(
     return _mutate_segment(videos_root, segment_id, mutate)
 
 
+@_review_write
 def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
     """Run LLM judging again for a retained candidate clip."""
 
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        _ensure_unpublished(root, segment)
         candidate = _segment_candidate_path(root, segment)
         if not candidate.is_file():
             raise FileNotFoundError(f"Candidate not found: {candidate}")
@@ -1213,26 +1263,11 @@ def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, A
 
 
 def render_segment(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
-    """Regenerate the candidate clip from the segment's current source range."""
-
-    def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
-        start = _float(segment.get("start_seconds"))
-        end = _float(segment.get("end_seconds"))
-        if end <= start:
-            raise ValueError("end_seconds must be greater than start_seconds")
-        output = source.with_name(f"{format_seconds_for_filename(start)}s_{source.name}")
-        slice_video(source, output, start, end - start)
-        segment["candidate_path"] = str(output)
-        segment["candidate_rel_path"] = output.relative_to(root).as_posix()
-        segment["candidate_media_id"] = _media_id(root, output)
-        segment["preview_available"] = True
-        segment["preview_reason"] = ""
-        segment["manual_override"] = True
-        return segment
-
-    return _mutate_segment(videos_root, segment_id, mutate)
+    """Regenerate a final through the same artifact and human approval contract."""
+    return finalize_segment(videos_root, segment_id)
 
 
+@_review_write
 def update_segment_subtitle_style(
     videos_root: str | Path,
     segment_id: str,
@@ -1259,103 +1294,9 @@ def update_segment_subtitle_style(
     return _mutate_segment(videos_root, segment_id, mutate)
 
 
-def reburn_segment_subtitles(
-    videos_root: str | Path,
-    segment_id: str,
-) -> dict[str, Any]:
-    """Re-render burned subtitles for a candidate using its stored style.
-
-    ``render_segment`` only stream-copies the source range, so subtitles are
-    re-baked here by re-slicing the raw candidate window and running the
-    subtitle burner with the segment's persisted style (falling back to the
-    global default). Requires the ``_analysis.json`` sidecar written during
-    slicing for the transcript segments and MiMo trim.
-    """
-    from src.burn.subtitle_burn import SubtitleStyle, burn_subtitles_from_analysis
-    from src.config import default_subtitle_style
-
-    def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
-        candidate = _segment_candidate_path(root, segment)
-        if not candidate.is_file():
-            raise FileNotFoundError(f"Candidate not found: {candidate}")
-        artifacts = _normalize_artifacts(root, segment)
-        raw_item = artifacts.get("raw_candidate") or {}
-        analysis_item = artifacts.get("analysis_sidecar") or {}
-        raw_artifact = (
-            _artifact_path(root, str(raw_item.get("rel_path") or ""))
-            if raw_item.get("rel_path")
-            else None
-        )
-        analysis_artifact = (
-            _artifact_path(root, str(analysis_item.get("rel_path") or ""))
-            if analysis_item.get("rel_path")
-            else None
-        )
-        analysis = (
-            _load_analysis_path(analysis_artifact)
-            if analysis_artifact is not None and analysis_artifact.is_file()
-            else _load_segment_analysis(candidate)
-        )
-        if analysis is None:
-            raise FileNotFoundError(f"Analysis sidecar not found for: {candidate}")
-        stored_style = segment.get("subtitle_style")
-        style = (
-            SubtitleStyle.from_mapping(stored_style)
-            if stored_style
-            else default_subtitle_style()
-        )
-        generated_raw: Path | None = None
-        if raw_artifact is not None and _nonempty_file(raw_artifact):
-            raw_source = raw_artifact
-        else:
-            candidate_start = _float(segment.get("candidate_start_seconds"))
-            candidate_end = _float(segment.get("candidate_end_seconds"))
-            if candidate_end <= candidate_start:
-                raise ValueError("candidate range is invalid for subtitle reburn")
-            generated_raw = candidate.with_name(
-                f"{candidate.stem}.{os.getpid()}.{uuid.uuid4().hex}.reburn-src"
-                f"{candidate.suffix}"
-            )
-            slice_video(
-                source,
-                generated_raw,
-                candidate_start,
-                candidate_end - candidate_start,
-            )
-            if not _nonempty_file(generated_raw):
-                raise RuntimeError("subtitle reburn source renderer produced no media")
-            raw_source = generated_raw
-
-        temporary_output = candidate.with_name(
-            f"{candidate.stem}.{os.getpid()}.{uuid.uuid4().hex}.reburn"
-            f"{candidate.suffix}"
-        )
-        try:
-            try:
-                result = burn_subtitles_from_analysis(
-                    raw_source,
-                    analysis,
-                    output_path=temporary_output,
-                    style=style,
-                )
-            except Exception:
-                temporary_output.unlink(missing_ok=True)
-                raise
-        finally:
-            if generated_raw is not None:
-                generated_raw.unlink(missing_ok=True)
-        if not result.burned:
-            temporary_output.unlink(missing_ok=True)
-            raise RuntimeError(result.message or "subtitle reburn failed")
-        if not _nonempty_file(temporary_output):
-            temporary_output.unlink(missing_ok=True)
-            raise RuntimeError("subtitle reburn produced no media")
-        os.replace(temporary_output, candidate)
-        segment["subtitle_style"] = style.to_mapping()
-        segment["manual_override"] = True
-        return segment
-
-    return _mutate_segment(videos_root, segment_id, mutate)
+def reburn_segment_subtitles(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
+    """Regenerate an unapproved final through the canonical publish gate."""
+    return finalize_segment(videos_root, segment_id)
 
 
 def _artifact_plan(
@@ -1385,12 +1326,12 @@ def _artifact_plan(
         ).encode("utf-8")
     ).hexdigest()[:8]
     artifact_dir = source.parent / ".bilive-artifacts"
-    artifact_stem = f"{segment_key}-{range_key}"
+    artifact_stem = f"{segment_key}-{range_key}-source-time-v2"
     raw = artifact_dir / f"{artifact_stem}.raw.mp4"
     analysis = artifact_dir / f"{artifact_stem}.analysis.json"
     final = source.with_name(
         f"{format_seconds_for_filename(start)}s_{source.stem}"
-        f"_final_{segment_key}_{range_key}_{style_key}.mp4"
+        f"_final_{segment_key}_{range_key}_{style_key}_source-time-v2.mp4"
     )
     return {
         "raw_candidate": {"rel_path": raw.relative_to(root).as_posix()},
@@ -1755,6 +1696,17 @@ def _normalize_segments(root: Path, source: Path, segments: Any) -> list[dict[st
         segment["preview_available"] = preview_available
         segment["preview_reason"] = "" if preview_available else _preview_reason(segment)
         segment["candidate_media_id"] = _candidate_media_id(root, segment)
+        final_rel = str((raw.get("artifacts") or {}).get("final_output", {}).get("rel_path") or "")
+        upload_rel = final_rel or str(segment.get("candidate_rel_path") or "")
+        if upload_rel and segment.get("upload_status") not in {"not_queued", "skipped", ""}:
+            try:
+                queued = get_upload_item(str(_artifact_path(root, upload_rel)))
+            except Exception:
+                segment["upload_state_available"] = False
+            else:
+                segment["upload_state_available"] = True
+                if queued:
+                    segment["upload_status"] = "awaiting_publish" if queued["status"] == "staged" else queued["status"]
         segment["revision"] = max(0, int(_float(segment.get("revision"))))
         for key in ("start_seconds", "end_seconds", "density_core_start", "density_core_end"):
             if key in segment:
@@ -1762,6 +1714,11 @@ def _normalize_segments(root: Path, source: Path, segments: Any) -> list[dict[st
         segment["quality"] = _normalize_quality(segment)
         segment["failure"] = _normalize_failure(segment)
         segment["artifacts"] = _normalize_artifacts(root, segment)
+        final_rel = str((raw.get("artifacts") or {}).get("final_output", {}).get("rel_path") or "")
+        segment["final_media_id"] = (
+            _media_id(root, _artifact_path(root, final_rel))
+            if final_rel and _nonempty_file(_artifact_path(root, final_rel)) else ""
+        )
         timings = segment.get("timings_ms")
         segment["timings_ms"] = (
             {
@@ -1772,6 +1729,16 @@ def _normalize_segments(root: Path, source: Path, segments: Any) -> list[dict[st
             else {}
         )
         state = segment.get("action_state")
+        if isinstance(state, dict) and state.get("job_id") and state.get("status") in {"pending", "processing"}:
+            from src.server.action_jobs import read_action_job
+            try:
+                job = read_action_job(root, str(state["job_id"]))
+                state = {**state, "status": job.get("status", state.get("status"))}
+                if job.get("failure"):
+                    segment["failure"] = job["failure"]
+            except (OSError, ValueError):
+                state = {**state, "status": "blocked"}
+                segment["failure"] = {"summary": "任务状态无法读取", "recovery_action": "核对原任务，勿重复提交"}
         segment["action_state"] = (
             {
                 "action": str(state.get("action") or ""),
@@ -2062,10 +2029,14 @@ def _segment_candidate_path(root: Path, segment: dict[str, Any]) -> Path:
 
 
 def _summary_counts(segments: list[dict[str, Any]]) -> dict[str, int]:
-    counts = {key: 0 for key in SUMMARY_KEYS}
+    counts = {key: 0 for key in (*SUMMARY_KEYS, "awaiting_publish", "needs_repair")}
     for segment in segments:
         status = str(segment.get("judge_status") or "review")
         counts[status] = counts.get(status, 0) + 1
+        if segment.get("upload_status") == "awaiting_publish":
+            counts["awaiting_publish"] += 1
+        if segment.get("failure") or segment.get("upload_status") == "failed":
+            counts["needs_repair"] += 1
     return counts
 
 

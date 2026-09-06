@@ -104,6 +104,7 @@ class DashboardContext:
         segment_id: str,
         *,
         payload: Dict[str, Any] | None = None,
+        wake: bool = True,
         after_enqueue: Callable[[Dict[str, Any]], Any] | None = None,
     ) -> Dict[str, Any]:
         result = enqueue_action_job(
@@ -115,9 +116,18 @@ class DashboardContext:
         job_id = result["job"]["job_id"]
         result["job_id"] = job_id
         result["status_url"] = f"/api/jobs/{job_id}"
-        if after_enqueue is not None:
-            after_enqueue(result)
-        result["worker_trigger"] = self.trigger_worker(1)
+        if result["status"] == "accepted":
+            if after_enqueue is not None:
+                after_enqueue(result)
+            else:
+                from src.dashboard.source_workbench import record_segment_action_state
+                record_segment_action_state(self.store.videos_root, segment_id,
+                                            status="pending", job_id=job_id, action=action)
+        if wake:
+            try:
+                result["worker_trigger"] = self.trigger_worker(1)
+            except Exception as exc:
+                result["worker_trigger"] = {"status": "unavailable", "message": str(exc)}
         return result
 
     def active_segment_job(self, segment_id: str) -> Dict[str, Any] | None:
@@ -130,6 +140,7 @@ class DashboardContext:
         *,
         payload: Dict[str, Any] | None = None,
         after_enqueue: Callable[[Dict[str, Any]], Any] | None = None,
+        wake: bool = True,
     ) -> Dict[str, Any]:
         result = enqueue_action_job(
             self.store.videos_root,
@@ -140,9 +151,13 @@ class DashboardContext:
         job_id = result["job"]["job_id"]
         result["job_id"] = job_id
         result["status_url"] = f"/api/jobs/{job_id}"
-        if after_enqueue is not None:
+        if result["status"] == "accepted" and after_enqueue is not None:
             after_enqueue(result)
-        result["worker_trigger"] = self.trigger_worker(1)
+        if wake:
+            try:
+                result["worker_trigger"] = self.trigger_worker(1)
+            except Exception as exc:
+                result["worker_trigger"] = {"status": "unavailable", "message": str(exc)}
         return result
 
     def active_recording_job(self, recording_id: str) -> Dict[str, Any] | None:

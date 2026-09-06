@@ -62,22 +62,6 @@ export class StudioUploadsComponent implements OnInit {
     });
   }
 
-  stopWorker(): void {
-    this.actionBusy = true;
-    this.api.stopWorker().subscribe({
-      next: () => {
-        this.actionBusy = false;
-        this.message.success('已请求停止 worker');
-        this.refresh();
-      },
-      error: (error) => {
-        this.actionBusy = false;
-        this.message.error(this.describeError(error));
-        this.changeDetector.markForCheck();
-      },
-    });
-  }
-
   count(name: string): number {
     return Number(this.dashboard.queue_counts?.[name] || 0);
   }

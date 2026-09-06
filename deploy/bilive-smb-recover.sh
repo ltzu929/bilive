@@ -14,6 +14,7 @@ CONNECT_TIMEOUT_SECONDS="${BILIVE_CONNECT_TIMEOUT_SECONDS:-3}"
 PROBE_TIMEOUT_SECONDS="${BILIVE_PROBE_TIMEOUT_SECONDS:-5}"
 STOP_TIMEOUT_SECONDS="${BILIVE_STOP_TIMEOUT_SECONDS:-15}"
 MOUNT_TIMEOUT_SECONDS="${BILIVE_MOUNT_TIMEOUT_SECONDS:-35}"
+SERVICE_TIMEOUT_SECONDS="${BILIVE_SERVICE_TIMEOUT_SECONDS:-15}"
 
 log() {
     printf '%s %s\n' "$(date -Is)" "$*"
@@ -32,7 +33,7 @@ mount_healthy() {
 ensure_services_running() {
     for service in "$BILIVE_SERVICE" "$DASHBOARD_SERVICE"; do
         if ! systemctl is-active --quiet "$service"; then
-            systemctl start "$service"
+            timeout "$SERVICE_TIMEOUT_SECONDS" systemctl start "$service" || return 1
             log "[INFO] Started inactive $service"
         fi
     done
@@ -40,7 +41,7 @@ ensure_services_running() {
 
 if mount_healthy; then
     ensure_services_running
-    exit 0
+    exit $?
 fi
 
 if ! smb_ready; then
@@ -50,8 +51,8 @@ fi
 
 if findmnt -rn -t cifs --target "$MOUNT_POINT" >/dev/null 2>&1; then
     log "[WARN] CIFS mount is stale; stopping recorder before remount"
-    timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$DASHBOARD_SERVICE" || true
-    timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$BILIVE_SERVICE" || true
+    timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$DASHBOARD_SERVICE" || exit 1
+    timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$BILIVE_SERVICE" || exit 1
     if ! timeout "$STOP_TIMEOUT_SECONDS" systemctl stop "$MOUNT_UNIT"; then
         log "[WARN] Normal unmount timed out; using lazy unmount"
         umount -l "$MOUNT_POINT" || true
@@ -69,6 +70,6 @@ if ! mount_healthy; then
     exit 0
 fi
 
-systemctl restart "$BILIVE_SERVICE"
-systemctl restart "$DASHBOARD_SERVICE"
+timeout "$SERVICE_TIMEOUT_SECONDS" systemctl restart "$BILIVE_SERVICE" || exit 1
+timeout "$SERVICE_TIMEOUT_SECONDS" systemctl restart "$DASHBOARD_SERVICE" || exit 1
 log "[INFO] CIFS mount recovered; restarted $BILIVE_SERVICE and $DASHBOARD_SERVICE"

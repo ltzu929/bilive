@@ -14,7 +14,7 @@ from src.burn.task_history import write_task_history
 from src.config import MIN_VIDEO_SIZE
 from src.config.server_config import VIDEOS_DIR
 from src.log.logger import scan_log
-from src.server.action_jobs import count_pending_action_jobs, process_action_jobs
+from src.server.action_jobs import count_pending_action_jobs, process_action_jobs, _queue_lock
 MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
 
 from src.server.worker_lock import (
@@ -56,31 +56,34 @@ def recover_processing_markers(
         return recovered
 
     for processing in sorted(root.rglob("*.mp4.processing")):
-        try:
-            marker = json.loads(processing.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            marker = {}
-        try:
-            owner = int(marker.get("worker_pid") or 0)
-        except (TypeError, ValueError):
-            owner = 0
-        if owner > 0 and pid_checker(owner):
-            continue
+        with _queue_lock(processing.parent / ".bilive-marker-claim.lock"):
+            if not processing.exists():
+                continue
+            try:
+                marker = json.loads(processing.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                marker = {}
+            try:
+                owner = int(marker.get("worker_pid") or 0)
+            except (TypeError, ValueError):
+                owner = 0
+            if owner > 0 and pid_checker(owner):
+                continue
 
-        pending = processing.with_suffix(".pending")
-        marker.pop("worker_pid", None)
-        marker["recovered_from"] = "processing"
-        marker["recovered_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        if not pending.exists():
-            _write_json_atomic(pending, marker)
-            write_task_history(
-                processing.with_suffix(""),
-                status="pending",
-                videos_root=root,
-                started_at=marker["recovered_at"],
-            )
-        processing.unlink(missing_ok=True)
-        recovered += 1
+            pending = processing.with_suffix(".pending")
+            marker.pop("worker_pid", None)
+            marker["recovered_from"] = "processing"
+            marker["recovered_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            if not pending.exists():
+                _write_json_atomic(pending, marker)
+                write_task_history(
+                    processing.with_suffix(""),
+                    status="pending",
+                    videos_root=root,
+                    started_at=marker["recovered_at"],
+                )
+            processing.unlink(missing_ok=True)
+            recovered += 1
     return recovered
 
 
@@ -89,6 +92,8 @@ def _claim_pending(pending: Path) -> tuple[Path, dict] | None:
     processing = pending.with_suffix(".processing")
     try:
         with WorkerProcessLock(pending.parent / ".bilive-marker-claim.lock"):
+            if processing.exists():
+                return None
             if not pending.is_file():
                 return None
             os.replace(pending, processing)

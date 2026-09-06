@@ -71,7 +71,7 @@ def build_task_inventory(
             [
                 f
                 for f in room_dir.glob("*.mp4")
-                if _SOURCE_RE.match(f.name) and _meets_min_source_size(f)
+                if _SOURCE_RE.match(f.name)
             ],
             key=lambda f: f.name,
         )
@@ -186,6 +186,12 @@ def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
         "failure": failure,
     }
 
+    if not _meets_min_source_size(source):
+        task["processing_eligible"] = False
+        task["skip_reason"] = "低于自动处理大小门槛，可只读查看"
+        task["message"] = task["skip_reason"]
+    else:
+        task["processing_eligible"] = True
     return task
 
 

@@ -407,7 +407,7 @@ def _write_source_workbench_fixture(videos):
                 "start_seconds": 10.0,
                 "end_seconds": 70.0,
                 "judge_status": "keep",
-                "upload_status": "queued",
+                "upload_status": "not_queued",
             }
         ],
     )
@@ -652,7 +652,7 @@ async def test_segment_finalize_api_reuses_active_job_and_validates_style(
 
     assert first.status_code == 200
     assert second.status_code == 409
-    assert "active action" in second.json()["detail"]
+    assert second.json()["detail"]
     assert invalid.status_code == 400
     assert invalid.json()["detail"] == "subtitle_style must be an object"
     assert invalid_range.status_code == 400

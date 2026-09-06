@@ -154,7 +154,7 @@ def test_trash_recording_uses_injected_reversible_mover_and_is_idempotent(tmp_pa
     )
 
     assert result["status"] == "trashed"
-    assert moved and source in moved[0]
+    assert moved and source in [path for batch in moved for path in batch]
     state = source_lifecycle.read_recording_state(videos, task_id)
     assert state["trash_status"] == "done"
     assert state["trash_files"]

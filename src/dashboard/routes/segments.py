@@ -15,15 +15,22 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from src.dashboard._context import DashboardContext, get_context
 from src.dashboard.errors import SegmentStateConflict
-from src.server.action_jobs import SegmentActionConflict
+from src.server.action_jobs import SegmentActionConflict, action_submission_lock
 
 
 router = APIRouter()
 
 
-def _segment_action(action) -> Dict[str, Any]:
+def _segment_action(ctx, action) -> Dict[str, Any]:
     try:
-        return action()
+        with action_submission_lock(ctx.store.videos_root):
+            result = action()
+        if result.get("job_id") and result.get("status") == "accepted":
+            try:
+                result["worker_trigger"] = ctx.trigger_worker(1)
+            except Exception as exc:
+                result["worker_trigger"] = {"status": "unavailable", "message": str(exc)}
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -53,7 +60,7 @@ async def segment_manual_keep(
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
     wb = _workbench()
-    return _segment_action(
+    return _segment_action(ctx,
         lambda: (
             _ensure_segment_idle(ctx, segment_id),
             wb.manual_keep_segment(ctx.store.videos_root, segment_id, payload),
@@ -72,13 +79,20 @@ async def segment_finalize(
 
     def prepare_and_queue() -> Dict[str, Any]:
         normalized_payload = wb.validate_segment_finalize_payload(payload)
-        _ensure_segment_idle(ctx, segment_id)
+        existing = ctx.active_segment_job(segment_id)
+        if existing is not None:
+            if (existing.get("action") == "finalize_segment"
+                and existing.get("payload", {}).get("_review_request") == normalized_payload):
+                return {"status": "already_pending", "job_id": existing["job_id"],
+                        "status_url": f"/api/jobs/{existing['job_id']}", "job": existing}
+            raise SegmentActionConflict("片段已有不同的后台任务")
         prepared = wb.prepare_segment_finalize(
             ctx.store.videos_root,
             segment_id,
             normalized_payload,
         )
         job_payload = {
+            "_review_request": normalized_payload,
             "title": str(prepared.get("title") or ""),
             "description": str(prepared.get("description") or ""),
             "tags": list(prepared.get("tags") or []),
@@ -101,25 +115,27 @@ async def segment_finalize(
             "finalize_segment",
             segment_id,
             payload=job_payload,
+            wake=False,
             after_enqueue=record_pending,
         )
         result["segment"] = queued_segment["value"]
         return result
 
-    return _segment_action(prepare_and_queue)
+    return _segment_action(ctx, prepare_and_queue)
 
 
 @router.post("/api/segments/{segment_id}/approve-publish")
 async def segment_approve_publish(
     segment_id: str,
+    payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
     """Activate a staged final artifact after the second human confirmation."""
     wb = _workbench()
-    return _segment_action(
+    return _segment_action(ctx,
         lambda: (
             _ensure_segment_idle(ctx, segment_id),
-            wb.approve_publish_segment(ctx.store.videos_root, segment_id),
+            wb.approve_publish_segment(ctx.store.videos_root, segment_id, payload),
         )[1]
     )
 
@@ -131,7 +147,7 @@ async def segment_drop(
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
     wb = _workbench()
-    return _segment_action(
+    return _segment_action(ctx,
         lambda: (
             _ensure_segment_idle(ctx, segment_id),
             wb.drop_segment(ctx.store.videos_root, segment_id, payload),
@@ -146,7 +162,7 @@ async def segment_range(
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
     wb = _workbench()
-    return _segment_action(
+    return _segment_action(ctx,
         lambda: (
             _ensure_segment_idle(ctx, segment_id),
             wb.update_segment_range(ctx.store.videos_root, segment_id, payload),
@@ -159,7 +175,7 @@ async def segment_retry_judge(
     segment_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
-    return _segment_action(lambda: ctx.queue_segment_action("retry_judge", segment_id))
+    return _segment_action(ctx, lambda: ctx.queue_segment_action("retry_judge", segment_id, wake=False))
 
 
 @router.post("/api/segments/{segment_id}/render")
@@ -167,7 +183,7 @@ async def segment_render(
     segment_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
-    return _segment_action(lambda: ctx.queue_segment_action("render_segment", segment_id))
+    return _segment_action(ctx, lambda: ctx.queue_segment_action("render_segment", segment_id, wake=False))
 
 
 @router.post("/api/segments/{segment_id}/subtitle-style")
@@ -177,7 +193,7 @@ async def segment_subtitle_style(
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
     wb = _workbench()
-    return _segment_action(
+    return _segment_action(ctx,
         lambda: (
             _ensure_segment_idle(ctx, segment_id),
             wb.update_segment_subtitle_style(
@@ -194,4 +210,4 @@ async def segment_reburn(
     segment_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
-    return _segment_action(lambda: ctx.queue_segment_action("reburn_subtitles", segment_id))
+    return _segment_action(ctx, lambda: ctx.queue_segment_action("reburn_subtitles", segment_id, wake=False))

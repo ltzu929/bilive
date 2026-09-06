@@ -80,6 +80,8 @@ def write_slice_upload_metadata(
     source: str = "https://live.bilibili.com/",
     cover: str = "",
     dynamic: str = "",
+    source_task_id: str = "",
+    segment_id: str = "",
 ) -> Path:
     path = slice_upload_metadata_path(video_path)
     path.write_text(
@@ -91,6 +93,8 @@ def write_slice_upload_metadata(
                 "source": source,
                 "cover": cover,
                 "dynamic": dynamic,
+                "source_task_id": source_task_id,
+                "segment_id": segment_id,
             },
             ensure_ascii=False,
             indent=2,

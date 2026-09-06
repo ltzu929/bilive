@@ -31,6 +31,16 @@ JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = ("pending", "processing", "done", "failed")
 _THREAD_LOCKS: dict[str, threading.Lock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
+_HELD_LOCKS = threading.local()
+
+
+@contextmanager
+def action_submission_lock(videos_root: str | Path):
+    """Serialize review edits, enqueue and publication before waking workers."""
+    root = jobs_dir(videos_root)
+    root.mkdir(parents=True, exist_ok=True)
+    with _queue_lock(root / ".enqueue.lock"):
+        yield
 
 
 class ActionJobExecutionError(RuntimeError):
@@ -111,6 +121,11 @@ def read_action_job(videos_root: str | Path, job_id: str) -> dict[str, Any]:
         path = _state_path(root, identifier, state)
         if path.is_file():
             return _read_json(path)
+    invalid = root / f"{identifier}.invalid.json"
+    if invalid.is_file():
+        return {"job_id": identifier, "status": "blocked", "failure": {
+            "code": "corrupt_action", "summary": "任务文件损坏，需要人工核对",
+            "recovery_action": "检查保留的 invalid 文件和关联片段，未自动重试"}}
     raise FileNotFoundError(f"Action job not found: {identifier}")
 
 
@@ -132,7 +147,7 @@ def claim_next_action_job(videos_root: str | Path) -> tuple[Path, dict[str, Any]
     root = jobs_dir(videos_root)
     if not root.is_dir():
         return None
-    with _queue_lock(root / ".claim.lock"):
+    with action_submission_lock(videos_root), _queue_lock(root / ".claim.lock"):
         candidates = []
         for path in root.glob("*.pending.json"):
             try:
@@ -178,9 +193,13 @@ def recover_action_jobs(
     if not root.is_dir():
         return 0
     recovered = 0
-    with _queue_lock(root / ".claim.lock"):
+    with action_submission_lock(videos_root), _queue_lock(root / ".claim.lock"):
         for processing in sorted(root.glob("*.processing.json")):
-            job = _read_json(processing)
+            try:
+                job = _read_pending_job(processing)
+            except (OSError, ValueError) as exc:
+                _quarantine_invalid_pending(processing, exc)
+                continue
             try:
                 owner = int(job.get("worker_pid") or 0)
             except (TypeError, ValueError):
@@ -265,6 +284,7 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
         return reburn_segment_subtitles(videos_root, job["segment_id"])
     if job["action"] == "finalize_segment":
         payload = dict(job.get("payload") or {})
+        payload.pop("_review_request", None)
         payload["_job_id"] = str(job.get("job_id") or "")
         return finalize_segment(
             videos_root,
@@ -279,6 +299,7 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
         )
     if job["action"] == "trash_recording":
         payload = dict(job.get("payload") or {})
+        payload.pop("_review_request", None)
         payload["_job_id"] = str(job.get("job_id") or "")
         return trash_recording(
             videos_root,
@@ -290,7 +311,7 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
 
 def _quarantine_invalid_pending(path: Path, exc: Exception) -> None:
     """Move an unreadable pending file out of the claimable queue."""
-    invalid = path.with_name(path.name.replace(".pending.json", ".invalid.json"))
+    invalid = path.with_name(path.name.replace(".pending.json", ".invalid.json").replace(".processing.json", ".invalid.json"))
     try:
         os.replace(path, invalid)
     except OSError:
@@ -306,7 +327,7 @@ def _quarantine_invalid_pending(path: Path, exc: Exception) -> None:
 
 def _read_pending_job(path: Path) -> dict[str, Any]:
     job = _read_json(path)
-    expected_job_id = path.name.removesuffix(".pending.json")
+    expected_job_id = path.name.split(".", 1)[0]
     if (
         str(job.get("job_id") or "") != expected_job_id
         or not JOB_ID_RE.fullmatch(expected_job_id)
@@ -375,14 +396,39 @@ def _structured_failure_from_exception(
     }
 
 
+def _corrupt_job_target(videos_root: str | Path, path: Path) -> dict[str, str]:
+    identifier = path.name.split(".", 1)[0]
+    try:
+        data = _read_json(path)
+        if data.get("segment_id") or data.get("recording_id"):
+            return {key: str(data.get(key) or "") for key in ("segment_id", "recording_id")}
+    except (OSError, ValueError):
+        pass
+    for history_path in Path(videos_root).glob("*/*.mp4.task.json"):
+        try:
+            history = _read_json(history_path)
+        except (OSError, ValueError):
+            continue
+        for segment in history.get("segments") or []:
+            if isinstance(segment, dict) and (segment.get("action_state") or {}).get("job_id") == identifier:
+                return {"segment_id": str(segment.get("segment_id") or "")}
+    return {}
+
+
 def find_active_segment_job(
     videos_root: str | Path,
     segment_id: str,
 ) -> dict[str, Any] | None:
     root = jobs_dir(videos_root)
-    for state in ("pending", "processing"):
+    for state in ("pending", "processing", "invalid"):
         for path in sorted(root.glob(f"*.{state}.json")):
-            job = _read_json(path)
+            try:
+                job = _read_pending_job(path)
+            except (OSError, ValueError) as exc:
+                target = _corrupt_job_target(videos_root, path)
+                if target and target.get("segment_id") != segment_id:
+                    continue
+                raise SegmentActionConflict(f"任务文件损坏，需要人工核对: {path.name}") from exc
             if job.get("segment_id") == segment_id:
                 return job
     return None
@@ -393,9 +439,15 @@ def find_active_recording_job(
     recording_id: str,
 ) -> dict[str, Any] | None:
     root = jobs_dir(videos_root)
-    for state in ("pending", "processing"):
+    for state in ("pending", "processing", "invalid"):
         for path in sorted(root.glob(f"*.{state}.json")):
-            job = _read_json(path)
+            try:
+                job = _read_pending_job(path)
+            except (OSError, ValueError) as exc:
+                target = _corrupt_job_target(videos_root, path)
+                if target and target.get("recording_id") != recording_id:
+                    continue
+                raise SegmentActionConflict(f"任务文件损坏，需要人工核对: {path.name}") from exc
             if job.get("recording_id") == recording_id:
                 return job
     return None
@@ -490,16 +542,26 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 @contextmanager
 def _queue_lock(path: Path, attempts: int = 200, delay: float = 0.01):
     key = str(path.resolve())
+    held = getattr(_HELD_LOCKS, "paths", set())
+    if key in held:
+        yield
+        return
     with _THREAD_LOCKS_GUARD:
         thread_lock = _THREAD_LOCKS.setdefault(key, threading.Lock())
     with thread_lock:
         for attempt in range(attempts):
             lock = WorkerProcessLock(path)
             try:
-                with lock:
-                    yield
-                return
+                lock.__enter__()
             except WorkerAlreadyRunning:
                 if attempt + 1 >= attempts:
                     raise
                 time.sleep(delay)
+                continue
+            _HELD_LOCKS.paths = held | {key}
+            try:
+                yield
+            finally:
+                _HELD_LOCKS.paths = held
+                lock.__exit__(None, None, None)
+            return

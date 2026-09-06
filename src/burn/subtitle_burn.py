@@ -243,6 +243,7 @@ def burn_subtitles_from_analysis(
     run=subprocess.run,
     probe_duration: Callable[[Path], float | None] | None = None,
     allow_plain_transcript_fallback: bool = False,
+    source_range: tuple[float, float] | None = None,
 ) -> BurnSubtitleResult:
     if style is None:
         style = SubtitleStyle(font_size=font_size, margin_v=margin_v)
@@ -265,7 +266,7 @@ def burn_subtitles_from_analysis(
             message="no valid timestamped transcript segments",
         )
 
-    srt_path = video_path.with_name(f"{video_path.stem}_asr.srt")
+    srt_path = final_output.with_name(f"{final_output.stem}_asr.srt")
     temp_output = (
         final_output
         if output_path is not None
@@ -279,6 +280,7 @@ def burn_subtitles_from_analysis(
             srt_path,
             analysis,
             style=style,
+            source_range=source_range,
         )
         run(command, check=True, capture_output=True, text=True, encoding="utf-8")
         if output_path is None:
@@ -309,10 +311,11 @@ def _burn_command(
     analysis: AnalysisResult,
     *,
     style: SubtitleStyle | None = None,
+    source_range: tuple[float, float] | None = None,
 ) -> list[str]:
     subtitle_filter = _subtitle_filter(srt_path, style=style)
     trim = analysis.suggested_trim
-    if trim is None:
+    if trim is None and source_range is None:
         return [
             "ffmpeg",
             "-y",
@@ -325,8 +328,9 @@ def _burn_command(
             str(temp_output),
         ]
 
-    start = max(0.0, float(trim.trim_start))
-    duration = max(0.0, float(trim.trim_end) - start)
+    start = max(0.0, float(source_range[0] if source_range else trim.trim_start))
+    end = float(source_range[1] if source_range else trim.trim_end)
+    duration = max(0.0, end - start)
     return [
         "ffmpeg",
         "-y",

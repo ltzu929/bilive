@@ -23,6 +23,7 @@ from src.dashboard.source_lifecycle import (
     set_review_state,
     set_trash_job_state,
 )
+from src.server.action_jobs import action_submission_lock
 from src.dashboard.task_state import resolve_task_id
 from src.server.action_jobs import SegmentActionConflict
 
@@ -30,9 +31,17 @@ from src.server.action_jobs import SegmentActionConflict
 router = APIRouter()
 
 
-def _recording_action(action) -> Dict[str, Any]:
+def _recording_action(ctx, action) -> Dict[str, Any]:
     try:
-        return action()
+        with action_submission_lock(ctx.store.videos_root):
+            result = action()
+        queued = result.get("trash_job", result)
+        if queued.get("job_id") and queued.get("status") == "accepted":
+            try:
+                queued["worker_trigger"] = ctx.trigger_worker(1)
+            except Exception as exc:
+                queued["worker_trigger"] = {"status": "unavailable", "message": str(exc)}
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
@@ -61,7 +70,11 @@ def _queue_trash(ctx: DashboardContext, task_id: str) -> Dict[str, Any]:
             "review_state": str(state.get("review_state") or "trash_pending"),
             "trash_job_id": str(state.get("trash_job_id") or ""),
         }
-    source, source_rel_path, room_id = _recording_source(ctx, task_id)
+    if state.get("trash_plan"):
+        source_rel_path = str(state["trash_plan"]["source_rel_path"])
+        room_id = str(state.get("room_id") or "")
+    else:
+        source, source_rel_path, room_id = _recording_source(ctx, task_id)
 
     def mark_pending(result: Dict[str, Any]) -> None:
         set_review_state(
@@ -82,6 +95,7 @@ def _queue_trash(ctx: DashboardContext, task_id: str) -> Dict[str, Any]:
         "trash_recording",
         task_id,
         after_enqueue=mark_pending,
+        wake=False,
     )
     result["task_id"] = task_id
     result["review_state"] = "trash_pending"
@@ -184,12 +198,13 @@ async def create_missed_segment(
             "create_missed_segment",
             segment_id,
             after_enqueue=record_pending,
+            wake=False,
         )
         result["task_id"] = task_id
         result["segment"] = pending_segment["value"]
         return result
 
-    return _recording_action(prepare_and_queue)
+    return _recording_action(ctx, prepare_and_queue)
 
 
 @router.post("/api/source-recordings/{task_id}/review-complete")
@@ -230,7 +245,7 @@ async def complete_source_review(
         prepared["review_state"] = "trash_pending"
         return prepared
 
-    return _recording_action(complete_and_queue)
+    return _recording_action(ctx, complete_and_queue)
 
 
 @router.post("/api/source-recordings/{task_id}/trash")
@@ -249,7 +264,7 @@ async def trash_source_recording(
             raise RecordingStateConflict("尚未完成整场复核，不能回收源录播")
         return _queue_trash(ctx, task_id)
 
-    return _recording_action(queue)
+    return _recording_action(ctx, queue)
 
 
 @router.get("/api/eagle/source-recordings")

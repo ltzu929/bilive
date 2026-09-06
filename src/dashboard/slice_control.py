@@ -11,6 +11,7 @@ from typing import Any
 from src.burn.task_history import write_task_history
 from src.config import MIN_VIDEO_SIZE
 from src.dashboard.task_state import resolve_task_id
+from src.server.action_jobs import _queue_lock
 
 
 def _task_id_for_source(source: Path, root: Path) -> str:
@@ -56,8 +57,11 @@ def start_slice_scan(
         }
 
     existing_pending = load_pending_queue_state(root)["pending_tasks"]
+    processing = None
     if task_id:
         video_path = resolve_task_id(root, task_id)
+        if video_path.with_suffix(".mp4.processing").exists():
+            processing = task_id
         if _is_queue_candidate(video_path):
             pending_path = _write_pending_marker(
                 video_path,
@@ -68,7 +72,8 @@ def start_slice_scan(
                     slice_options,
                 ),
             )
-            queued_paths.append(str(pending_path))
+            if pending_path is not None:
+                queued_paths.append(str(pending_path))
         else:
             skipped += 1
     else:
@@ -94,11 +99,13 @@ def start_slice_scan(
                 root,
                 slice_options=_effective_slice_options(root, selected, slice_options),
             )
-            queued_paths.append(str(pending_path))
+            if pending_path is not None:
+                queued_paths.append(str(pending_path))
             deferred = len(candidates) - 1
 
     return {
-        "status": "queued" if queued_paths or existing_pending else "empty",
+        "status": "processing" if processing else ("queued" if queued_paths or existing_pending else "empty"),
+        "task_id": task_id,
         "queued": len(queued_paths),
         "pending_tasks": existing_pending + len(queued_paths),
         "skipped": skipped,
@@ -144,6 +151,8 @@ def _is_queue_candidate(video_path: Path) -> bool:
         return False
     if not video_path.with_suffix(".xml").is_file():
         return False
+    if video_path.with_suffix(".mp4.processing").exists():
+        return False
     if video_path.with_suffix(".mp4.pending").exists():
         return False
     if video_path.with_suffix(".mp4.done").exists():
@@ -176,7 +185,14 @@ def _write_pending_marker(
     video_path: Path,
     videos_root: Path,
     slice_options: dict[str, Any] | None = None,
-) -> Path:
+) -> Path | None:
+    with _queue_lock(video_path.parent / ".bilive-marker-claim.lock"):
+        if not _is_queue_candidate(video_path):
+            return None
+        return _write_pending_marker_locked(video_path, videos_root, slice_options)
+
+
+def _write_pending_marker_locked(video_path, videos_root, slice_options):
     pending_path = video_path.with_suffix(".mp4.pending")
     rel_path = video_path.relative_to(videos_root).as_posix()
     marker_data: dict[str, Any] = {

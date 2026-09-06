@@ -7,19 +7,46 @@ from xml.etree import ElementTree
 from .burst_detector import BurstEvent, detect_bursts
 
 
-def slice_video(*args, **kwargs):
-    """Load the ffmpeg-backed slicer only when a slice is executed."""
-    from .auto_slice_video.autosv.slice.slice_video import (
-        slice_video as implementation,
-    )
+def slice_video(video_path, output_path, start_time, duration, progress_callback=None):
+    """Copy a coarse candidate, propagating ffmpeg failure before reuse."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from src.burn.slice_progress import parse_ffmpeg_progress_line
 
-    result = implementation(*args, **kwargs)
-    output_path = args[1] if len(args) > 1 else kwargs.get("output_path")
-    if output_path and (
-        not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0
-    ):
+    destination = Path(output_path)
+    temporary = destination.with_name(f".{destination.stem}.slicing{destination.suffix}")
+    command = ["ffmpeg", "-y", "-v", "error", "-nostats", "-ss", f"{float(start_time):.3f}",
+               "-i", str(video_path), "-t", f"{float(duration):.3f}", "-map_metadata", "-1",
+               "-c:v", "copy", "-c:a", "copy", "-progress", "pipe:1", str(temporary)]
+    # stderr is file-backed so a full error pipe cannot block stdout progress.
+    with tempfile.TemporaryFile(mode="w+b") as errors:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors,
+                                   text=True, encoding="utf-8", errors="replace")
+        try:
+            if process.stdout:
+                for line in process.stdout:
+                    percent = parse_ffmpeg_progress_line(line, float(duration))
+                    if percent is not None and progress_callback:
+                        progress_callback(percent)
+            code = process.wait()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            if process.stdout:
+                process.stdout.close()
+        errors.seek(0)
+        diagnostic = errors.read().decode("utf-8", errors="replace")
+    if code != 0:
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg slicer exited {code}: {diagnostic[-4000:]}")
+    if not temporary.is_file() or temporary.stat().st_size == 0:
         raise RuntimeError("ffmpeg slicer produced no media")
-    return result
+    os.replace(temporary, destination)
+    if progress_callback:
+        progress_callback(100.0)
 
 
 @dataclass

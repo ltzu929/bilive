@@ -71,12 +71,12 @@ def test_finalize_stages_until_explicit_publish_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(
         source_workbench,
         "transcribe_segment_audio",
-        lambda _path, _duration: {
+        lambda _path, _duration, **_kwargs: {
             "transcript": "a useful line",
             "segments": [{"start": 0, "end": 1, "text": "a useful line"}],
         },
     )
-    def fake_burn(_raw, _analysis, output, _style):
+    def fake_burn(_raw, _analysis, output, _style, *, source_range=None):
         output.write_bytes(b"final")
         return type("Burn", (), {"burned": True, "message": "ok"})()
 
@@ -106,12 +106,19 @@ def test_finalize_stages_until_explicit_publish_approval(tmp_path, monkeypatch):
     assert staged["upload_status"] == "awaiting_publish"
     assert conn.peek_next_upload(db_path) is None
 
-    approved = source_workbench.approve_publish_segment(videos, "seg1")
+    approval = {"expected_revision": staged["revision"], "final_media_id": staged["final_media_id"]}
+    with pytest.raises(source_workbench.SegmentStateConflict):
+        source_workbench.approve_publish_segment(videos, "seg1", {**approval, "expected_revision": -1})
+    with pytest.raises(source_workbench.SegmentStateConflict):
+        source_workbench.approve_publish_segment(videos, "seg1", {**approval, "final_media_id": "old-final"})
+    assert conn.peek_next_upload(db_path) is None
+    assert source_workbench.build_source_recording_list(videos)[0]["summary_counts"]["awaiting_publish"] == 1
+    approved = source_workbench.approve_publish_segment(videos, "seg1", approval)
     assert approved["upload_status"] == "queued"
     assert approved["publish_approval"] == "approved"
     assert conn.peek_next_upload(db_path)["video_path"] == approved["candidate_path"]
 
-    repeated = source_workbench.approve_publish_segment(videos, "seg1")
+    repeated = source_workbench.approve_publish_segment(videos, "seg1", approval)
     assert repeated["publish_approval"] == "approved"
     assert repeated["publish_idempotent"] is True
     assert len(conn.list_upload_queue(db_path)) == 1

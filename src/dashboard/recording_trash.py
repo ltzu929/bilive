@@ -192,18 +192,37 @@ def trash_recording(
 ) -> dict[str, Any]:
     """Move one verified source package to the Windows Recycle Bin."""
     root = Path(videos_root).expanduser().resolve()
-    plan = build_trash_plan(root, task_id, payload=payload)
-    if plan["status"] == "already_trashed":
-        return {**plan, "idempotent": True}
-
+    state = read_recording_state(root, task_id) or {}
+    saved = state.get("trash_plan")
+    if state.get("trash_status") == "done":
+        return {"status": "already_trashed", "task_id": task_id, "idempotent": True,
+                "files": list(state.get("trash_files") or [])}
+    if isinstance(saved, dict) and saved.get("files"):
+        plan = saved
+    else:
+        plan = build_trash_plan(root, task_id, payload=payload)
+        # The complete authorized package survives even if its source moves first.
+        mutate_recording_state(root, task_id, lambda current: {
+            **current, "trash_plan": plan, "trash_moved": [], "trash_status": "processing"
+        })
     relative_files = [str(path) for path in plan["files"]]
-    files = [(root / relative).resolve() for relative in relative_files]
+    moved = list(state.get("trash_moved") or [])
     move = mover or move_to_recycle_bin
     try:
-        move(files)
+        for relative in relative_files:
+            if relative in moved:
+                continue
+            path = (root / relative).resolve()
+            path.relative_to(root)
+            if not path.is_file():
+                raise RecordingTrashBlocked("回收结果未知，请核对持久清单", blockers=[f"move_unknown:{relative}"])
+            move([path])
+            moved.append(relative)
+            mutate_recording_state(root, task_id, lambda current: {
+                **current, "trash_moved": list(moved), "trash_status": "processing"
+            })
     except Exception as exc:
-        reason = f"{type(exc).__name__}: {exc}"
-        set_trash_job_state(root, task_id, status="failed", reason=reason)
+        set_trash_job_state(root, task_id, status="failed", reason=f"{type(exc).__name__}: {exc}")
         raise
 
     append_trash_log(

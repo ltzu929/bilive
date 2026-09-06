@@ -258,7 +258,7 @@ def test_mark_done_task_updates_terminal_history(tmp_path):
     assert read_task_history(source)["status"] == "done"
 
 
-def test_build_task_inventory_excludes_source_recordings_below_min_size(tmp_path, monkeypatch):
+def test_build_task_inventory_explains_source_recordings_below_min_size(tmp_path, monkeypatch):
     videos = tmp_path / "Videos"
     room = videos / "22384516"
     room.mkdir(parents=True)
@@ -269,7 +269,9 @@ def test_build_task_inventory_excludes_source_recordings_below_min_size(tmp_path
 
     tasks = task_state.build_task_inventory(videos_root=videos)
 
-    assert tasks == []
+    assert len(tasks) == 1
+    assert tasks[0]["processing_eligible"] is False
+    assert tasks[0]["skip_reason"]
 
 
 def test_build_task_inventory_returns_skipped_when_no_xml(tmp_path):

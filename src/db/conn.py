@@ -137,18 +137,27 @@ def _fetch_item(
     return dict(row) if row else None
 
 
+def connect_readonly(db_path: str | Path | None = None) -> sqlite3.Connection:
+    path = Path(_database_path(db_path)).resolve()
+    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+
+
 def get_upload_item(
     video_path: str,
     db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    with connect(db_path) as db:
+    with connect_readonly(db_path) as db:
         return _fetch_item(db, video_path)
 
 
 def list_upload_queue(
     db_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    with connect(db_path) as db:
+    with connect_readonly(db_path) as db:
         rows = db.execute("select * from upload_queue order by id").fetchall()
     return [dict(row) for row in rows]
 
@@ -571,7 +580,7 @@ def get_upload_queue_counts(
     db_path: str | Path | None = None,
 ) -> dict[str, int]:
     counts = {status: 0 for status in UPLOAD_STATUSES}
-    with connect(db_path) as db:
+    with connect_readonly(db_path) as db:
         rows = db.execute(
             "select status, count(*) as count from upload_queue group by status"
         ).fetchall()
@@ -581,6 +590,17 @@ def get_upload_queue_counts(
         count for status, count in counts.items() if status in UPLOAD_STATUSES
     )
     return counts
+
+
+def withdraw_staged_upload(video_path: str, db_path: str | Path | None = None) -> bool:
+    """Withdraw only an unactivated row; serialize with activation and claim."""
+    with connect(db_path) as db:
+        db.execute("begin immediate")
+        cursor = db.execute(
+            "delete from upload_queue where video_path = ? and status = 'staged' "
+            "and coalesce(remote_filename, '') = ''", (str(video_path),)
+        )
+        return cursor.rowcount == 1
 
 
 def delete_upload_queue(
