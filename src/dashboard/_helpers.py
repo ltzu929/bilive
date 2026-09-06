@@ -119,7 +119,7 @@ def upload_path_parts(value: str) -> tuple[str, str]:
     return path.name or "-", path.parent.name or "-"
 
 
-def read_upload_dashboard() -> Dict[str, Any]:
+def read_upload_dashboard(*, status: str = "", limit: int = 50, offset: int = 0) -> Dict[str, Any]:
     from src.db import conn as upload_conn
     from src.server.upload_control import upload_worker_status
 
@@ -143,18 +143,24 @@ def read_upload_dashboard() -> Dict[str, Any]:
 
     try:
         counts = upload_conn.get_upload_queue_counts()
-        rows = upload_conn.list_upload_queue()
+        rows, filtered_total = upload_conn.read_upload_page(status=status, limit=limit, offset=offset)
         database = "ready"
     except Exception as exc:
         counts = {"queued": 0, "staged": 0, "uploading": 0, "uploaded": 0, "publishing": 0, "published": 0, "failed": 0, "total": 0}
         rows = []
+        filtered_total = 0
         database = f"unavailable: {exc}"
 
     items = []
-    for row in reversed(rows):
+    from src.upload.slice_metadata import read_slice_upload_metadata
+    for row in rows:
+        metadata = read_slice_upload_metadata(str(row.get("video_path") or "")) or {}
         name, room = upload_path_parts(str(row.get("video_path") or ""))
         items.append({
             "id": row.get("id"),
+            "source_task_id": str(metadata.get("source_task_id") or ""),
+            "segment_id": str(metadata.get("segment_id") or ""),
+            "retry_allowed": row.get("status") == "failed" and not row.get("remote_filename"),
             "name": name,
             "room": room,
             "status": str(row.get("status") or "queued"),
@@ -167,6 +173,9 @@ def read_upload_dashboard() -> Dict[str, Any]:
     return {
         "queue_counts": counts,
         "items": items,
+        "filtered_total": filtered_total,
+        "limit": limit,
+        "offset": offset,
         "database": database,
         "worker": upload_worker_status(),
     }

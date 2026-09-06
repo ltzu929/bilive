@@ -98,7 +98,7 @@ def _media_response(
 
 
 @router.get("/api/media/{media_id}")
-async def get_media(
+def get_media(
     media_id: str,
     request: Request,
     ctx: DashboardContext = Depends(get_context),
@@ -111,7 +111,7 @@ async def get_media(
 
 
 @router.get("/api/preview/{media_id}")
-async def get_preview(
+def get_preview(
     media_id: str,
     request: Request,
     ctx: DashboardContext = Depends(get_context),

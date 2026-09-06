@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 @router.post("/api/slice/start")
-async def start_slice(
+def start_slice(
     payload: Dict[str, Any] | None = None,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -47,15 +47,15 @@ async def start_slice(
 
 
 @router.get("/api/worker-trigger/status")
-async def get_worker_trigger_status(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
+def get_worker_trigger_status(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
     return ctx.read_worker_trigger_status()
 
 
 @router.post("/api/worker-trigger/wake")
-async def wake_worker_api(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
+def wake_worker_api(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
     return ctx.wake_worker()
 
 
 @router.post("/api/worker-trigger/stop")
-async def stop_worker_api(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
+def stop_worker_api(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
     return ctx.stop_worker()

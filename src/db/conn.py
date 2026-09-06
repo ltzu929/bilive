@@ -144,6 +144,18 @@ def connect_readonly(db_path: str | Path | None = None) -> sqlite3.Connection:
     return db
 
 
+def read_upload_page(*, status: str = "", limit: int = 50, offset: int = 0, db_path=None):
+    if status and status not in UPLOAD_STATUSES:
+        raise ValueError("Unknown upload status")
+    if not 1 <= limit <= 100 or offset < 0:
+        raise ValueError("Invalid upload page")
+    clause = "where status = ?" if status else ""
+    args = (status,) if status else ()
+    with connect_readonly(db_path) as db:
+        total = db.execute(f"select count(*) from upload_queue {clause}", args).fetchone()[0]
+        rows = db.execute(f"select * from upload_queue {clause} order by id desc limit ? offset ?",
+                          (*args, limit, offset)).fetchall()
+    return [dict(row) for row in rows], total
 
 
 def get_upload_item(

@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
-import { Observable, forkJoin } from 'rxjs';
+import { Observable } from 'rxjs';
 
 export interface StudioRoom {
   room_id: string;
@@ -179,7 +179,7 @@ export class StudioApiService {
   }
 
   getReviewStatus(): Observable<{progress: Record<string, any>; diagnostics: Record<string, any>; worker: Record<string, any>}> {
-    return forkJoin({progress: this.getSliceProgress(), diagnostics: this.getSliceDiagnostics(), worker: this.getWorkerStatus()});
+    return this.http.get<any>(this.path('/review-status'));
   }
 
   getSliceProgress(): Observable<Record<string, unknown>> {
@@ -225,8 +225,14 @@ export class StudioApiService {
     );
   }
 
-  getUploadDashboard(): Observable<UploadDashboard> {
-    return this.http.get<UploadDashboard>(this.path('/upload-dashboard'));
+  retryUpload(id: number): Observable<Record<string, unknown>> {
+    return this.http.post<Record<string, unknown>>(this.path(`/uploads/${id}/retry`), {});
+  }
+
+  getUploadDashboard(status = '', page = 1): Observable<UploadDashboard> {
+    return this.http.get<UploadDashboard>(this.path('/upload-dashboard'), {
+      params: new HttpParams().set('status', status).set('limit', 50).set('offset', (page - 1) * 50)
+    });
   }
 
   getDashboardSettings(): Observable<Record<string, unknown>> {

@@ -103,12 +103,12 @@ def _queue_trash(ctx: DashboardContext, task_id: str) -> Dict[str, Any]:
 
 
 @router.get("/api/rooms")
-async def list_rooms(ctx: DashboardContext = Depends(get_context)) -> list[Dict[str, Any]]:
+def list_rooms(ctx: DashboardContext = Depends(get_context)) -> list[Dict[str, Any]]:
     return [room.to_dict() for room in ctx.store.list_rooms()]
 
 
 @router.get("/api/slices")
-async def list_slices(
+def list_slices(
     room_id: str | None = None,
     ctx: DashboardContext = Depends(get_context),
 ) -> list[Dict[str, Any]]:
@@ -119,7 +119,7 @@ async def list_slices(
 
 
 @router.get("/api/tasks")
-async def list_tasks(
+def list_tasks(
     room_id: str | None = None,
     ctx: DashboardContext = Depends(get_context),
 ) -> list[Dict[str, Any]]:
@@ -133,7 +133,7 @@ async def list_tasks(
 
 
 @router.get("/api/source-recordings")
-async def list_source_recordings(
+def list_source_recordings(
     room_id: str | None = None,
     ctx: DashboardContext = Depends(get_context),
 ) -> list[Dict[str, Any]]:
@@ -148,7 +148,7 @@ async def list_source_recordings(
 
 
 @router.get("/api/source-recordings/{task_id}")
-async def get_source_recording(
+def get_source_recording(
     task_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -168,7 +168,7 @@ async def get_source_recording(
 
 
 @router.post("/api/source-recordings/{task_id}/missed-segments")
-async def create_missed_segment(
+def create_missed_segment(
     task_id: str,
     payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
@@ -208,7 +208,7 @@ async def create_missed_segment(
 
 
 @router.post("/api/source-recordings/{task_id}/review-complete")
-async def complete_source_review(
+def complete_source_review(
     task_id: str,
     payload: Dict[str, Any] | None = None,
     ctx: DashboardContext = Depends(get_context),
@@ -249,7 +249,7 @@ async def complete_source_review(
 
 
 @router.post("/api/source-recordings/{task_id}/trash")
-async def trash_source_recording(
+def trash_source_recording(
     task_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:

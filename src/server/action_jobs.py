@@ -26,6 +26,7 @@ SUPPORTED_ACTIONS = {
     "finalize_segment",
     "create_missed_segment",
     "trash_recording",
+    "retry_upload",
 }
 JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = ("pending", "processing", "done", "failed")
@@ -267,6 +268,18 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
             }
         )
 
+    if job["action"] == "retry_upload":
+        from src.db.conn import connect_readonly, requeue_failed_upload
+        with connect_readonly() as db:
+            row = db.execute("select * from upload_queue where id = ?", (int(job["payload"]["upload_id"]),)).fetchone()
+        if row is None:
+            raise ValueError("Upload item does not exist")
+        if row["status"] != "failed":
+            return {"status": "already_pending"}
+        if row["remote_filename"]:
+            raise ValueError("投稿结果需要人工核对，未自动重试")
+        return requeue_failed_upload(row["video_path"])
+
     from src.dashboard.source_workbench import (
         create_missed_segment,
         finalize_segment,
@@ -460,7 +473,7 @@ def _record_segment_job_state(
     *,
     failure: dict[str, str] | None = None,
 ) -> None:
-    if os.name != "nt":
+    if os.name != "nt" or job.get("action") == "retry_upload":
         return
     if not str(job.get("segment_id") or "").strip():
         _record_recording_job_state(videos_root, job, status, failure=failure)

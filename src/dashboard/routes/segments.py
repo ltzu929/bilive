@@ -54,7 +54,7 @@ def _ensure_segment_idle(ctx: DashboardContext, segment_id: str) -> None:
 
 
 @router.post("/api/segments/{segment_id}/manual-keep")
-async def segment_manual_keep(
+def segment_manual_keep(
     segment_id: str,
     payload: Dict[str, Any] | None = None,
     ctx: DashboardContext = Depends(get_context),
@@ -69,7 +69,7 @@ async def segment_manual_keep(
 
 
 @router.post("/api/segments/{segment_id}/finalize")
-async def segment_finalize(
+def segment_finalize(
     segment_id: str,
     payload: Dict[str, Any] | None = None,
     ctx: DashboardContext = Depends(get_context),
@@ -125,7 +125,7 @@ async def segment_finalize(
 
 
 @router.post("/api/segments/{segment_id}/approve-publish")
-async def segment_approve_publish(
+def segment_approve_publish(
     segment_id: str,
     payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
@@ -141,7 +141,7 @@ async def segment_approve_publish(
 
 
 @router.post("/api/segments/{segment_id}/drop")
-async def segment_drop(
+def segment_drop(
     segment_id: str,
     payload: Dict[str, Any] | None = None,
     ctx: DashboardContext = Depends(get_context),
@@ -156,7 +156,7 @@ async def segment_drop(
 
 
 @router.post("/api/segments/{segment_id}/range")
-async def segment_range(
+def segment_range(
     segment_id: str,
     payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
@@ -171,7 +171,7 @@ async def segment_range(
 
 
 @router.post("/api/segments/{segment_id}/retry-judge")
-async def segment_retry_judge(
+def segment_retry_judge(
     segment_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -179,7 +179,7 @@ async def segment_retry_judge(
 
 
 @router.post("/api/segments/{segment_id}/render")
-async def segment_render(
+def segment_render(
     segment_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -187,7 +187,7 @@ async def segment_render(
 
 
 @router.post("/api/segments/{segment_id}/subtitle-style")
-async def segment_subtitle_style(
+def segment_subtitle_style(
     segment_id: str,
     payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
@@ -206,7 +206,7 @@ async def segment_subtitle_style(
 
 
 @router.post("/api/segments/{segment_id}/reburn")
-async def segment_reburn(
+def segment_reburn(
     segment_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:

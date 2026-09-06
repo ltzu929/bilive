@@ -1,10 +1,11 @@
+import os
 import hashlib
 import json
 import zipfile
 from pathlib import Path
 
 
-WHEEL = Path("wheel/blrec-2.0.0b4+bilive.9-py3-none-any.whl")
+WHEEL = Path(os.environ.get("BILIVE_TEST_WHEEL", "wheel/blrec-2.0.0b4+bilive.9-py3-none-any.whl"))
 
 
 def test_dashboard_service_is_api_only():

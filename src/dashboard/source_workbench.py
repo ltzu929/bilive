@@ -23,7 +23,7 @@ from src.autoslice.danmaku_slice import (
     format_seconds_for_filename,
 )
 from src.burn.task_history import lock_task_history, read_task_history
-from src.dashboard.task_state import build_task_inventory, resolve_task_id
+from src.dashboard.task_state import build_task_inventory, resolve_task_id, _build_task
 from src.dashboard.errors import SegmentStateConflict
 from src.dashboard.source_lifecycle import (
     MISSED_SEGMENT_REASONS,
@@ -144,9 +144,9 @@ def build_source_recording_list(
     root = Path(videos_root).expanduser().resolve()
     names = room_names or {}
     items: list[dict[str, Any]] = []
-    for task in build_task_inventory(root, room_id=room_id):
+    for task in build_task_inventory(root, room_id=room_id, include_history=True):
         source = root / task["source_rel_path"]
-        history = read_task_history(source) or {}
+        history = task.pop("_history")
         segments = _normalize_segments(root, source, history.get("segments") or [])
         counts = _summary_counts(segments)
         lifecycle = build_lifecycle_view(root, task, history, segments)
@@ -177,23 +177,8 @@ def build_source_recording_detail(
     """Return one source recording with density points and candidate segments."""
     root = Path(videos_root).expanduser().resolve()
     source = resolve_task_id(root, task_id)
-    tasks = build_task_inventory(root, room_id=source.parent.name)
-    task = next((item for item in tasks if item["task_id"] == task_id), None)
-    if task is None:
-        source_rel = source.relative_to(root).as_posix()
-        task = {
-            "task_id": task_id,
-            "room_id": source.parent.name,
-            "room_name": source.parent.name,
-            "source_name": source.name,
-            "source_rel_path": source_rel,
-            "status": "unknown",
-            "source_size_mb": round(source.stat().st_size / (1024 * 1024), 1),
-            "updated_at": source.stat().st_mtime,
-            "message": "",
-        }
-
-    history = read_task_history(source) or {}
+    task = _build_task(source, source.parent, root, include_history=True)
+    history = task.pop("_history")
     segments = _normalize_segments(root, source, history.get("segments") or [])
     _apply_display_defaults(root, source, segments)
     counts = _summary_counts(segments)

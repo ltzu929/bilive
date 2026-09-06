@@ -124,6 +124,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       .pipe(
         switchMap((preferences) =>
           timer(0, preferences.refreshInterval * 1000).pipe(
+            filter(() => !document.hidden),
             switchMap(() =>
               this.api.getReviewStatus().pipe(catchError(() => {
                 this.observationError = '状态读取失败，显示上次结果';

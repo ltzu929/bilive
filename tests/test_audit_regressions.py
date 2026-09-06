@@ -127,8 +127,38 @@ def test_partial_ffmpeg_output_is_not_success(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_upload_page_is_bounded_and_read_only(tmp_path):
+    missing = tmp_path / "missing.db"
+    with pytest.raises(Exception):
+        conn.read_upload_page(db_path=missing)
+    assert not missing.exists()
+    db = tmp_path / "queue.db"
+    conn.migrate_upload_queue(db)
+    with conn.connect(db) as connection:
+        connection.executemany("insert into upload_queue(video_path,status) values (?, 'queued')", [(f"{i}.mp4",) for i in range(1000)])
+    items, total = conn.read_upload_page(limit=50, offset=50, db_path=db)
+    assert len(items) == 50 and total == 1000
+    assert items[0]["id"] > items[-1]["id"]
 
 
+@pytest.mark.anyio
+async def test_slow_worker_read_does_not_block_local_requests(tmp_path, dashboard_client):
+    import threading
+    entered, release = threading.Event(), threading.Event()
+    def slow():
+        entered.set()
+        release.wait(10)
+        return {"status": "unavailable"}
+    async with dashboard_client(tmp_path, remote_worker_status_reader=slow) as client:
+        pending = asyncio.create_task(client.get("/api/worker-trigger/status"))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            local = await asyncio.wait_for(client.get("/api/source-recordings"), 1)
+            assert local.status_code == 200
+            assert not pending.done()
+        finally:
+            release.set()
+            await pending
 
 
 def test_partial_recycle_recovers_frozen_manifest(tmp_path):
@@ -240,3 +270,27 @@ source "$1"
         assert any("restart bilive-dashboard.service" in line for line in commands)
         budget = sum(int(line.split()[0]) for line in commands)
         assert budget < 150
+
+
+@pytest.mark.parametrize("remote", ["", "already-on-cdn"])
+def test_upload_retry_does_not_repeat_unknown_posting(tmp_path, monkeypatch, remote):
+    db = tmp_path / "queue.db"
+    conn.migrate_upload_queue(db)
+    conn.insert_upload_queue("fixture.mp4", db)
+    with conn.connect(db) as connection:
+        connection.execute("update upload_queue set status = 'failed', remote_filename = ?", (remote,))
+        item_id = connection.execute("select id from upload_queue").fetchone()[0]
+    original_read = conn.connect_readonly
+    original_retry = conn.requeue_failed_upload
+    monkeypatch.setattr(conn, "connect_readonly", lambda: original_read(db))
+    monkeypatch.setattr(conn, "requeue_failed_upload", lambda path: original_retry(path, db))
+    job = {"action": "retry_upload", "execution_target": "windows", "payload": {"upload_id": item_id}}
+    if remote:
+        with pytest.raises(ValueError, match="人工核对"):
+            action_jobs._execute_action_job(tmp_path, job)
+    else:
+        action_jobs._execute_action_job(tmp_path, job)
+    with original_read(db) as connection:
+        row = connection.execute("select status, remote_filename from upload_queue").fetchone()
+    assert row[0] == ("failed" if remote else "queued")
+    assert row[1] == remote

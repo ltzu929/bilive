@@ -214,7 +214,8 @@ class StudioApiMiddleware:
         body = await _read_body(receive) if method not in {"GET", "HEAD"} else b""
         response_started = False
         try:
-            timeout = aiohttp.ClientTimeout(total=None)
+            is_media = scope.get("path", "").startswith(f"{self._prefix}/media/")
+            timeout = aiohttp.ClientTimeout(total=None if is_media else 60, connect=10)
             async with aiohttp.ClientSession(
                 timeout=timeout, auto_decompress=False
             ) as session:

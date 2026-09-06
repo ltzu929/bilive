@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 @router.get("/api/jobs/{job_id}")
-async def get_action_job(
+def get_action_job(
     job_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -33,7 +33,7 @@ async def get_action_job(
 
 
 @router.post("/api/tasks/{task_id}/requeue")
-async def task_requeue(
+def task_requeue(
     task_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -48,7 +48,7 @@ async def task_requeue(
 
 
 @router.post("/api/tasks/{task_id}/cancel-pending")
-async def task_cancel_pending(
+def task_cancel_pending(
     task_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -61,7 +61,7 @@ async def task_cancel_pending(
 
 
 @router.post("/api/tasks/{task_id}/mark-done")
-async def task_mark_done(
+def task_mark_done(
     task_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:

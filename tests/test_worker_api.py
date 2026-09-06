@@ -137,7 +137,7 @@ async def test_worker_api_reports_status():
             "pid": None,
             "owner_running": False,
         },
-        "dependencies": {"ready": True, "checks": {}},
+        "dependencies": {"status": "not_checked"},
         "llm": {
             "status": "idle",
             "provider": "mimo-v2.5",

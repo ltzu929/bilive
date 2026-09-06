@@ -97,10 +97,10 @@ def create_app(
             "upload": upload,
         }
 
-    def read_runtime_state() -> Dict[str, Any]:
+    def read_runtime_state(*, diagnostics: bool = False) -> Dict[str, Any]:
         return {
             **read_activity_state(),
-            "dependencies": read_preflight(),
+            "dependencies": read_preflight() if diagnostics else {"status": "not_checked"},
         }
 
     def touch_activity(app: FastAPI) -> None:
@@ -183,8 +183,8 @@ def create_app(
         return result
 
     @app.get("/api/worker/status")
-    async def get_worker_status() -> Dict[str, Any]:
-        return read_runtime_state()
+    def get_worker_status(diagnostics: bool = False) -> Dict[str, Any]:
+        return read_runtime_state(diagnostics=diagnostics)
 
     @app.post("/api/worker/stop")
     async def stop_worker_once() -> Dict[str, Any]:

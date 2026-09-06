@@ -42,6 +42,7 @@ _STATUS_MESSAGES: Dict[str, str] = {
 def build_task_inventory(
     videos_root: str | Path,
     room_id: Optional[str] = None,
+    *, include_history: bool = False,
 ) -> List[Dict[str, Any]]:
     """Build a normalized task list for all source recordings.
 
@@ -77,7 +78,7 @@ def build_task_inventory(
         )
 
         for source in sources:
-            task = _build_task(source, room_dir, root)
+            task = _build_task(source, room_dir, root, include_history=include_history)
             tasks.append(task)
 
     return tasks
@@ -107,7 +108,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
+def _build_task(source: Path, room_dir: Path, root: Path, *, include_history: bool = False) -> Dict[str, Any]:
     """Build a single task dict from a source .mp4 file."""
     source_name = source.name
     xml_path = source.with_suffix(".xml")
@@ -192,6 +193,8 @@ def _build_task(source: Path, room_dir: Path, root: Path) -> Dict[str, Any]:
         task["message"] = task["skip_reason"]
     else:
         task["processing_eligible"] = True
+    if include_history:
+        task["_history"] = history or {}
     return task
 
 

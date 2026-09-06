@@ -21,9 +21,10 @@
     </div>
 
     <nz-card nzTitle="投稿队列" class="upload-table-card">
-      <nz-table #uploadTable [nzData]="dashboard.items || []" [nzFrontPagination]="false" nzSize="small">
+      <label>状态<select [(ngModel)]="statusFilter" (ngModelChange)="changePage(1)"><option value="">全部</option><option value="staged">待确认</option><option value="queued">待上传</option><option value="failed">失败</option><option value="published">已发布</option></select></label>
+      <nz-table #uploadTable [nzTotal]="dashboard.filtered_total || 0" [nzPageSize]="50" [nzPageIndex]="page" (nzPageIndexChange)="changePage($event)" [nzData]="dashboard.items || []" [nzFrontPagination]="false" nzSize="small">
         <thead>
-          <tr><th>文件</th><th>房间</th><th>状态</th><th>尝试次数</th><th>错误</th><th>BVID</th></tr>
+          <tr><th>文件</th><th>房间</th><th>状态</th><th>尝试次数</th><th>错误</th><th>BVID</th><th>操作</th></tr>
         </thead>
         <tbody>
           <tr *ngFor="let item of uploadTable.data">
@@ -33,10 +34,12 @@
             <td>{{ item.attempts || 0 }}</td>
             <td class="error-cell">{{ item.last_error || '-' }}</td>
             <td>{{ item.bvid || '-' }}</td>
+            <td><a *ngIf="item.source_task_id && item.segment_id" routerLink="/studio/slices" [queryParams]="{source_task_id: item.source_task_id, segment_id: item.segment_id}">查看对应成片</a><button nz-button *ngIf="item.retry_allowed && item.id" (click)="retryUpload(item.id)" [disabled]="actionBusy">重试上传</button><span *ngIf="item.status === 'failed' && !item.retry_allowed">请先人工核对投稿结果</span></td>
           </tr>
         </tbody>
       </nz-table>
-      <nz-empty *ngIf="!(dashboard.items || []).length" nzNotFoundContent="暂无上传记录"></nz-empty>
+      <nz-alert *ngIf="dashboard.database?.startsWith('unavailable')" nzType="warning" nzMessage="上传数据库暂不可读取"></nz-alert>
+      <nz-empty *ngIf="dashboard.database === 'ready' && !(dashboard.items || []).length" nzNotFoundContent="暂无上传记录"></nz-empty>
       <p class="database-state">数据库：{{ dashboard.database || '未知' }}</p>
     </nz-card>
   </nz-spin>

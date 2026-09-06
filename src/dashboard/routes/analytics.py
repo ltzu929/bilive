@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("/api/slice-performance")
-async def get_slice_performance_panel() -> Dict[str, Any]:
+def get_slice_performance_panel() -> Dict[str, Any]:
     from src.db import conn
 
     if not conn.slice_performance_available():

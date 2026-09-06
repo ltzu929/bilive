@@ -25,7 +25,7 @@ def _process_feedback_directory(*args: Any, **kwargs: Any):
 
 
 @router.post("/api/refine/preview")
-async def refine_preview(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
+def refine_preview(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
     """Dry-run: count decisions and list what would be generated without writing files."""
     results = _process_feedback_directory(ctx.store.videos_root, enqueue_upload=False, dry_run=True)
     keep_count = sum(1 for r in results if r.decision == "keep")
@@ -52,7 +52,7 @@ async def refine_preview(ctx: DashboardContext = Depends(get_context)) -> Dict[s
 
 
 @router.post("/api/refine/run")
-async def refine_run(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
+def refine_run(ctx: DashboardContext = Depends(get_context)) -> Dict[str, Any]:
     """Execute refinement: generate clips for keep decisions, no upload queue by default."""
     results = _process_feedback_directory(ctx.store.videos_root, enqueue_upload=False)
     keep_count = sum(1 for r in results if r.decision == "keep")

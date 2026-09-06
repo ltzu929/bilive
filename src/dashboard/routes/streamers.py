@@ -31,7 +31,7 @@ def _profile_action(action):
 
 
 @router.get("/api/streamers/{room_id}/profile")
-async def get_streamer_profile(
+def get_streamer_profile(
     room_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
@@ -51,7 +51,7 @@ async def get_streamer_profile(
 
 
 @router.patch("/api/streamers/{room_id}/profile")
-async def update_streamer_profile(
+def update_streamer_profile(
     room_id: str,
     payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
@@ -76,7 +76,7 @@ async def update_streamer_profile(
 
 
 @router.get("/api/streamers/{room_id}/experiences")
-async def get_streamer_experiences(
+def get_streamer_experiences(
     room_id: str,
     ctx: DashboardContext = Depends(get_context),
 ) -> list[dict[str, Any]]:
@@ -86,7 +86,7 @@ async def get_streamer_experiences(
 
 
 @router.post("/api/streamers/{room_id}/recommendations/{recommendation_id}/apply")
-async def apply_streamer_recommendation_api(
+def apply_streamer_recommendation_api(
     room_id: str,
     recommendation_id: str,
     ctx: DashboardContext = Depends(get_context),
