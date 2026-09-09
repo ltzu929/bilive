@@ -712,6 +712,39 @@ async def test_start_slice_api_invokes_slice_starter(tmp_path, dashboard_client)
 
 
 @pytest.mark.anyio
+async def test_start_slice_api_queues_all_ready_recordings(
+    videos_root, write_source_recording, dashboard_client,
+):
+    sources = [
+        write_source_recording(name="22384516_20260524-12-57-08.mp4"),
+        write_source_recording(name="22384516_20260525-12-57-08.mp4"),
+        write_source_recording(room_id="8792912", name="8792912_20260525-12-57-08.mp4"),
+    ]
+    done = write_source_recording(name="22384516_20260523-12-57-08.mp4")
+    done.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+    trigger_calls = []
+
+    async with dashboard_client(
+        videos_root,
+        remote_worker_trigger=lambda pending: trigger_calls.append(pending)
+        or {"status": "accepted"},
+    ) as client:
+        response = await client.post("/api/slice/start")
+        repeated = await client.post("/api/slice/start")
+
+    assert response.status_code == 200
+    assert response.json()["queued"] == 3
+    assert response.json()["pending_tasks"] == 3
+    assert response.json()["deferred"] == 0
+    assert all(source.with_suffix(".mp4.pending").is_file() for source in sources)
+    assert not done.with_suffix(".mp4.pending").exists()
+    assert repeated.status_code == 200
+    assert repeated.json()["queued"] == 0
+    assert repeated.json()["pending_tasks"] == 3
+    assert trigger_calls == [3, 3]
+
+
+@pytest.mark.anyio
 async def test_start_slice_api_queues_selected_source_recording_only(
     videos_root,
     write_source_recording,

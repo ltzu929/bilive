@@ -10,6 +10,7 @@ from typing import Any
 
 from src.burn.task_history import write_task_history
 from src.config import MIN_VIDEO_SIZE
+from src.recording_paths import room_directories, room_identity, source_recordings
 from src.dashboard.task_state import resolve_task_id
 from src.server.action_jobs import _queue_lock
 
@@ -78,22 +79,13 @@ def start_slice_scan(
             skipped += 1
     else:
         candidates: list[Path] = []
-        for room_dir in sorted(root.iterdir(), key=lambda item: item.name):
-            if not room_dir.is_dir() or not room_dir.name.isdigit():
-                continue
-            for video_path in sorted(room_dir.glob("*.mp4"), key=lambda item: item.name):
+        for room_dir in room_directories(root):
+            for video_path in source_recordings(room_dir):
                 if not _is_queue_candidate(video_path):
                     skipped += 1
                     continue
                 candidates.append(video_path)
-        # The evening entry point handles the newest recording only.  The
-        # explicit task_id path remains available when the user wants to work
-        # through an older recording one at a time.
-        if candidates:
-            selected = max(
-                candidates,
-                key=lambda item: (item.stat().st_mtime, str(item)),
-            )
+        for selected in candidates:
             pending_path = _write_pending_marker(
                 selected,
                 root,
@@ -101,7 +93,6 @@ def start_slice_scan(
             )
             if pending_path is not None:
                 queued_paths.append(str(pending_path))
-            deferred = len(candidates) - 1
 
     return {
         "status": "processing" if processing else ("queued" if queued_paths or existing_pending else "empty"),
@@ -167,7 +158,7 @@ def _effective_slice_options(
 ) -> dict[str, Any] | None:
     from src.dashboard.source_lifecycle import profile_slice_options
 
-    profile = profile_slice_options(videos_root, video_path.parent.name)
+    profile = profile_slice_options(videos_root, room_identity(video_path.parent)[0])
     return {**profile, **(explicit or {})} or None
 
 
@@ -197,7 +188,7 @@ def _write_pending_marker_locked(video_path, videos_root, slice_options):
     rel_path = video_path.relative_to(videos_root).as_posix()
     marker_data: dict[str, Any] = {
         "video_rel_path": rel_path,
-        "room_id": video_path.parent.name,
+        "room_id": room_identity(video_path.parent)[0],
         "action": "slice",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "created_by": "dashboard",
@@ -227,7 +218,7 @@ def _write_pending_marker_locked(video_path, videos_root, slice_options):
         _task_id_for_source(video_path, videos_root),
         "processing",
         source_rel_path=rel_path,
-        room_id=video_path.parent.name,
+        room_id=room_identity(video_path.parent)[0],
         recorded_at=video_path.name,
     )
     return pending_path

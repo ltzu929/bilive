@@ -53,6 +53,17 @@ referer 兜底，因此录制端其他 `/api` 路由不会被改变。
 - `/studio/slices` 使用 bilive dashboard 的 `/api/source-recordings`，展示已经
   落盘的源录播及其切片候选。
 
+录制目录使用 `Videos/<roomid> - <uname>/`，房间 API 中的 `room_id` 仍为数字。
+工作台兼容已有数字目录，识别标准时间戳及 `blive_` 命名的 MP4；下拉框和录播
+列表优先使用主播档案名称，其次使用目录中的主播名。文件与任务 ID 保留真实相对路径。
+
+录制端收到 `VideoPostprocessingCompletedEvent` 后，将 FLV 原路径写入现有
+`.bilive-jobs` 队列的 `remux_recording` 任务。Windows Worker 在同一目录转封装，
+检查 MP4 音视频流、时长及首中尾解码，验证成功后才删除源 FLV，保留 XML 等边车。
+转换失败保留 FLV 和失败任务。Windows 离线时队列保留，录制端每分钟重新尝试唤醒。
+`settings.toml` 的原生 `remux_to_mp4`、`inject_extra_metadata` 均关闭，
+`delete_source = "never"` 只约束 Pi 原生后处理；自动转换与删除由 Windows 执行。
+
 录制任务启动采用并发加载。单个房间的弹幕 WebSocket 或 B 站 API 限流重试时，不能
   阻塞其他已配置房间进入原生任务列表；这不会删除或迁移 `Videos/` 中的历史文件。
 

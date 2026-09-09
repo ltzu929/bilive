@@ -16,13 +16,12 @@ from typing import Any, Dict, List, Optional
 
 from src.burn.task_history import read_task_history, write_task_history
 from src.config import MIN_VIDEO_SIZE
+from src.recording_paths import room_directories, room_identity, source_recordings
 
 
 # Matches slice output names like "120s_22384516_20260527-12-55-32.mp4"
 _SLICE_OUTPUT_RE = re.compile(r"^\d+(?:\.\d+)?s_.+\.mp4$")
 
-# Source recording pattern: {room_id}_{YYYYMMDD-HH-MM-SS}.mp4
-_SOURCE_RE = re.compile(r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}(?:_\(\d+\))?\.mp4$")
 MIN_SOURCE_RECORDING_SIZE_MB = MIN_VIDEO_SIZE
 
 # Status descriptions in Chinese
@@ -59,23 +58,8 @@ def build_task_inventory(
 
     tasks: List[Dict[str, Any]] = []
 
-    room_dirs = sorted(
-        [d for d in root.iterdir() if d.is_dir() and d.name.isdigit()],
-        key=lambda d: d.name,
-    )
-
-    for room_dir in room_dirs:
-        if room_id is not None and room_dir.name != room_id:
-            continue
-
-        sources = sorted(
-            [
-                f
-                for f in room_dir.glob("*.mp4")
-                if _SOURCE_RE.match(f.name)
-            ],
-            key=lambda f: f.name,
-        )
+    for room_dir in room_directories(root, room_id):
+        sources = source_recordings(room_dir)
 
         for source in sources:
             task = _build_task(source, room_dir, root, include_history=include_history)
@@ -169,8 +153,8 @@ def _build_task(source: Path, room_dir: Path, root: Path, *, include_history: bo
 
     task: Dict[str, Any] = {
         "task_id": _encode_task_id(source_rel),
-        "room_id": room_dir.name,
-        "room_name": room_dir.name,  # TODO: resolve UP name in future milestone
+        "room_id": room_identity(room_dir)[0],
+        "room_name": room_identity(room_dir)[1],
         "source_name": source_name,
         "source_rel_path": source_rel,
         "status": status,
@@ -291,7 +275,7 @@ def requeue_task(videos_root: str | Path, task_id: str) -> Dict[str, Any]:
     rel = source.relative_to(root).as_posix()
     marker = {
         "video_rel_path": rel,
-        "room_id": source.parent.name,
+        "room_id": room_identity(source.parent)[0],
         "action": "slice",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "created_by": "dashboard-requeue",
@@ -344,7 +328,7 @@ def mark_done_task(videos_root: str | Path, task_id: str) -> Dict[str, Any]:
     rel = source.relative_to(root).as_posix()
     marker = {
         "video_rel_path": rel,
-        "room_id": source.parent.name,
+        "room_id": room_identity(source.parent)[0],
         "action": "skip",
         "created_by": "dashboard-mark-done",
         "processed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

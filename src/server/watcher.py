@@ -8,6 +8,7 @@ import json
 import os
 import time
 from pathlib import Path
+from src.recording_paths import room_identity
 from typing import Callable
 
 from src.burn.task_history import write_task_history
@@ -183,7 +184,7 @@ def _mark_processing_skipped(
         _task_id_for_source(video, root),
         "source_review",
         source_rel_path=video.relative_to(root).as_posix(),
-        room_id=video.parent.name,
+        room_id=room_identity(video.parent)[0],
         recorded_at=video.name,
     )
 
@@ -323,7 +324,7 @@ def _process_pending_root(root: Path) -> int:
                 if pipeline_result.get("segments")
                 else "source_review",
                 source_rel_path=video.relative_to(root).as_posix(),
-                room_id=video.parent.name,
+                room_id=room_identity(video.parent)[0],
                 recorded_at=video.name,
             )
             processed += 1
@@ -353,7 +354,7 @@ def _process_pending_root(root: Path) -> int:
 
                     record_technical_experience(
                         root,
-                        room_id=video.parent.name,
+                        room_id=room_identity(video.parent)[0],
                         task_id=_task_id_for_source(video, root),
                         source_rel_path=video.relative_to(root).as_posix(),
                         segment={},
@@ -408,7 +409,7 @@ def _record_pipeline_technical_experiences(
         try:
             record_technical_experience(
                 root,
-                room_id=video.parent.name,
+                room_id=room_identity(video.parent)[0],
                 task_id=_task_id_for_source(video, root),
                 source_rel_path=video.relative_to(root).as_posix(),
                 segment=segment,

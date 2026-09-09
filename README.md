@@ -30,6 +30,12 @@ Bilive 是自维护的 B 站直播录制、切片分析、字幕处理和投稿�
 
 Pi 不执行 ffmpeg、faster-whisper、MiMo、字幕烧录或上传。切片页面写入 `Videos/*.mp4.pending` 或 `Videos/.bilive-jobs/*.pending.json`，再通过 SSH 触发 Windows Worker API。
 
+录制文件结束后，录制端自动提交 `remux_recording` 到同一 Windows 队列。在原来的
+`房间号 - UP名字` 目录中转封装为 MP4，验证音视频、时长及首中尾解码成功后自动删除
+源 FLV；失败则保留 FLV 和失败任务。工作台只展示 MP4。Pi 原生后处理的转封装和
+元数据注入应关闭，`delete_source = "never"` 仅表示 Pi 不直接删源文件；
+验证后的删除由 Windows 执行。Windows 离线时待办保留，恢复后自动继续。
+
 浏览器统一从 `2233` 的原生 blrec Angular 外壳进入；迁移期间切片、上传和设置页面
 通过 `/studio-api/*` 同源网关访问内部 `2234/api/*`，因此公开入口只需要
 Tailscale Serve `2233`；`2234` 仅提供 API，不再托管页面。

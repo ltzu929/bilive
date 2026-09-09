@@ -11,6 +11,7 @@ import ctypes
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+from src.recording_paths import room_identity
 import re
 import time
 from typing import Any, Callable
@@ -237,7 +238,7 @@ def trash_recording(
     )
 
     source_rel_path = str(plan.get("source_rel_path") or "")
-    room_id = Path(source_rel_path).parent.name
+    room_id = room_identity(Path(source_rel_path).parent)[0]
     mutate_recording_state(
         root,
         task_id,

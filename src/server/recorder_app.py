@@ -23,6 +23,9 @@ if install_danmu_api_fix():
     )
 
 from blrec.web import app as blrec_app  # noqa: E402
+from src.server.recording_remux import install_recording_remux
+
+install_recording_remux(blrec_app, os.environ["BLREC_OUT_DIR"])
 
 # Keep only the Studio API and media routes reachable through the recorder
 # origin.  The page itself is always the native Angular application shipped by

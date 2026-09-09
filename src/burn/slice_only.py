@@ -5,6 +5,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from pathlib import Path
+from src.recording_paths import room_identity
 import re
 import time
 
@@ -473,7 +474,7 @@ def slice_only(video_path, **_slice_options):
     diagnostics = []
     original_video_path = str(video_path)
     source_name = Path(original_video_path).name
-    room_id = Path(original_video_path).parent.name
+    room_id = room_identity(Path(original_video_path).parent)[0]
     xml_path = original_video_path[:-4] + ".xml"
     from src.dashboard.source_lifecycle import profile_context_for_mimo
     from src.dashboard.source_lifecycle import profile_subtitle_style

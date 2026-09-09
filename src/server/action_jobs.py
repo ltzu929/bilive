@@ -20,6 +20,7 @@ from src.server.worker_lock import (
 
 
 SUPPORTED_ACTIONS = {
+    "remux_recording",
     "retry_judge",
     "render_segment",
     "reburn_subtitles",
@@ -268,6 +269,10 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
             }
         )
 
+    if job["action"] == "remux_recording":
+        from src.server.recording_remux import remux_completed_recording
+        return remux_completed_recording(videos_root, job["payload"])
+
     if job["action"] == "retry_upload":
         from src.db.conn import connect_readonly, requeue_failed_upload
         with connect_readonly() as db:
@@ -473,7 +478,7 @@ def _record_segment_job_state(
     *,
     failure: dict[str, str] | None = None,
 ) -> None:
-    if os.name != "nt" or job.get("action") == "retry_upload":
+    if os.name != "nt" or job.get("action") in {"retry_upload", "remux_recording"}:
         return
     if not str(job.get("segment_id") or "").strip():
         _record_recording_job_state(videos_root, job, status, failure=failure)

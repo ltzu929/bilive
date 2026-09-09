@@ -232,7 +232,8 @@ def recover_recording(
             "validation": existing,
         }
 
-    if result["source_bytes"] < MIN_RECOVERABLE_FLV_BYTES:
+    if (result["source_bytes"] < MIN_RECOVERABLE_FLV_BYTES
+            and not probe_media(source).get("valid")):
         if execute and delete_invalid:
             source.unlink(missing_ok=True)
             if target.exists() and not existing.get("valid"):

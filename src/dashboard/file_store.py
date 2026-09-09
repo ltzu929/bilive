@@ -12,9 +12,8 @@ from src.dashboard.schemas import VALID_DECISIONS, RoomItem, SliceItem
 
 
 SLICE_NAME_RE = re.compile(r"^(?P<start>\d+(?:\.\d+)?)s_(?P<source>.+)\.(mp4|flv)$")
-SOURCE_NAME_RE = re.compile(
-    r"^\d+_\d{8}-\d{2}-\d{2}-\d{2}(?:_\(\d+\))?\.mp4$"
-)
+from src.recording_paths import SOURCE_NAME_RE, room_directories, room_identity
+
 
 
 class DashboardFileStore:
@@ -25,22 +24,22 @@ class DashboardFileStore:
     def list_rooms(self) -> List[RoomItem]:
         if not self.videos_root.is_dir():
             return []
-        rooms = [
-            RoomItem(room_id=path.name, name=self._discover_room_name(path))
-            for path in self.videos_root.iterdir()
-            if path.is_dir() and path.name.isdigit()
-        ]
-        return sorted(rooms, key=lambda room: room.room_id)
+        from src.dashboard.source_lifecycle import read_streamer_profile
+
+        rooms = {}
+        for path in room_directories(self.videos_root):
+            room_id, directory_name = room_identity(path)
+            profile = read_streamer_profile(self.videos_root, room_id)
+            name = str(profile.get("display_name") or "").strip()
+            name = name or (directory_name if directory_name != room_id else self._discover_room_name(path))
+            if room_id not in rooms or name != room_id:
+                rooms[room_id] = RoomItem(room_id=room_id, name=name)
+        return sorted(rooms.values(), key=lambda room: room.room_id)
 
     def list_slices(self, room_id: str | None = None) -> List[SliceItem]:
-        rooms: Iterable[Path]
         if room_id:
-            rooms = [self._safe_room_dir(room_id)]
-        else:
-            rooms = [
-                self.videos_root / room.room_id
-                for room in self.list_rooms()
-            ]
+            self._safe_room_dir(room_id)
+        rooms = room_directories(self.videos_root, room_id)
 
         items: List[SliceItem] = []
         for room_dir in rooms:
@@ -121,7 +120,7 @@ class DashboardFileStore:
         item = SliceItem(
             id=self._encode_path(path),
             media_id=self._encode_path(path),
-            room_id=path.parent.name,
+            room_id=room_identity(path.parent)[0],
             name=path.name,
             path=str(path),
             source_recording=str(source_recording),

@@ -20,7 +20,7 @@ def test_start_slice_scan_writes_pending_markers_for_pc_worker(tmp_path):
     marker = json.loads(pending_path.read_text(encoding="utf-8"))
     assert result["status"] == "queued"
     assert result["queued"] == 1
-    assert result["skipped"] == 1
+    assert result["skipped"] == 0  # Generated slices are outside the source scan.
     assert marker["video_rel_path"] == "22384516/22384516_20260524-12-57-08.mp4"
     assert marker["room_id"] == "22384516"
     assert marker["action"] == "slice"
@@ -53,7 +53,7 @@ def test_start_slice_scan_queues_only_requested_source_recording(tmp_path):
     assert not other.with_suffix(".mp4.pending").exists()
 
 
-def test_start_slice_scan_defaults_to_newest_recording_only(tmp_path):
+def test_start_slice_scan_defaults_to_all_ready_recordings(tmp_path):
     videos = tmp_path / "Videos"
     room = videos / "22384516"
     room.mkdir(parents=True)
@@ -67,9 +67,10 @@ def test_start_slice_scan_defaults_to_newest_recording_only(tmp_path):
 
     result = slice_control.start_slice_scan(videos_root=videos)
 
-    assert result["queued"] == 1
-    assert result["deferred"] == 1
-    assert not older.with_suffix(".mp4.pending").exists()
+    assert result["queued"] == 2
+    assert result["pending_tasks"] == 2
+    assert result["deferred"] == 0
+    assert older.with_suffix(".mp4.pending").is_file()
     assert newer.with_suffix(".mp4.pending").is_file()
 
 def test_start_slice_scan_reports_empty_queue_when_nothing_is_ready(tmp_path):

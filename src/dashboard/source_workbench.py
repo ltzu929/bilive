@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+from src.recording_paths import room_identity
 import re
 import threading
 import time
@@ -387,7 +388,7 @@ def prepare_segment_finalize(
         elif str(segment.get("_subtitle_style_source") or "") == "clip":
             style = SubtitleStyle.from_mapping(segment.get("subtitle_style"))
         else:
-            profile_style = profile_subtitle_style(root, source.parent.name)
+            profile_style = profile_subtitle_style(root, room_identity(source.parent)[0])
             if profile_style:
                 style = SubtitleStyle.from_mapping(profile_style)
                 segment["_subtitle_style_source"] = "profile"
@@ -497,7 +498,7 @@ def record_segment_action_state(
             _root, source, failed_segment = _read_segment(videos_root, segment_id)
             record_technical_experience(
                 _root,
-                room_id=source.parent.name,
+                room_id=room_identity(source.parent)[0],
                 task_id=_task_id_for_source(source, _root),
                 source_rel_path=source.relative_to(_root).as_posix(),
                 segment=failed_segment,
@@ -709,7 +710,7 @@ def finalize_segment(
             title=str(segment.get("title") or final_path.stem),
             desc=str(segment.get("description") or ""),
             tag=_segment_tags(segment),
-            source=f"https://live.bilibili.com/{source.parent.name}",
+            source=f"https://live.bilibili.com/{room_identity(source.parent)[0]}",
             source_task_id=_task_id_for_source(source, root),
             segment_id=segment_id,
         )
@@ -910,7 +911,7 @@ def prepare_missed_segment(
 
     root = Path(videos_root).expanduser().resolve()
     source = resolve_task_id(root, task_id)
-    tasks = build_task_inventory(root, room_id=source.parent.name)
+    tasks = build_task_inventory(root, room_id=room_identity(source.parent)[0])
     task = next((item for item in tasks if item.get("task_id") == task_id), None)
     if task is None:
         raise FileNotFoundError(f"Source recording not found: {task_id}")
@@ -971,7 +972,7 @@ def prepare_missed_segment(
         task_id,
         "source_review",
         source_rel_path=source.relative_to(root).as_posix(),
-        room_id=source.parent.name,
+        room_id=room_identity(source.parent)[0],
     )
     return _normalize_segments(root, source, [segment])[0]
 
@@ -1036,7 +1037,7 @@ def prepare_source_review_completion(
     """
     root = Path(videos_root).expanduser().resolve()
     source = resolve_task_id(root, task_id)
-    tasks = build_task_inventory(root, room_id=source.parent.name)
+    tasks = build_task_inventory(root, room_id=room_identity(source.parent)[0])
     task = next((item for item in tasks if item.get("task_id") == task_id), None)
     if task is None:
         raise FileNotFoundError(f"Source recording not found: {task_id}")
@@ -1108,13 +1109,13 @@ def prepare_source_review_completion(
         task_id,
         "review_complete",
         source_rel_path=source_rel_path,
-        room_id=source.parent.name,
+        room_id=room_identity(source.parent)[0],
         recorded_at=str(task.get("recorded_at") or ""),
         completion=completion,
     )
     experiences = record_review_experiences(
         root,
-        room_id=source.parent.name,
+        room_id=room_identity(source.parent)[0],
         task_id=task_id,
         source_rel_path=source_rel_path,
         segments=segments,
@@ -1226,10 +1227,10 @@ def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, A
         end = _float(segment.get("end_seconds"))
         danmaku_text = extract_danmaku_text(str(source.with_suffix(".xml")), start, end)
         analyze_kwargs: dict[str, Any] = {"danmaku_text": danmaku_text}
-        guidance = profile_context_for_mimo(root, source.parent.name)
+        guidance = profile_context_for_mimo(root, room_identity(source.parent)[0])
         if guidance:
             analyze_kwargs["guidance"] = guidance
-        result = analyze_candidate(str(candidate), source.parent.name, **analyze_kwargs)
+        result = analyze_candidate(str(candidate), room_identity(source.parent)[0], **analyze_kwargs)
         segment["judge_status"] = result.judge_status or (
             "keep" if result.retain_recommendation else "drop"
         )
@@ -1893,7 +1894,7 @@ def _mutate_segment(
                     str(task.get("task_id") or ""),
                     "candidate_review",
                     source_rel_path=source.relative_to(root).as_posix(),
-                    room_id=source.parent.name,
+                    room_id=room_identity(source.parent)[0],
                     recorded_at=str(task.get("recorded_at") or ""),
                 )
                 return _normalize_segments(root, source, [updated])[0]
@@ -1932,7 +1933,7 @@ def _apply_profile_metadata(
     payload: dict[str, Any],
 ) -> None:
     """Apply streamer defaults only when this clip has no explicit edit."""
-    profile = read_streamer_profile(root, source.parent.name)
+    profile = read_streamer_profile(root, room_identity(source.parent)[0])
     if (
         "tags" not in payload
         and not segment.get("tags")
@@ -1958,7 +1959,7 @@ def _apply_display_defaults(
     from src.burn.subtitle_burn import SubtitleStyle
     from src.config import default_subtitle_style
 
-    profile_style = profile_subtitle_style(root, source.parent.name)
+    profile_style = profile_subtitle_style(root, room_identity(source.parent)[0])
     for segment in segments:
         source_name = str(segment.get("_subtitle_style_source") or "")
         if source_name == "clip" and isinstance(segment.get("subtitle_style"), dict):
@@ -2098,6 +2099,9 @@ def _recorded_at(source_name: str) -> str:
         Path(str(source_name)).name,
     )
     if not match:
+        match = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})", source_name)
+        if match:
+            return f"{match[1]} {match[2]}:{match[3]}:{match[4]}"
         return ""
     date = match.group("date")
     return (

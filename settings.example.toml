@@ -8,7 +8,7 @@ enable_monitor = true
 enable_recorder = false
 
 [output]
-path_template = "{roomid}/{roomid}_{year}{month}{day}-{hour}-{minute}-{second}"
+path_template = "{roomid} - {uname}/{roomid}_{year}{month}{day}-{hour}-{minute}-{second}"
 filesize_limit = 0
 duration_limit = 0
 out_dir = "./Videos"
@@ -47,8 +47,10 @@ save_cover = false
 cover_save_strategy = "default"
 
 [postprocessing]
-remux_to_mp4 = true
-inject_extra_metadata = true
+# Windows action queue remuxes completed FLVs, validates MP4, then deletes FLV.
+# Disable recorder-side remux/injection so the Pi only records and queues jobs.
+remux_to_mp4 = false
+inject_extra_metadata = false
 delete_source = "never"
 
 [space]
