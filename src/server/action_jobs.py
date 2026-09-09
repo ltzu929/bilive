@@ -8,7 +8,7 @@ import re
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -275,7 +275,7 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
 
     if job["action"] == "retry_upload":
         from src.db.conn import connect_readonly, requeue_failed_upload
-        with connect_readonly() as db:
+        with closing(connect_readonly()) as db:
             row = db.execute("select * from upload_queue where id = ?", (int(job["payload"]["upload_id"]),)).fetchone()
         if row is None:
             raise ValueError("Upload item does not exist")

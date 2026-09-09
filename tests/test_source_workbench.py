@@ -826,6 +826,48 @@ def test_update_segment_subtitle_style_persists_mapping(tmp_path):
     assert history["segments"][0]["subtitle_style"]["font_size"] == 26
 
 
+def test_update_subtitle_style_with_windows_queue_path_withdraws_staged_final(
+    tmp_path,
+):
+    from src.db import conn
+
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    final = videos / "22384516" / "preview_final.mp4"
+    final.write_bytes(b"final")
+    history_path = source.with_suffix(".mp4.task.json")
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    history["segments"][0].update(
+        {
+            "artifacts": {
+                "final_output": {
+                    "rel_path": "22384516/preview_final.mp4",
+                }
+            },
+            "upload_status": "awaiting_publish",
+            "preview_available": True,
+        }
+    )
+    history_path.write_text(
+        json.dumps(history, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    windows_path = r"D:\alldata\pi\bilive\Videos\22384516\preview_final.mp4"
+    conn.stage_upload_queue(windows_path)
+
+    updated = source_workbench.update_segment_subtitle_style(
+        videos,
+        "seg_keep",
+        {"font_size": 26, "margin_v": 80, "alignment": 8, "outline": 2},
+    )
+
+    assert updated["subtitle_style"]["font_size"] == 26
+    assert updated["upload_status"] == "not_queued"
+    assert conn.get_upload_item(windows_path) is None
+    assert updated["artifacts"]["final_output"]["rel_path"] == ""
+    assert final.exists()
+
+
 def test_reburn_uses_canonical_finalize(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(source_workbench, "finalize_segment", lambda root, segment: calls.append((root, segment)) or {"upload_status": "awaiting_publish"})

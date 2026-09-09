@@ -4,7 +4,8 @@ import logging
 import os
 import sqlite3
 import time
-from pathlib import Path
+from contextlib import closing
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 
@@ -130,11 +131,33 @@ def _fetch_item(
     db: sqlite3.Connection,
     video_path: str,
 ) -> dict[str, Any] | None:
+    path = str(video_path)
     row = db.execute(
         "select * from upload_queue where video_path = ?",
-        (str(video_path),),
+        (path,),
     ).fetchone()
-    return dict(row) if row else None
+    if row:
+        return dict(row)
+
+    # The Windows worker writes absolute Windows paths to the shared queue,
+    # while the Pi dashboard resolves the same artifact under its local
+    # Videos root. Match the shared room directory and filename only when
+    # that identity is unique; an ambiguous match must remain invisible.
+    name, room = _upload_path_parts(path)
+    if not name or not room:
+        return None
+    matches = [
+        candidate
+        for candidate in db.execute("select * from upload_queue").fetchall()
+        if _upload_path_parts(candidate["video_path"]) == (name, room)
+    ]
+    return dict(matches[0]) if len(matches) == 1 else None
+
+
+def _upload_path_parts(value: str) -> tuple[str, str]:
+    text = str(value or "")
+    path = PureWindowsPath(text) if "\\" in text else Path(text)
+    return path.name or "", path.parent.name or ""
 
 
 def connect_readonly(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -151,7 +174,7 @@ def read_upload_page(*, status: str = "", limit: int = 50, offset: int = 0, db_p
         raise ValueError("Invalid upload page")
     clause = "where status = ?" if status else ""
     args = (status,) if status else ()
-    with connect_readonly(db_path) as db:
+    with closing(connect_readonly(db_path)) as db:
         total = db.execute(f"select count(*) from upload_queue {clause}", args).fetchone()[0]
         rows = db.execute(f"select * from upload_queue {clause} order by id desc limit ? offset ?",
                           (*args, limit, offset)).fetchall()
@@ -162,14 +185,14 @@ def get_upload_item(
     video_path: str,
     db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    with connect_readonly(db_path) as db:
+    with closing(connect_readonly(db_path)) as db:
         return _fetch_item(db, video_path)
 
 
 def list_upload_queue(
     db_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    with connect_readonly(db_path) as db:
+    with closing(connect_readonly(db_path)) as db:
         rows = db.execute("select * from upload_queue order by id").fetchall()
     return [dict(row) for row in rows]
 
@@ -242,9 +265,9 @@ def stage_upload_queue(
                     next_attempt_at = 0,
                     last_error = '',
                     updated_at = ?
-                where video_path = ? and status = 'failed'
+                where id = ? and status = 'failed'
                 """,
-                (now, path),
+                (now, item["id"]),
             )
             item = _fetch_item(db, path)
         assert item is not None
@@ -273,9 +296,9 @@ def activate_staged_upload(
                 """
                 update upload_queue
                 set status = ?, locked = 0, updated_at = ?
-                where video_path = ? and status = 'staged'
+                where id = ? and status = 'staged'
                 """,
-                (next_status, now, path),
+                (next_status, now, item["id"]),
             )
             item = _fetch_item(db, path)
         return item
@@ -305,9 +328,9 @@ def requeue_failed_upload(
                 next_attempt_at = 0,
                 last_error = '',
                 updated_at = ?
-            where video_path = ? and status = 'failed'
+            where id = ? and status = 'failed'
             """,
-            (next_status, updated_at, str(video_path)),
+            (next_status, updated_at, item["id"]),
         )
         return _fetch_item(db, video_path)
 
@@ -592,7 +615,7 @@ def get_upload_queue_counts(
     db_path: str | Path | None = None,
 ) -> dict[str, int]:
     counts = {status: 0 for status in UPLOAD_STATUSES}
-    with connect_readonly(db_path) as db:
+    with closing(connect_readonly(db_path)) as db:
         rows = db.execute(
             "select status, count(*) as count from upload_queue group by status"
         ).fetchall()
@@ -605,14 +628,20 @@ def get_upload_queue_counts(
 
 
 def withdraw_staged_upload(video_path: str, db_path: str | Path | None = None) -> bool:
-    """Withdraw only an unactivated row; serialize with activation and claim."""
-    with connect(db_path) as db:
-        db.execute("begin immediate")
-        cursor = db.execute(
-            "delete from upload_queue where video_path = ? and status = 'staged' "
-            "and coalesce(remote_filename, '') = ''", (str(video_path),)
-        )
-        return cursor.rowcount == 1
+    """Withdraw only an unactivated row; the status predicate closes races."""
+    db = connect(db_path)
+    try:
+        with db:
+            item = _fetch_item(db, video_path)
+            if item is None:
+                return False
+            cursor = db.execute(
+                "delete from upload_queue where id = ? and status = 'staged' "
+                "and coalesce(remote_filename, '') = ''", (item["id"],)
+            )
+            return cursor.rowcount == 1
+    finally:
+        db.close()
 
 
 def delete_upload_queue(

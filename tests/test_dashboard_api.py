@@ -415,6 +415,39 @@ def _write_source_workbench_fixture(videos):
 
 
 @pytest.mark.anyio
+async def test_subtitle_style_api_persists_without_windows_worker(
+    videos_root, dashboard_client
+):
+    _write_source_workbench_fixture(videos_root)
+
+    async with dashboard_client(videos_root) as client:
+        response = await client.post(
+            "/api/segments/seg1/subtitle-style",
+            json={
+                "font_name": "Noto Sans SC",
+                "font_size": 20,
+                "margin_v": 30,
+                "alignment": 2,
+                "outline": 2,
+                "primary_colour": "&H00FFFFFF",
+                "outline_colour": "&H00000000",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["subtitle_style"]["margin_v"] == 30
+    assert body["subtitle_style"]["alignment"] == 2
+    assert body["upload_status"] == "not_queued"
+
+    history_path = next(videos_root.rglob("*.mp4.task.json"))
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    segment = history["segments"][0]
+    assert segment["subtitle_style"]["margin_v"] == 30
+    assert segment["revision"] == 1
+
+
+@pytest.mark.anyio
 async def test_source_recordings_api_lists_summary_counts(videos_root, dashboard_client):
     _write_source_workbench_fixture(videos_root)
 

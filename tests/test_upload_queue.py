@@ -33,6 +33,20 @@ def test_staged_upload_is_invisible_until_activation(tmp_path):
     assert peek_next_upload(db_path)["video_path"] == "clip.mp4"
 
 
+def test_dashboard_path_form_matches_windows_queue_path(tmp_path):
+    db_path = tmp_path / "data.db"
+    migrate_upload_queue(db_path)
+    windows_path = r"D:\alldata\pi\bilive\Videos\22384516\clip.mp4"
+    dashboard_path = "/mnt/win/bilive/Videos/22384516/clip.mp4"
+
+    staged = stage_upload_queue(windows_path, db_path=db_path)
+
+    assert get_upload_item(dashboard_path, db_path)["id"] == staged["id"]
+    activated = activate_staged_upload(dashboard_path, db_path=db_path)
+    assert activated["status"] == "queued"
+    assert get_upload_item(dashboard_path, db_path)["status"] == "queued"
+
+
 def create_legacy_queue(db_path, rows):
     with sqlite3.connect(db_path) as db:
         db.execute(

@@ -9,6 +9,7 @@ the standard context dependency.
 
 from __future__ import annotations
 
+from contextlib import closing
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -54,7 +55,7 @@ def retry_upload(item_id: int, ctx: DashboardContext = Depends(get_context)) -> 
     from src.server.action_jobs import enqueue_action_job, SegmentActionConflict
     if item_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid upload id")
-    with connect_readonly() as db:
+    with closing(connect_readonly()) as db:
         row = db.execute("select * from upload_queue where id = ?", (item_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Upload item not found")

@@ -17,6 +17,7 @@ import {
   switchMap,
   take,
   takeUntil,
+  timeout,
 } from 'rxjs/operators';
 
 import {
@@ -35,6 +36,8 @@ type RangeBoundary = 'start' | 'end';
 const draftFields = ['titleDraft', 'descriptionDraft', 'tagsDraft', 'qualityReasonDraft', 'startDraft', 'endDraft', 'subtitleFontName', 'subtitleFontSize', 'subtitleMarginV', 'subtitleAlignment', 'subtitleOutline', 'subtitleTextColor', 'subtitleOutlineColor'] as const;
 
 type QueueOrder = 'newest' | 'oldest' | 'grouped';
+
+const SEGMENT_ACTION_TIMEOUT_MS = 45_000;
 
 @Component({
   selector: 'app-studio-slices',
@@ -946,7 +949,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     const key = `${taskId}:${segmentId}`;
     const submitted = this.draftValues();
     this.busySegments.add(segmentId);
-    this.api.segmentAction(segmentId, action, payload).pipe(takeUntil(this.destroyed)).subscribe({
+    this.api.segmentAction(segmentId, action, payload).pipe(
+      timeout(SEGMENT_ACTION_TIMEOUT_MS),
+      takeUntil(this.destroyed),
+    ).subscribe({
       next: (result) => {
         if (key === this.draftKey) {
           const accepted = action === 'finalize' ? [...draftFields]
@@ -1075,6 +1081,9 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   private describeError(error: any): string {
+    if (error?.name === 'TimeoutError') {
+      return '操作请求超时，结果未确认；请刷新后核对当前版本，再继续操作';
+    }
     return String(error?.error?.detail || error?.message || '工作台接口不可用');
   }
 }

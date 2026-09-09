@@ -1,11 +1,12 @@
 import { fakeAsync, tick } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { NEVER, of, throwError } from 'rxjs';
 import { StudioSlicesComponent } from './studio-slices.component';
 import { StudioSegment } from './studio-api.service';
 
 describe('Studio review behavior', () => {
   let component: StudioSlicesComponent;
   let api: any;
+  let message: any;
   const a: StudioSegment = {segment_id: 'a', title: 'A', start_seconds: 1.9, end_seconds: 4.8,
     revision: 1, final_media_id: 'final-a', upload_status: 'awaiting_publish'};
   const b: StudioSegment = {segment_id: 'b', title: 'B', start_seconds: 8, end_seconds: 12, revision: 1};
@@ -18,7 +19,8 @@ describe('Studio review behavior', () => {
       getRooms: () => of([]),
       getSourceRecordings: () => of([]),
     };
-    component = new StudioSlicesComponent(api, {info() {}, success() {}, error() {}, warning() {}} as any,
+    message = {info() {}, success() {}, error: jasmine.createSpy(), warning() {}};
+    component = new StudioSlicesComponent(api, message as any,
       {markForCheck() {}} as any, {value: {}, preferences$: of({refreshInterval: 30})} as any,
       {observe: () => of({matches: false})} as any);
     component.selectedTaskId = 'source';
@@ -90,6 +92,21 @@ describe('Studio review behavior', () => {
     tick(1500);
     expect(component.busySegments.has('a')).toBeFalse();
     expect(api.segmentAction.calls.count()).toBe(1);
+  }));
+
+  it('releases the action state and reports an uncertain timeout', fakeAsync(() => {
+    component.selectSegment(a);
+    api.segmentAction.and.returnValue(NEVER);
+
+    component.saveSubtitleStyle();
+    expect(component.busySegments.has('a')).toBeTrue();
+
+    tick(45000);
+
+    expect(component.busySegments.has('a')).toBeFalse();
+    expect(message.error).toHaveBeenCalledWith(
+      '操作请求超时，结果未确认；请刷新后核对当前版本，再继续操作',
+    );
   }));
 
   it('captures independent drop targets and reasons', fakeAsync(() => {
