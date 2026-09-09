@@ -120,7 +120,69 @@
       </div>
       <p *ngIf="detail?.skip_reason">{{ detail?.skip_reason }}</p>
       <nz-spin [nzSpinning]="detailLoading">
-        <video #sourceVideo *ngIf="selectedMediaUrl; else noPreview" class="source-video" controls preload="none" [src]="selectedMediaUrl" (loadedmetadata)="positionVideo()"></video>
+        <div #videoPlayer *ngIf="selectedMediaUrl; else noPreview" class="video-player" [class.video-player-fullscreen]="isFullscreen">
+          <video
+            #sourceVideo
+            class="source-video"
+            preload="none"
+            [src]="selectedMediaUrl"
+            (loadedmetadata)="onVideoMetadata($event)"
+            (timeupdate)="onVideoTimeUpdate($event)"
+            (play)="onVideoPlaybackChange($event)"
+            (pause)="onVideoPlaybackChange($event)"
+            (ended)="onVideoEnded($event)"
+            (click)="toggleVideoPlayback()"
+          ></video>
+          <div class="video-controls">
+            <button
+              type="button"
+              class="video-control-button"
+              [attr.aria-label]="videoPlaying ? '暂停' : '播放'"
+              (click)="toggleVideoPlayback()"
+            >
+              <i nz-icon [nzType]="videoPlaying ? 'pause-circle' : 'play-circle'"></i>
+            </button>
+            <span class="video-time">{{ formatVideoTime(videoCurrentTime) }} / {{ formatVideoTime(videoDuration) }}</span>
+            <div
+              #videoTimeline
+              class="video-timeline"
+              role="slider"
+              tabindex="0"
+              aria-label="视频播放进度"
+              [attr.aria-valuemin]="0"
+              [attr.aria-valuemax]="videoDuration"
+              [attr.aria-valuenow]="videoCurrentTime"
+              [attr.aria-valuetext]="formatVideoTime(videoCurrentTime)"
+              [class.video-timeline-disabled]="!videoDuration"
+              (pointerdown)="beginVideoSeek($event)"
+              (keydown)="onVideoTimelineKeydown($event)"
+            >
+              <div class="video-timeline-track">
+                <svg *ngIf="showDensityOverlay" class="video-density-overlay" viewBox="0 0 100 12" preserveAspectRatio="none" aria-hidden="true">
+                  <path class="video-density-area" [attr.d]="videoDensityPath"></path>
+                </svg>
+                <div class="video-progress-fill" [style.width.%]="videoProgressPercent"></div>
+                <div class="video-playhead" [style.left.%]="videoProgressPercent"></div>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="video-control-button"
+              [attr.aria-label]="videoMuted ? '取消静音' : '静音'"
+              (click)="toggleVideoMute()"
+            >
+              <i nz-icon [nzType]="videoMuted ? 'audio-muted' : 'sound'"></i>
+            </button>
+            <button
+              type="button"
+              class="video-control-button"
+              [attr.aria-label]="isFullscreen ? '退出全屏' : '全屏'"
+              (click)="toggleVideoFullscreen()"
+            >
+              <i nz-icon [nzType]="isFullscreen ? 'fullscreen-exit' : 'fullscreen'"></i>
+            </button>
+          </div>
+        </div>
         <ng-template #noPreview><div class="empty-preview"><nz-empty nzNotFoundContent="从左侧选择录播后显示预览"></nz-empty></div></ng-template>
         <div class="source-meta" *ngIf="detail"><strong>{{ detail.source_name }}</strong><span>{{ detail.message || statusLabel(detail.status) }}</span></div>
 

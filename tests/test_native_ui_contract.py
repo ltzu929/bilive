@@ -52,6 +52,19 @@ def test_native_source_video_only_loads_on_demand():
     assert b'"preload","none"' in javascript
 
 
+def test_native_source_video_uses_custom_density_timeline():
+    template = Path(
+        "frontend/src/app/studio/studio-slices.component.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'class="video-player"' in template
+    assert 'class="video-timeline"' in template
+    assert 'role="slider"' in template
+    assert 'onVideoMetadata($event)' in template
+    assert 'videoDensityPath' in template
+    assert '<video #sourceVideo' not in template
+
+
 def test_native_source_queue_tracks_stable_group_and_recording_ids():
     template = Path(
         "frontend/src/app/studio/studio-slices.component.html"

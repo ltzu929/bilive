@@ -45,6 +45,72 @@ describe('Studio review behavior', () => {
     expect(component.selectedMediaUrl).toBe('/studio-api/media/source-media');
   });
 
+  it('shows the density overlay only on the source timeline', () => {
+    component.detail = {
+      task_id: 'source',
+      room_id: '1',
+      source_media_id: 'source-media',
+      density_points: [
+        {start_seconds: 0, end_seconds: 10, normalized: 0.2},
+        {start_seconds: 90, end_seconds: 100, normalized: 1},
+      ],
+      segments: [a, b],
+    };
+    component.videoDuration = 120;
+    component.mediaMode = 'source';
+    expect(component.showDensityOverlay).toBeTrue();
+    expect(component.videoDensityPath).toContain('M 0 10');
+    expect(component.videoDensityPath).toContain('75.00');
+    component.mediaMode = 'final';
+    expect(component.showDensityOverlay).toBeFalse();
+    expect(component.videoDensityPath).toBe('');
+  });
+
+  it('maps metadata duration and positions the source at the selected start', () => {
+    component.selectSegment(a);
+    const video = {
+      currentTime: 0,
+      duration: 120,
+      muted: false,
+      paused: true,
+      ended: false,
+      pause: jasmine.createSpy('pause'),
+    } as unknown as HTMLVideoElement;
+    component.sourceVideo = {nativeElement: video} as any;
+    component.onVideoMetadata({currentTarget: video} as any);
+    expect(component.videoDuration).toBe(120);
+    expect(video.currentTime).toBe(1.9);
+    expect(video.pause).toHaveBeenCalled();
+  });
+
+  it('clamps pointer seeking to the video duration without pausing playback', () => {
+    const video = {
+      currentTime: 40,
+      duration: 120,
+      paused: false,
+      ended: false,
+      pause: jasmine.createSpy('pause'),
+    } as unknown as HTMLVideoElement;
+    const timeline = {
+      getBoundingClientRect: () => ({left: 10, width: 100}),
+      setPointerCapture: jasmine.createSpy('setPointerCapture'),
+    } as any;
+    component.sourceVideo = {nativeElement: video} as any;
+    component.videoTimeline = {nativeElement: timeline};
+    component.videoDuration = 120;
+    component.beginVideoSeek({button: 0, pointerId: 1, clientX: 100, preventDefault() {}} as any);
+    expect(video.currentTime).toBe(108);
+    expect(video.pause).not.toHaveBeenCalled();
+    component.beginVideoSeek({button: 0, pointerId: 2, clientX: 1000, preventDefault() {}} as any);
+    expect(video.currentTime).toBe(120);
+  });
+
+  it('formats player time with hours when needed', () => {
+    expect(component.formatVideoTime(0)).toBe('0:00');
+    expect(component.formatVideoTime(65)).toBe('1:05');
+    expect(component.formatVideoTime(3661)).toBe('1:01:01');
+  });
+
   it('preserves A edits across A B A and session restoration', () => {
     component.selectSegment(a);
     component.titleDraft = 'My title';
