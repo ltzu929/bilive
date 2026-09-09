@@ -44,9 +44,6 @@ type QueueOrder = 'newest' | 'oldest' | 'grouped';
 })
 export class StudioSlicesComponent implements OnInit, OnDestroy {
   @ViewChild('densityChart') densityChart?: ElementRef<SVGElement>;
-  @ViewChild('sourceVideo') sourceVideo?: ElementRef<HTMLVideoElement>;
-  @ViewChild('videoPlayer') videoPlayer?: ElementRef<HTMLElement>;
-  @ViewChild('videoTimeline') videoTimeline?: ElementRef<HTMLElement>;
 
   loading = true;
   detailLoading = false;
@@ -85,11 +82,6 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   worker: Record<string, any> = {};
   dropPending = false;
   mediaMode: 'source' | 'final' = 'source';
-  videoDuration = 0;
-  videoCurrentTime = 0;
-  videoPlaying = false;
-  videoMuted = false;
-  isFullscreen = false;
   draftConflict = false;
   observationError = '';
   private draftKey = '';
@@ -105,7 +97,6 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   private detailRequestId = 0;
   private dragBoundary: RangeBoundary | null = null;
   private dragMaxEnd = 1;
-  private videoSeekPointerId: number | null = null;
   private readonly destroyed = new Subject<void>();
 
   constructor(
@@ -227,145 +218,13 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return id ? this.api.getMediaUrl(id) : '';
   }
 
-  private get videoElement(): HTMLVideoElement | undefined {
-    return this.sourceVideo?.nativeElement || document.querySelector<HTMLVideoElement>('.source-video') || undefined;
-  }
-
-  get showDensityOverlay(): boolean {
-    return this.mediaMode === 'source' && this.videoDuration > 0 && Boolean(this.detail?.density_points?.length);
-  }
-
-  get videoProgressPercent(): number {
-    if (!this.videoDuration) return 0;
-    return Math.min(100, Math.max(0, (this.videoCurrentTime / this.videoDuration) * 100));
-  }
-
-  get videoDensityPath(): string {
-    if (!this.showDensityOverlay) return '';
-    return this.buildDensityPath(this.videoDuration, 12);
-  }
-
   setMediaMode(mode: 'source' | 'final'): void {
-    if (this.mediaMode !== mode) this.resetVideoState();
     this.mediaMode = mode;
     this.positionVideo();
   }
 
-  positionVideo(video?: HTMLVideoElement): void {
-    this.seekTo(this.mediaMode === 'final' ? 0 : Number(this.selectedSegment?.start_seconds || 0), video);
-  }
-
-  onVideoMetadata(event: Event): void {
-    const video = event.currentTarget as HTMLVideoElement;
-    this.videoDuration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
-    this.videoCurrentTime = Number(video.currentTime || 0);
-    this.videoMuted = video.muted;
-    this.positionVideo(video);
-    this.changeDetector.markForCheck();
-  }
-
-  onVideoTimeUpdate(event: Event): void {
-    const video = event.currentTarget as HTMLVideoElement;
-    this.videoCurrentTime = Number(video.currentTime || 0);
-    this.videoPlaying = !video.paused && !video.ended;
-    this.changeDetector.markForCheck();
-  }
-
-  onVideoPlaybackChange(event: Event): void {
-    const video = event.currentTarget as HTMLVideoElement;
-    this.videoPlaying = !video.paused && !video.ended;
-    this.changeDetector.markForCheck();
-  }
-
-  onVideoEnded(event: Event): void {
-    const video = event.currentTarget as HTMLVideoElement;
-    this.videoPlaying = false;
-    this.videoCurrentTime = Number(video.currentTime || this.videoDuration || 0);
-    this.changeDetector.markForCheck();
-  }
-
-  toggleVideoPlayback(): void {
-    const video = this.videoElement;
-    if (!video) return;
-    if (video.paused || video.ended) void video.play();
-    else video.pause();
-  }
-
-  toggleVideoMute(): void {
-    const video = this.videoElement;
-    if (!video) return;
-    video.muted = !video.muted;
-    this.videoMuted = video.muted;
-    this.changeDetector.markForCheck();
-  }
-
-  toggleVideoFullscreen(): void {
-    const player = this.videoPlayer?.nativeElement;
-    if (!player) return;
-    if (document.fullscreenElement) void document.exitFullscreen?.();
-    else void player.requestFullscreen?.();
-  }
-
-  @HostListener('document:fullscreenchange')
-  onFullscreenChange(): void {
-    this.isFullscreen = document.fullscreenElement === this.videoPlayer?.nativeElement;
-    this.changeDetector.markForCheck();
-  }
-
-  beginVideoSeek(event: PointerEvent): void {
-    if (!this.videoDuration || event.button !== 0) return;
-    event.preventDefault();
-    this.videoSeekPointerId = event.pointerId;
-    this.videoTimeline?.nativeElement.setPointerCapture?.(event.pointerId);
-    this.seekVideoFromPointer(event.clientX);
-  }
-
-  @HostListener('document:pointermove', ['$event'])
-  onVideoSeekDrag(event: PointerEvent): void {
-    if (this.videoSeekPointerId !== event.pointerId) return;
-    this.seekVideoFromPointer(event.clientX);
-  }
-
-  @HostListener('document:pointerup', ['$event'])
-  endVideoSeekDrag(event: PointerEvent): void {
-    if (this.videoSeekPointerId === event.pointerId) this.videoSeekPointerId = null;
-  }
-
-  onVideoTimelineKeydown(event: KeyboardEvent): void {
-    if (!this.videoDuration) return;
-    const step = event.shiftKey ? 10 : 5;
-    let next = this.videoCurrentTime;
-    if (event.key === 'ArrowLeft') next -= step;
-    else if (event.key === 'ArrowRight') next += step;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = this.videoDuration;
-    else return;
-    event.preventDefault();
-    this.seekTo(next, this.videoElement, false);
-  }
-
-  formatVideoTime(seconds: number): string {
-    const total = Math.max(0, Math.floor(Number(seconds) || 0));
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const remainder = total % 60;
-    if (hours) return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
-    return `${minutes}:${String(remainder).padStart(2, '0')}`;
-  }
-
-  private seekVideoFromPointer(clientX: number): void {
-    const timeline = this.videoTimeline?.nativeElement;
-    if (!timeline || !this.videoDuration) return;
-    const bounds = timeline.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (clientX - bounds.left) / Math.max(bounds.width, 1)));
-    this.seekTo(ratio * this.videoDuration, this.videoElement, false);
-  }
-
-  private resetVideoState(): void {
-    this.videoDuration = 0;
-    this.videoCurrentTime = 0;
-    this.videoPlaying = false;
-    this.videoMuted = false;
+  positionVideo(): void {
+    this.seekTo(this.mediaMode === 'final' ? 0 : Number(this.selectedSegment?.start_seconds || 0));
   }
 
   get hasDraft(): boolean {
@@ -466,23 +325,17 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   get densityPath(): string {
-    return this.buildDensityPath(this.densityMaxEnd, 40);
-  }
-
-  private buildDensityPath(maxEnd: number, height: number): string {
     const points = this.detail?.density_points || [];
-    if (!points.length || maxEnd <= 0) return '';
-    const baseline = height - 2;
-    const amplitude = height - 6;
+    if (!points.length) return '';
     const top = points.map((point) => {
-      const x = this.densityXFor(Number(point.start_seconds || 0), maxEnd);
-      const y = baseline - Number(point.normalized || 0) * amplitude;
+      const x = this.densityX(Number(point.start_seconds || 0));
+      const y = 38 - Number(point.normalized || 0) * 34;
       return { x, y };
     });
-    const lastX = this.densityXFor(Number(points[points.length - 1].end_seconds || maxEnd), maxEnd);
+    const lastX = this.densityX(Number(points[points.length - 1].end_seconds || this.densityMaxEnd));
     const first = top[0];
     if (top.length === 1) {
-      return `M 0 ${baseline} L ${first.x.toFixed(2)} ${first.y.toFixed(2)} L ${lastX.toFixed(2)} ${baseline} Z`;
+      return `M 0 38 L ${first.x.toFixed(2)} ${first.y.toFixed(2)} L ${lastX.toFixed(2)} 38 Z`;
     }
 
     let curve = `L ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
@@ -495,7 +348,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     }
     const last = top[top.length - 1];
     curve += ` Q ${last.x.toFixed(2)} ${last.y.toFixed(2)} ${last.x.toFixed(2)} ${last.y.toFixed(2)}`;
-    return `M 0 ${baseline} ${curve} L ${lastX.toFixed(2)} ${baseline} Z`;
+    return `M 0 38 ${curve} L ${lastX.toFixed(2)} 38 Z`;
   }
 
   get selectedRangeLabel(): string {
@@ -602,9 +455,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       for (const field of draftFields) if (field in saved.values) (this as any)[field] = saved.values[field];
       this.draftRevision = saved.revision;
     }
-    const nextMediaMode: 'source' | 'final' = segment.final_media_id && segment.upload_status === 'awaiting_publish' ? 'final' : 'source';
-    if (this.mediaMode !== nextMediaMode) this.resetVideoState();
-    this.mediaMode = nextMediaMode;
+    this.mediaMode = segment.final_media_id && segment.upload_status === 'awaiting_publish' ? 'final' : 'source';
     const url = new URL(window.location.href);
     url.searchParams.set('source_task_id', this.selectedTaskId);
     url.searchParams.set('segment_id', segment.segment_id);
@@ -632,11 +483,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   densityX(seconds: number): number {
-    return this.densityXFor(seconds, this.densityMaxEnd);
-  }
-
-  private densityXFor(seconds: number, maxEnd: number): number {
-    return Math.min(100, Math.max(0, (seconds / Math.max(maxEnd, 0.1)) * 100));
+    return Math.min(100, Math.max(0, (seconds / this.densityMaxEnd) * 100));
   }
 
   densityWidth(start: number, end: number): number {
@@ -679,14 +526,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.dragBoundary = null;
   }
 
-  seekTo(seconds: number, video?: HTMLVideoElement, pause = true): void {
-    video = video || this.videoElement;
+  seekTo(seconds: number, video?: HTMLVideoElement): void {
+    video = video || document.querySelector<HTMLVideoElement>('.source-video') || undefined;
     if (video) {
-      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : Number.POSITIVE_INFINITY;
-      const target = Math.min(duration, Math.max(0, Number(seconds) || 0));
-      video.currentTime = target;
-      if (pause) video.pause();
-      this.videoCurrentTime = target;
+      video.currentTime = Math.max(0, seconds);
+      video.pause();
     }
   }
 
@@ -995,10 +839,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   @HostListener('document:keydown', ['$event'])
   onShortcut(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target?.closest('input, textarea, select, button, [contenteditable], [role=combobox], [role=slider]')) return;
+    if (target?.closest('input, textarea, select, button, [contenteditable], [role=combobox]')) return;
     if (event.code === 'Space') {
       if (target?.tagName === 'VIDEO') return;
-      const video = this.videoElement;
+      const video = document.querySelector<HTMLVideoElement>('.source-video');
       if (video) { event.preventDefault(); if (video.paused) void video.play(); else video.pause(); }
       return;
     }
@@ -1022,7 +866,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   private currentVideoTime(): number {
-    const video = this.videoElement;
+    const video = document.querySelector<HTMLVideoElement>('.source-video');
     return Number(video?.currentTime || 0);
   }
 
@@ -1063,14 +907,12 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.selectedSegmentId = '';
     this.draftKey = '';
     this.detailLoading = false;
-    this.resetVideoState();
   }
 
   private loadDetail(taskId: string): void {
     this.saveDraft();
     this.draftKey = '';
     this.detail = null;
-    this.resetVideoState();
     const requestId = ++this.detailRequestId;
     this.detailLoading = true;
     this.api.getSourceRecording(taskId).pipe(takeUntil(this.destroyed)).subscribe({

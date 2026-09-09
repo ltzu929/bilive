@@ -14,12 +14,7 @@ import {
   GithubOutline,
   ReloadOutline,
   PlayCircleOutline,
-  CheckCircleOutline,
-  PauseCircleOutline,
-  AudioMutedOutline,
-  SoundOutline,
-  FullscreenOutline,
-  FullscreenExitOutline
+  CheckCircleOutline
 } from '@ant-design/icons-angular/icons';
 
 const icons = [
@@ -36,11 +31,6 @@ const icons = [
   ReloadOutline,
   PlayCircleOutline,
   CheckCircleOutline,
-  PauseCircleOutline,
-  AudioMutedOutline,
-  SoundOutline,
-  FullscreenOutline,
-  FullscreenExitOutline,
 ];
 
 @NgModule({
