@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 
 
-WHEEL = Path(os.environ.get("BILIVE_TEST_WHEEL", "wheel/blrec-2.0.0b4+bilive.10-py3-none-any.whl"))
+WHEEL = Path(os.environ.get("BILIVE_TEST_WHEEL", "wheel/blrec-2.0.0b4+bilive.11-py3-none-any.whl"))
 
 
 def test_dashboard_service_is_api_only():
@@ -50,6 +50,16 @@ def test_native_source_video_only_loads_on_demand():
     assert 'preload="none"' in template
     assert 'preload="metadata"' not in template
     assert b'"preload","none"' in javascript
+
+
+def test_native_source_inspector_actions_wrap_in_narrow_panel():
+    stylesheet = Path(
+        "frontend/src/app/studio/studio-slices.component.scss"
+    ).read_text(encoding="utf-8")
+    action_bar_start = stylesheet.rfind(".inspector-action-bar {")
+    action_bar = stylesheet[action_bar_start:].split("}", 1)[0]
+
+    assert "flex-wrap: wrap;" in action_bar
 
 
 def test_native_source_queue_tracks_stable_group_and_recording_ids():

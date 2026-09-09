@@ -596,6 +596,7 @@ h1 {
 .inspector-action-bar {
   position: sticky;
   bottom: 0;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 12px -12px -12px;
   padding: 12px;
