@@ -448,6 +448,37 @@ async def test_subtitle_style_api_persists_without_windows_worker(
 
 
 @pytest.mark.anyio
+async def test_subtitle_edit_api_persists_rows_without_windows_worker(
+    videos_root, dashboard_client
+):
+    _write_source_workbench_fixture(videos_root)
+
+    async with dashboard_client(videos_root) as client:
+        response = await client.post(
+            "/api/segments/seg1/subtitles",
+            json={
+                "expected_revision": 0,
+                "subtitle_segments": [
+                    {"start": 0.0, "end": 1.5, "text": "人工修正黑话"},
+                ],
+            },
+        )
+        detail = await client.get(
+            "/api/source-recordings/"
+            + (await client.get("/api/source-recordings")).json()[0]["task_id"]
+        )
+
+    assert response.status_code == 200
+    assert response.json()["subtitle_segments"] == [
+        {"start": 0.0, "end": 1.5, "text": "人工修正黑话"},
+    ]
+    assert detail.status_code == 200
+    assert detail.json()["segments"][0]["subtitle_segments"] == [
+        {"start": 0.0, "end": 1.5, "text": "人工修正黑话"},
+    ]
+
+
+@pytest.mark.anyio
 async def test_source_recordings_api_lists_summary_counts(videos_root, dashboard_client):
     _write_source_workbench_fixture(videos_root)
 

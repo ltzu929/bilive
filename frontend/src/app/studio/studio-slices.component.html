@@ -199,6 +199,26 @@
         </section>
 
         <section role="tabpanel" id="panel-subtitles" aria-labelledby="tab-subtitles" *ngIf="inspectorTab === 'subtitles'" class="inspector-tab-panel">
+          <div class="subtitle-editor">
+            <div class="subtitle-editor-heading"><strong>字幕文本与时间</strong><span>{{ subtitleDrafts.length }} 行 · 片段内秒数</span></div>
+            <p class="review-note">点击左侧序号跳到对应台词；修改后先保存字幕，再重新烧录。重新烧录不会自动发布。</p>
+            <ng-container *ngIf="subtitleDrafts.length; else noSubtitleLines">
+              <div class="subtitle-line" *ngFor="let subtitle of subtitleDrafts; let index = index; trackBy: trackBySubtitle">
+                <button type="button" class="subtitle-line-seek" (click)="seekSubtitleLine(subtitle)" [attr.aria-label]="'跳转到第 ' + (index + 1) + ' 行字幕'">{{ index + 1 }}</button>
+                <div class="subtitle-line-time">
+                  <label>起<input nz-input type="number" min="0" step="0.1" [(ngModel)]="subtitle.start" [max]="selectedSegmentDuration" [name]="'subtitleStart' + index"></label>
+                  <label>止<input nz-input type="number" min="0" step="0.1" [(ngModel)]="subtitle.end" [max]="selectedSegmentDuration" [name]="'subtitleEnd' + index"></label>
+                </div>
+                <textarea nz-input rows="2" [(ngModel)]="subtitle.text" [name]="'subtitleText' + index" placeholder="输入正确台词或直播间黑话"></textarea>
+                <button nz-button nzType="link" nzDanger nzSize="small" (click)="removeSubtitleLine(index)" [disabled]="selectedActionBusy || subtitleDrafts.length <= 1">删除这一行</button>
+              </div>
+            </ng-container>
+            <ng-template #noSubtitleLines><div class="subtitle-editor-empty">当前还没有可编辑字幕，可以新增一行并手工填写。</div></ng-template>
+            <div class="review-actions">
+              <button nz-button nzSize="small" (click)="addSubtitleLine()" [disabled]="selectedActionBusy">新增字幕行</button>
+              <button nz-button nzType="primary" (click)="saveSubtitleEdits()" [disabled]="selectedActionBusy || !subtitleDraftsValid">保存字幕修改</button>
+            </div>
+          </div>
           <p class="review-note">浏览器示意仅用于快速校准；最终效果以 Windows ffmpeg 成片为准。</p>
           <div class="subtitle-grid"><label>字体<input nz-input [(ngModel)]="subtitleFontName" name="subtitleFontName"></label><label>字号<input nz-input type="number" min="8" [(ngModel)]="subtitleFontSize" name="subtitleFontSize"></label><label>底边距<input nz-input type="number" min="0" [(ngModel)]="subtitleMarginV" name="subtitleMarginV"></label><label>描边宽度<input nz-input type="number" min="0" step="0.5" [(ngModel)]="subtitleOutline" name="subtitleOutline"></label><label>位置<select nz-input [(ngModel)]="subtitleAlignment" name="subtitleAlignment"><option [ngValue]="1">左下</option><option [ngValue]="2">中下</option><option [ngValue]="3">右下</option><option [ngValue]="4">左中</option><option [ngValue]="5">居中</option><option [ngValue]="6">右中</option><option [ngValue]="7">左上</option><option [ngValue]="8">中上</option><option [ngValue]="9">右上</option></select></label><label>文字色<input nz-input type="color" [(ngModel)]="subtitleTextColor" name="subtitleTextColor"></label><label>描边色<input nz-input type="color" [(ngModel)]="subtitleOutlineColor" name="subtitleOutlineColor"></label></div>
           <div class="subtitle-preview-frame" [style.justify-content]="subtitlePosition.horizontal" [style.align-items]="subtitlePosition.vertical"><div class="subtitle-preview" [style.font-family]="subtitleFontName" [style.font-size.px]="subtitleFontSize" [style.margin-bottom.px]="subtitleAlignment <= 3 ? subtitleMarginV / 4 : 0" [style.margin-top.px]="subtitleAlignment >= 7 ? subtitleMarginV / 4 : 0" [style.color]="subtitleTextColor" [style.text-shadow]="subtitlePreviewShadow">示例字幕：最终成片以此样式烧录</div></div>

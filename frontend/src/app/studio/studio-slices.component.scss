@@ -727,3 +727,81 @@ h1 {
 
 .subtitle-preview-frame { display: flex; height: 140px; overflow: hidden; background: #111; margin-top: 12px; }
 .subtitle-preview-frame .subtitle-preview { margin-top: 0; min-height: 0; }
+
+.subtitle-editor {
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid #d9d9d9;
+  background: #fafafa;
+}
+
+.subtitle-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.subtitle-editor-heading span,
+.subtitle-editor-empty {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.subtitle-line {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e8e8e8;
+}
+
+.subtitle-line-seek {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #91d5ff;
+  border-radius: 4px;
+  background: #e6f7ff;
+  color: #096dd9;
+  cursor: pointer;
+}
+
+.subtitle-line-time {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.subtitle-line-time label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+}
+
+.subtitle-line textarea {
+  grid-column: 1 / -1;
+  min-height: 50px;
+  resize: vertical;
+}
+
+.subtitle-line > button:last-child {
+  grid-column: 1 / -1;
+  justify-self: end;
+  padding: 0;
+}
+
+.subtitle-editor-empty {
+  margin-top: 8px;
+  padding: 10px 0 2px;
+}
+
+@media (max-width: 600px) {
+  .subtitle-line-time {
+    grid-template-columns: 1fr;
+  }
+}

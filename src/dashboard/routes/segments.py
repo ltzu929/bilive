@@ -205,6 +205,25 @@ def segment_subtitle_style(
     )
 
 
+@router.post("/api/segments/{segment_id}/subtitles")
+def segment_subtitles(
+    segment_id: str,
+    payload: Dict[str, Any],
+    ctx: DashboardContext = Depends(get_context),
+) -> Dict[str, Any]:
+    wb = _workbench()
+    return _segment_action(ctx,
+        lambda: (
+            _ensure_segment_idle(ctx, segment_id),
+            wb.update_segment_subtitles(
+                ctx.store.videos_root,
+                segment_id,
+                payload,
+            ),
+        )[1]
+    )
+
+
 @router.post("/api/segments/{segment_id}/reburn")
 def segment_reburn(
     segment_id: str,

@@ -182,6 +182,7 @@ def build_source_recording_detail(
     history = task.pop("_history")
     segments = _normalize_segments(root, source, history.get("segments") or [])
     _apply_display_defaults(root, source, segments)
+    _attach_subtitle_segments(root, source, segments)
     counts = _summary_counts(segments)
     names = room_names or {}
     lifecycle = build_lifecycle_view(root, task, history, segments)
@@ -351,7 +352,7 @@ def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
         segment.pop("candidate_rel_path", None)
         segment.pop("candidate_media_id", None)
     segment["preview_available"] = False
-    segment["preview_reason"] = "区间或字幕样式已修改，请重新生成最终成片"
+    segment["preview_reason"] = "区间、字幕或字幕样式已修改，请重新生成最终成片"
     segment["upload_status"] = "not_queued"
     segment["publish_approval"] = ""
     segment.pop("publish_approved_at", None)
@@ -370,9 +371,31 @@ def prepare_segment_finalize(
     def mutate(root: Path, source: Path, segment: dict[str, Any]) -> dict[str, Any]:
         if "expected_revision" in data and data["expected_revision"] != int(segment.get("revision") or 0):
             raise SegmentStateConflict("片段已改变，请先核对草稿与当前版本")
+        current_start = _float(segment.get("start_seconds"))
+        current_end = _float(segment.get("end_seconds"))
+        requested_start = _float(data.get("start_seconds", current_start))
+        requested_end = _float(data.get("end_seconds", current_end))
+        range_changed = (
+            abs(requested_start - current_start) > 0.001
+            or abs(requested_end - current_end) > 0.001
+        )
+        manual_subtitles = None
+        if "subtitle_segments" in data:
+            manual_subtitles = _normalize_subtitle_segments(
+                data["subtitle_segments"],
+                max_duration=max(0.0, requested_end - requested_start),
+            )
         _invalidate_final_output(root, segment)
         _apply_optional_metadata(segment, data)
         _apply_optional_range(segment, data)
+        if manual_subtitles is not None:
+            segment["subtitle_segments"] = manual_subtitles
+            segment["subtitle_edited_at"] = _now()
+            segment["subtitle_needs_burn"] = True
+        elif range_changed:
+            segment.pop("subtitle_segments", None)
+            segment.pop("subtitle_edited_at", None)
+            segment.pop("subtitle_needs_burn", None)
         _apply_profile_metadata(root, source, segment, data)
         start = _float(segment.get("start_seconds"))
         end = _float(segment.get("end_seconds"))
@@ -449,6 +472,8 @@ def validate_segment_finalize_payload(
         from src.burn.subtitle_burn import SubtitleStyle
 
         data["subtitle_style"] = SubtitleStyle.from_mapping(style_payload).to_mapping()
+    if "subtitle_segments" in data and not isinstance(data["subtitle_segments"], list):
+        raise ValueError("subtitle_segments must be an array")
     return data
 
 
@@ -657,8 +682,12 @@ def finalize_segment(
             timings=_finish_timing(timings, "analysis", stage_started, total_started),
         )
     timings["analysis"] = _elapsed_ms(stage_started)
+    # Keep the ASR sidecar as the automatic recognition evidence. Manual rows
+    # are durable in task history and only replace the in-memory burn input.
+    _apply_manual_subtitles(analysis, segment, duration=duration)
 
-    if not _nonempty_file(final_path) or not analysis_reused:
+    force_subtitle_burn = bool(segment.get("subtitle_needs_burn"))
+    if force_subtitle_burn or not _nonempty_file(final_path) or not analysis_reused:
         stage_started = time.perf_counter()
         try:
             from src.burn.subtitle_burn import SubtitleStyle
@@ -745,6 +774,7 @@ def finalize_segment(
                 "failure": None,
                 "artifacts": _artifact_snapshot(root_path, plan),
                 "timings_ms": dict(timings),
+                "subtitle_needs_burn": False,
             }
         )
         current["action_state"] = _next_action_state(current, "processing")
@@ -812,6 +842,7 @@ def finalize_segment(
                 "failure": None,
                 "artifacts": _artifact_snapshot(root_path, plan),
                 "timings_ms": dict(timings),
+                "subtitle_needs_burn": False,
             }
         )
         current["action_state"] = _next_action_state(current, "done")
@@ -1205,9 +1236,15 @@ def update_segment_range(
         raise ValueError("end_seconds must be greater than start_seconds")
 
     def mutate(_root: Path, _source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        previous_start = _float(segment.get("start_seconds"))
+        previous_end = _float(segment.get("end_seconds"))
         _invalidate_final_output(_root, segment)
         segment["start_seconds"] = start
         segment["end_seconds"] = end
+        if abs(previous_start - start) > 0.001 or abs(previous_end - end) > 0.001:
+            segment.pop("subtitle_segments", None)
+            segment.pop("subtitle_edited_at", None)
+            segment.pop("subtitle_needs_burn", None)
         segment["manual_override"] = True
         return segment
 
@@ -1275,6 +1312,48 @@ def update_segment_subtitle_style(
         segment["subtitle_style"] = style.to_mapping()
         segment["_subtitle_style_source"] = "clip"
         segment["manual_override"] = True
+        return segment
+
+    return _mutate_segment(videos_root, segment_id, mutate)
+
+
+@_review_write
+def update_segment_subtitles(
+    videos_root: str | Path,
+    segment_id: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist manually edited subtitle rows without running Windows work."""
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be an object")
+    if "subtitle_segments" not in payload:
+        raise ValueError("subtitle_segments is required")
+
+    expected_revision = payload.get("expected_revision")
+    if expected_revision is not None:
+        try:
+            expected_revision = int(expected_revision)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("expected_revision must be an integer") from exc
+
+    def mutate(root: Path, _source: Path, segment: dict[str, Any]) -> dict[str, Any]:
+        current_revision = int(_float(segment.get("revision")))
+        if expected_revision is not None and expected_revision != current_revision:
+            raise SegmentStateConflict("片段已改变，请先核对字幕草稿与当前版本")
+        start = _float(segment.get("start_seconds"))
+        end = _float(segment.get("end_seconds"))
+        subtitles = _normalize_subtitle_segments(
+            payload["subtitle_segments"],
+            max_duration=max(0.0, end - start),
+        )
+        invalidated = _invalidate_final_output(root, segment)
+        segment["subtitle_segments"] = subtitles
+        segment["subtitle_edited_at"] = _now()
+        segment["subtitle_needs_burn"] = True
+        segment["manual_override"] = True
+        if not invalidated:
+            segment["preview_available"] = False
+            segment["preview_reason"] = "字幕已修改，请重新生成最终成片"
         return segment
 
     return _mutate_segment(videos_root, segment_id, mutate)
@@ -1408,6 +1487,99 @@ def _load_analysis_path(path: Path) -> AnalysisResult | None:
         return None
 
 
+def _normalize_subtitle_segments(
+    value: Any,
+    *,
+    max_duration: float | None = None,
+) -> list[dict[str, Any]]:
+    """Validate the relative subtitle rows used by the review editor."""
+    if not isinstance(value, list):
+        raise ValueError("subtitle_segments must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise ValueError(f"subtitle_segments[{index}] must be an object")
+        start = _finite_seconds(raw.get("start"))
+        end = _finite_seconds(raw.get("end"))
+        text = str(raw.get("text") or "").strip()
+        if start is None or end is None:
+            raise ValueError(f"subtitle_segments[{index}] times must be finite")
+        if end <= start:
+            raise ValueError(
+                f"subtitle_segments[{index}] end must be greater than start"
+            )
+        if max_duration is not None and end > max_duration + 0.01:
+            raise ValueError(
+                f"subtitle_segments[{index}] must stay within the segment range"
+            )
+        if not text:
+            raise ValueError(f"subtitle_segments[{index}] text must not be empty")
+        normalized.append({"start": start, "end": end, "text": text})
+
+    if not normalized:
+        raise ValueError("subtitle_segments must contain at least one row")
+    return normalized
+
+
+def _serialize_subtitle_segments(
+    segments: list[TranscriptSegment],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "start": float(segment.start),
+            "end": float(segment.end),
+            "text": str(segment.text or "").strip(),
+        }
+        for segment in segments
+        if str(segment.text or "").strip() and float(segment.end) > float(segment.start)
+    ]
+
+
+def _attach_subtitle_segments(
+    root: Path,
+    source: Path,
+    segments: list[dict[str, Any]],
+) -> None:
+    """Expose stored edits or timestamped ASR rows to the read-only detail API."""
+    for segment in segments:
+        duration = max(
+            0.0,
+            _float(segment.get("end_seconds"))
+            - _float(segment.get("start_seconds")),
+        )
+        stored = segment.get("subtitle_segments")
+        if isinstance(stored, list):
+            try:
+                segment["subtitle_segments"] = _normalize_subtitle_segments(
+                    stored,
+                    max_duration=duration,
+                )
+            except ValueError:
+                segment["subtitle_segments"] = []
+            continue
+
+        start = _float(segment.get("start_seconds"))
+        end = _float(segment.get("end_seconds"))
+        plan = _artifact_plan(root, source, segment)
+        canonical_path = _artifact_path(
+            root,
+            plan["analysis_sidecar"]["rel_path"],
+        )
+        analysis = _load_reusable_finalize_analysis(
+            root,
+            segment,
+            canonical_path,
+            start=start,
+            end=end,
+        )
+        segment["subtitle_segments"] = (
+            _serialize_subtitle_segments(analysis.transcript_segments)
+            if analysis is not None
+            else []
+        )
+
+
 def _valid_analysis_segments(analysis: AnalysisResult) -> bool:
     return bool(
         str(analysis.transcript or "").strip()
@@ -1494,6 +1666,27 @@ def _analysis_from_audio(
     )
     _apply_segment_metadata_to_analysis(analysis, segment, start=start, end=end)
     return analysis
+
+
+def _apply_manual_subtitles(
+    analysis: AnalysisResult,
+    segment: dict[str, Any],
+    *,
+    duration: float,
+) -> None:
+    raw = segment.get("subtitle_segments")
+    if raw is None:
+        return
+    normalized = _normalize_subtitle_segments(raw, max_duration=duration)
+    analysis.transcript_segments = [
+        TranscriptSegment(
+            start=float(item["start"]),
+            end=float(item["end"]),
+            text=str(item["text"]),
+        )
+        for item in normalized
+    ]
+    analysis.transcript = " ".join(item["text"] for item in normalized)
 
 
 def _apply_segment_metadata_to_analysis(

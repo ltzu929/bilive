@@ -94,6 +94,7 @@ Dashboard 提供桌面优先的三栏审核工作台，但不改变运行边界�
 - `/api/source-recordings` 提供录播列表，前端按 `room_id/room_name` 分组为 `UP 主 -> 直播场次` 队列。
 - `/api/source-recordings/{task_id}` 返回源录播、连续弹幕密度点、候选片段，以及兼容性附加的质量、失败、工件、耗时和动作状态。密度图只做导航和边界辅助，真正的裁剪仍由 Windows worker 执行。
 - `POST /api/segments/{segment_id}/finalize` 是工作台的人工成片闸门：先保存轻量编辑，再创建 `finalize_segment` 动作任务。ASR、字幕、元数据和入队都在 Windows 完成。
+- `POST /api/segments/{segment_id}/subtitles` 只保存人工修正的片段相对字幕行和时间，不在 Dashboard 运行 ASR 或 ffmpeg；后续 finalize/reburn 在 Windows 将这些行应用到分析结果并重新烧录。
 - `manual-keep` 作为兼容接口保留；新工作台使用异步 finalize。drop/range 仍是轻量状态修改，retry/render/reburn 创建 Windows 动作任务。
 - `/api/upload-dashboard` 和 `/api/slice-performance` 都是只读状态接口；数据库或表不存在时返回 unavailable，不创建 SQLite 文件、不迁移 schema。
 - `/studio/uploads` 提供有界分页、状态筛选和源片段回链；`/studio/slices` 是人工审核入口。

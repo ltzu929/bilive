@@ -34,6 +34,12 @@ export interface StudioSourceRecording {
   trash_job_id?: string;
 }
 
+export interface StudioSubtitleSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
 export interface StudioSegment {
   segment_id: string;
   title?: string;
@@ -68,6 +74,7 @@ export interface StudioSegment {
     job_id?: string;
   };
   subtitle_style?: Record<string, number | string>;
+  subtitle_segments?: StudioSubtitleSegment[];
   manual_origin?: string;
   missed_reason?: string;
   review_note?: string;

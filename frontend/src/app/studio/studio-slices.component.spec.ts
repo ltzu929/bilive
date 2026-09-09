@@ -8,7 +8,8 @@ describe('Studio review behavior', () => {
   let api: any;
   let message: any;
   const a: StudioSegment = {segment_id: 'a', title: 'A', start_seconds: 1.9, end_seconds: 4.8,
-    revision: 1, final_media_id: 'final-a', upload_status: 'awaiting_publish'};
+    revision: 1, final_media_id: 'final-a', upload_status: 'awaiting_publish',
+    subtitle_segments: [{start: 0, end: 1.2, text: '识别错误'}]};
   const b: StudioSegment = {segment_id: 'b', title: 'B', start_seconds: 8, end_seconds: 12, revision: 1};
   beforeEach(() => {
     sessionStorage.clear();
@@ -78,6 +79,19 @@ describe('Studio review behavior', () => {
     component.titleDraft = 'Unsaved';
     component.approvePublish();
     expect(api.segmentAction).not.toHaveBeenCalled();
+  });
+
+  it('saves manually corrected subtitle rows with the current revision', () => {
+    api.segmentAction.and.returnValue(of({status: 'saved', segment: {...a, revision: 2}}));
+    component.selectSegment(a);
+    component.subtitleDrafts[0].text = '正确黑话';
+
+    component.saveSubtitleEdits();
+
+    expect(api.segmentAction).toHaveBeenCalledWith('a', 'subtitles', {
+      expected_revision: 1,
+      subtitle_segments: [{start: 0, end: 1.2, text: '正确黑话'}],
+    });
   });
 
   it('tracks beyond 90 seconds, survives GET failure and never repeats POST', fakeAsync(() => {

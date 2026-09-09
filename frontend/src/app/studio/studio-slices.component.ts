@@ -24,6 +24,7 @@ import {
   StudioApiService,
   StudioRoom,
   StudioSegment,
+  StudioSubtitleSegment,
   StudioSourceDetail,
   StudioSourceRecording,
 } from './studio-api.service';
@@ -33,7 +34,7 @@ import { subtitlePosition } from './subtitle-position';
 
 type InspectorTab = 'content' | 'subtitles' | 'technical';
 type RangeBoundary = 'start' | 'end';
-const draftFields = ['titleDraft', 'descriptionDraft', 'tagsDraft', 'qualityReasonDraft', 'startDraft', 'endDraft', 'subtitleFontName', 'subtitleFontSize', 'subtitleMarginV', 'subtitleAlignment', 'subtitleOutline', 'subtitleTextColor', 'subtitleOutlineColor'] as const;
+const draftFields = ['titleDraft', 'descriptionDraft', 'tagsDraft', 'qualityReasonDraft', 'startDraft', 'endDraft', 'subtitleFontName', 'subtitleFontSize', 'subtitleMarginV', 'subtitleAlignment', 'subtitleOutline', 'subtitleTextColor', 'subtitleOutlineColor', 'subtitleDrafts'] as const;
 
 type QueueOrder = 'newest' | 'oldest' | 'grouped';
 
@@ -80,6 +81,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   subtitleOutline = 2;
   subtitleTextColor = '#ffffff';
   subtitleOutlineColor = '#000000';
+  subtitleDrafts: StudioSubtitleSegment[] = [];
   progress: Record<string, any> = {};
   diagnostics: Record<string, any> = {};
   worker: Record<string, any> = {};
@@ -208,6 +210,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return item.task_id;
   }
 
+  trackBySubtitle(index: number, _item: StudioSubtitleSegment): number {
+    return index;
+  }
+
   get selectedSegment(): StudioSegment | null {
     return (
       this.detail?.segments?.find(
@@ -238,6 +244,15 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     const values: Record<string, any> = {};
     for (const field of draftFields) values[field] = this[field];
     return values;
+  }
+
+  private cloneSubtitleSegments(value?: StudioSubtitleSegment[]): StudioSubtitleSegment[] {
+    if (!Array.isArray(value)) return [];
+    return value.map((subtitle) => ({
+      start: Number(subtitle.start || 0),
+      end: Number(subtitle.end || 0),
+      text: String(subtitle.text || ''),
+    }));
   }
 
   saveDraft(): void {
@@ -359,6 +374,21 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return `${this.startDraft.toFixed(1)}s - ${this.endDraft.toFixed(1)}s`;
   }
 
+  get selectedSegmentDuration(): number {
+    return Math.max(0, this.endDraft - this.startDraft);
+  }
+
+  get subtitleDraftsValid(): boolean {
+    const duration = this.selectedSegmentDuration;
+    return this.subtitleDrafts.length > 0 && this.subtitleDrafts.every((subtitle) => {
+      const start = Number(subtitle.start);
+      const end = Number(subtitle.end);
+      return Number.isFinite(start) && Number.isFinite(end)
+        && start >= 0 && end > start && end <= duration + 0.01
+        && Boolean(String(subtitle.text || '').trim());
+    });
+  }
+
   get selectedActionStatus(): string {
     return this.selectedSegment?.action_state?.status || '';
   }
@@ -449,6 +479,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.subtitleOutline = Number(style.outline || 2);
     this.subtitleTextColor = this.cssColour(style.primary_colour, '#ffffff');
     this.subtitleOutlineColor = this.cssColour(style.outline_colour, '#000000');
+    this.subtitleDrafts = this.cloneSubtitleSegments(segment.subtitle_segments);
     this.draftKey = `${this.selectedTaskId}:${segment.segment_id}`;
     this.draftRevision = Number(segment.revision || 0);
     this.baseline = JSON.stringify(this.draftValues());
@@ -458,6 +489,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       for (const field of draftFields) if (field in saved.values) (this as any)[field] = saved.values[field];
       this.draftRevision = saved.revision;
     }
+    if (!Array.isArray(this.subtitleDrafts)) this.subtitleDrafts = [];
     this.mediaMode = segment.final_media_id && segment.upload_status === 'awaiting_publish' ? 'final' : 'source';
     const url = new URL(window.location.href);
     url.searchParams.set('source_task_id', this.selectedTaskId);
@@ -569,6 +601,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   finalizeSegment(): void {
     const segment = this.selectedSegment;
     if (!segment) return;
+    if (this.subtitleDrafts.length && !this.subtitleDraftsValid) {
+      this.message.warning('请填写非空字幕，并检查每行的时间范围');
+      return;
+    }
     this.runSegmentAction('finalize', this.finalizePayload());
   }
 
@@ -650,7 +686,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   private finalizePayload(): Record<string, unknown> {
-    return {
+    const payload: Record<string, unknown> = {
       expected_revision: this.draftRevision,
       title: this.titleDraft,
       description: this.descriptionDraft,
@@ -668,6 +704,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         outline_colour: this.assColour(this.subtitleOutlineColor),
       },
     };
+    if (this.subtitleDrafts.length) {
+      payload.subtitle_segments = this.cloneSubtitleSegments(this.subtitleDrafts);
+    }
+    return payload;
   }
 
   scheduleDrop(): void {
@@ -727,6 +767,50 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       outline: this.subtitleOutline,
       primary_colour: this.assColour(this.subtitleTextColor),
       outline_colour: this.assColour(this.subtitleOutlineColor),
+    });
+  }
+
+  addSubtitleLine(): void {
+    if (!this.selectedSegment || this.selectedActionBusy) return;
+    const duration = this.selectedSegmentDuration;
+    const previous = this.subtitleDrafts[this.subtitleDrafts.length - 1];
+    const start = Math.min(duration, Math.max(0, Number(previous?.end || 0)));
+    const end = Math.min(duration, start + Math.min(3, Math.max(0.1, duration - start)));
+    if (end <= start) {
+      this.message.warning('当前片段没有可用的新增字幕时间');
+      return;
+    }
+    this.subtitleDrafts = [
+      ...this.subtitleDrafts,
+      {start, end, text: ''},
+    ];
+    this.changeDetector.markForCheck();
+  }
+
+  removeSubtitleLine(index: number): void {
+    if (this.selectedActionBusy) return;
+    if (this.subtitleDrafts.length <= 1) {
+      this.message.warning('至少保留一行字幕');
+      return;
+    }
+    this.subtitleDrafts = this.subtitleDrafts.filter((_item, itemIndex) => itemIndex !== index);
+    this.changeDetector.markForCheck();
+  }
+
+  seekSubtitleLine(subtitle: StudioSubtitleSegment): void {
+    const offset = Number(subtitle.start || 0);
+    this.seekTo(this.mediaMode === 'final' ? offset : this.startDraft + offset);
+  }
+
+  saveSubtitleEdits(): void {
+    if (!this.selectedSegment) return;
+    if (!this.subtitleDraftsValid) {
+      this.message.warning('请填写非空字幕，并检查每行的时间范围');
+      return;
+    }
+    this.runSegmentAction('subtitles', {
+      expected_revision: this.draftRevision,
+      subtitle_segments: this.cloneSubtitleSegments(this.subtitleDrafts),
     });
   }
 
@@ -957,7 +1041,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         if (key === this.draftKey) {
           const accepted = action === 'finalize' ? [...draftFields]
             : action === 'range' ? ['startDraft', 'endDraft']
-            : action === 'subtitle-style' ? draftFields.filter(field => field.startsWith('subtitle')) : [];
+            : action === 'subtitle-style' ? draftFields.filter(field => field.startsWith('subtitle') && field !== 'subtitleDrafts')
+            : action === 'subtitles' ? ['subtitleDrafts'] : [];
           const baseline = JSON.parse(this.baseline || '{}');
           for (const field of accepted) baseline[field] = submitted[field];
           this.baseline = JSON.stringify(baseline);

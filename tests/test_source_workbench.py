@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.autoslice.analysis_result import AnalysisResult
+from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment
 from src.burn.task_history import write_task_history
 from src.dashboard import source_workbench
 from src.dashboard.task_state import build_task_inventory
@@ -96,6 +96,30 @@ def test_source_recording_detail_returns_density_and_segments(tmp_path):
     assert detail["segments"][1]["artifacts"]["final_output"]["exists"] is False
     assert detail["segments"][1]["timings_ms"] == {}
     assert detail["segments"][1]["action_state"]["status"] == "idle"
+
+
+def test_source_recording_detail_exposes_timestamped_subtitles(tmp_path):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    candidate = source.parent / "10s_22384516_20260602-12-56-49_analysis.json"
+    analysis = AnalysisResult(
+        title="字幕测试",
+        description="",
+        transcript="主播说黑话",
+        source_start=10.0,
+        source_end=70.0,
+        transcript_segments=[
+            TranscriptSegment(start=0.0, end=1.5, text="主播说黑话"),
+        ],
+    )
+    assert analysis.to_json_file(str(candidate))
+
+    task_id = build_task_inventory(videos)[0]["task_id"]
+    detail = source_workbench.build_source_recording_detail(videos, task_id)
+
+    assert detail["segments"][0]["subtitle_segments"] == [
+        {"start": 0.0, "end": 1.5, "text": "主播说黑话"},
+    ]
 
 
 def test_source_recording_detail_rejects_stale_failed_preview_and_final_output(tmp_path):
@@ -824,6 +848,142 @@ def test_update_segment_subtitle_style_persists_mapping(tmp_path):
     }
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
     assert history["segments"][0]["subtitle_style"]["font_size"] == 26
+
+
+def test_update_segment_subtitles_persists_rows_and_bumps_revision(tmp_path):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+
+    updated = source_workbench.update_segment_subtitles(
+        videos,
+        "seg_keep",
+        {
+            "expected_revision": 0,
+            "subtitle_segments": [
+                {"start": 0.0, "end": 1.2, "text": "修正后的黑话"},
+                {"start": 1.3, "end": 2.8, "text": "第二行"},
+            ],
+        },
+    )
+
+    assert updated["subtitle_segments"] == [
+        {"start": 0.0, "end": 1.2, "text": "修正后的黑话"},
+        {"start": 1.3, "end": 2.8, "text": "第二行"},
+    ]
+    assert updated["manual_override"] is True
+    assert updated["revision"] == 1
+    assert updated["preview_available"] is False
+    history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
+    assert history["segments"][0]["subtitle_segments"][0]["text"] == "修正后的黑话"
+
+
+def test_finalize_applies_saved_manual_subtitles(tmp_path, monkeypatch):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    source_workbench.update_segment_subtitles(
+        videos,
+        "seg_failed",
+        {
+            "expected_revision": 0,
+            "subtitle_segments": [
+                {"start": 0.5, "end": 2.0, "text": "人工修正黑话"},
+            ],
+        },
+    )
+    monkeypatch.setenv("BILIVE_SKIP_UPLOAD_QUEUE", "1")
+    monkeypatch.setattr(
+        source_workbench,
+        "slice_video",
+        lambda _source, output, _start, _duration: output.write_bytes(b"raw"),
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "transcribe_segment_audio",
+        lambda _path, _duration, **_kwargs: {
+            "transcript": "自动识别内容",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "自动识别内容"}],
+        },
+    )
+    seen = {}
+
+    def fake_burn(_raw, analysis, output, _style, **_kwargs):
+        seen["transcript"] = analysis.transcript
+        seen["segments"] = [
+            {"start": item.start, "end": item.end, "text": item.text}
+            for item in analysis.transcript_segments
+        ]
+        output.write_bytes(b"final")
+        return SimpleNamespace(burned=True, message="ok")
+
+    monkeypatch.setattr(source_workbench, "burn_final_subtitles", fake_burn)
+    monkeypatch.setattr(source_workbench, "write_slice_upload_metadata", lambda *a, **k: None)
+
+    updated = source_workbench.finalize_segment(videos, "seg_failed")
+
+    assert seen["transcript"] == "人工修正黑话"
+    assert seen["segments"] == [
+        {"start": 0.5, "end": 2.0, "text": "人工修正黑话"},
+    ]
+    analysis_path = videos / updated["artifacts"]["analysis_sidecar"]["rel_path"]
+    saved_analysis = AnalysisResult.from_json(
+        analysis_path.read_text(encoding="utf-8")
+    )
+    assert saved_analysis is not None
+    assert saved_analysis.transcript == "自动识别内容"
+    assert updated["upload_status"] == "skipped"
+
+
+def test_finalize_reburns_when_manual_subtitles_keep_the_same_output_path(
+    tmp_path, monkeypatch
+):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    prepared = source_workbench.prepare_segment_finalize(videos, "seg_failed", {})
+    final_rel = source_workbench._artifact_plan(
+        videos.resolve(), source, prepared
+    )["final_output"]["rel_path"]
+    final_path = videos / final_rel
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path.write_bytes(b"old-final")
+
+    source_workbench.update_segment_subtitles(
+        videos,
+        "seg_failed",
+        {
+            "expected_revision": prepared["revision"],
+            "subtitle_segments": [
+                {"start": 0.5, "end": 2.0, "text": "新的人工字幕"},
+            ],
+        },
+    )
+    monkeypatch.setenv("BILIVE_SKIP_UPLOAD_QUEUE", "1")
+    monkeypatch.setattr(
+        source_workbench,
+        "slice_video",
+        lambda _source, output, _start, _duration: output.write_bytes(b"raw"),
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "transcribe_segment_audio",
+        lambda _path, _duration, **_kwargs: {
+            "transcript": "旧字幕",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "旧字幕"}],
+        },
+    )
+    burn_calls = []
+
+    def fake_burn(_raw, analysis, output, _style, **_kwargs):
+        burn_calls.append(analysis.transcript)
+        output.write_bytes(b"new-final")
+        return SimpleNamespace(burned=True, message="ok")
+
+    monkeypatch.setattr(source_workbench, "burn_final_subtitles", fake_burn)
+    monkeypatch.setattr(source_workbench, "write_slice_upload_metadata", lambda *a, **k: None)
+
+    source_workbench.finalize_segment(videos, "seg_failed")
+
+    assert burn_calls == ["新的人工字幕"]
+    assert final_path.read_bytes() == b"new-final"
 
 
 def test_update_subtitle_style_with_windows_queue_path_withdraws_staged_final(
