@@ -94,6 +94,52 @@ describe('Studio review behavior', () => {
     });
   });
 
+  it('follows the playing subtitle line and formats readable timecodes', () => {
+    component.selectSegment(a);
+    component.inspectorTab = 'subtitles';
+    component.subtitleDrafts = [
+      {start: 0, end: 1.2, text: '第一句'},
+      {start: 1.2, end: 2.8, text: '第二句'},
+    ];
+
+    component.onVideoTimeUpdate({target: {currentTime: 1.8}} as unknown as Event);
+
+    expect(component.activeSubtitleIndex).toBe(1);
+    expect(component.subtitleProgressLabel).toBe('当前第 2 / 2 行');
+    expect(component.formatSubtitleTime(1.72)).toBe('00:01.72');
+  });
+
+  it('adjusts only the active subtitle timing within the segment', () => {
+    component.selectSegment(a);
+    component.subtitleDrafts = [
+      {start: 0, end: 1.2, text: '第一句'},
+      {start: 1.2, end: 2.8, text: '第二句'},
+    ];
+    component.activeSubtitleIndex = 1;
+
+    component.updateActiveSubtitleTime('start', 1.9);
+    expect(component.subtitleDrafts).toEqual([
+      {start: 0, end: 1.2, text: '第一句'},
+      {start: 1.9, end: 2.8, text: '第二句'},
+    ]);
+
+    component.updateActiveSubtitleTime('end', 99);
+    expect(component.subtitleDrafts[1].end).toBe(component.selectedSegmentDuration);
+  });
+
+  it('selects a subtitle row before opening its actions', () => {
+    component.selectSegment(a);
+    component.subtitleDrafts = [
+      {start: 0, end: 1.2, text: '第一句'},
+      {start: 1.2, end: 2.8, text: '第二句'},
+    ];
+
+    component.toggleSubtitleActions(1);
+
+    expect(component.activeSubtitleIndex).toBe(1);
+    expect(component.subtitleActionsIndex).toBe(1);
+  });
+
   it('tracks beyond 90 seconds, survives GET failure and never repeats POST', fakeAsync(() => {
     component.selectSegment(a);
     component.finalizeSegment();

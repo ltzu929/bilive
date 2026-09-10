@@ -82,6 +82,9 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   subtitleTextColor = '#ffffff';
   subtitleOutlineColor = '#000000';
   subtitleDrafts: StudioSubtitleSegment[] = [];
+  activeSubtitleIndex = -1;
+  subtitleTimeEditOpen = false;
+  subtitleActionsIndex = -1;
   progress: Record<string, any> = {};
   diagnostics: Record<string, any> = {};
   worker: Record<string, any> = {};
@@ -238,6 +241,29 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   get hasDraft(): boolean {
     return !!this.draftKey && JSON.stringify(this.draftValues()) !== this.baseline;
+  }
+
+  get activeSubtitle(): StudioSubtitleSegment | null {
+    return this.subtitleDrafts[this.activeSubtitleIndex] || null;
+  }
+
+  get subtitleDraftDirty(): boolean {
+    if (!this.draftKey) return false;
+    const baseline = JSON.parse(this.baseline || '{}');
+    return JSON.stringify(this.cloneSubtitleSegments(this.subtitleDrafts))
+      !== JSON.stringify(this.cloneSubtitleSegments(baseline.subtitleDrafts));
+  }
+
+  get subtitleStatusLabel(): string {
+    if (!this.subtitleDrafts.length) return '暂无字幕';
+    if (this.subtitleDraftDirty) return '未保存修改';
+    return '已保存，可重新烧录';
+  }
+
+  get subtitleProgressLabel(): string {
+    if (!this.subtitleDrafts.length) return '暂无字幕行';
+    const index = this.activeSubtitleIndex >= 0 ? this.activeSubtitleIndex + 1 : 1;
+    return `当前第 ${index} / ${this.subtitleDrafts.length} 行`;
   }
 
   private draftValues(): Record<string, any> {
@@ -490,6 +516,9 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       this.draftRevision = saved.revision;
     }
     if (!Array.isArray(this.subtitleDrafts)) this.subtitleDrafts = [];
+    this.activeSubtitleIndex = this.subtitleDrafts.length ? 0 : -1;
+    this.subtitleTimeEditOpen = false;
+    this.subtitleActionsIndex = -1;
     this.mediaMode = segment.final_media_id && segment.upload_status === 'awaiting_publish' ? 'final' : 'source';
     const url = new URL(window.location.href);
     url.searchParams.set('source_task_id', this.selectedTaskId);
@@ -511,6 +540,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   setInspectorTab(tab: InspectorTab): void {
     this.inspectorTab = tab;
+    if (tab !== 'subtitles') {
+      this.subtitleTimeEditOpen = false;
+      this.subtitleActionsIndex = -1;
+    }
+    this.changeDetector.markForCheck();
   }
 
   toggleQueue(): void {
@@ -784,6 +818,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       ...this.subtitleDrafts,
       {start, end, text: ''},
     ];
+    this.activeSubtitleIndex = this.subtitleDrafts.length - 1;
+    this.subtitleActionsIndex = -1;
     this.changeDetector.markForCheck();
   }
 
@@ -794,12 +830,65 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       return;
     }
     this.subtitleDrafts = this.subtitleDrafts.filter((_item, itemIndex) => itemIndex !== index);
+    this.activeSubtitleIndex = Math.min(this.activeSubtitleIndex, this.subtitleDrafts.length - 1);
+    this.subtitleActionsIndex = -1;
     this.changeDetector.markForCheck();
   }
 
   seekSubtitleLine(subtitle: StudioSubtitleSegment): void {
+    this.activeSubtitleIndex = this.subtitleDrafts.indexOf(subtitle);
     const offset = Number(subtitle.start || 0);
     this.seekTo(this.mediaMode === 'final' ? offset : this.startDraft + offset);
+    this.changeDetector.markForCheck();
+  }
+
+  onVideoTimeUpdate(event: Event): void {
+    if (this.inspectorTab !== 'subtitles' || !this.subtitleDrafts.length) return;
+    const video = event.target as HTMLVideoElement;
+    const offset = this.mediaMode === 'final' ? video.currentTime : video.currentTime - this.startDraft;
+    const activeIndex = this.subtitleDrafts.findIndex((subtitle) => (
+      offset >= Number(subtitle.start || 0) && offset <= Number(subtitle.end || 0)
+    ));
+    if (activeIndex >= 0 && activeIndex !== this.activeSubtitleIndex) {
+      this.activeSubtitleIndex = activeIndex;
+      this.subtitleActionsIndex = -1;
+      this.changeDetector.markForCheck();
+    }
+  }
+
+  toggleSubtitleTimeEdit(): void {
+    this.subtitleTimeEditOpen = !this.subtitleTimeEditOpen;
+    this.subtitleActionsIndex = -1;
+  }
+
+  toggleSubtitleActions(index: number): void {
+    this.activeSubtitleIndex = index;
+    this.subtitleActionsIndex = this.subtitleActionsIndex === index ? -1 : index;
+  }
+
+  updateActiveSubtitleTime(boundary: RangeBoundary, value: number): void {
+    const index = this.activeSubtitleIndex;
+    const current = this.activeSubtitle;
+    if (!current || index < 0) return;
+    const number = Math.max(0, Number(value || 0));
+    const start = boundary === 'start'
+      ? Math.min(number, Math.max(0, Number(current.end || 0) - 0.1))
+      : Number(current.start || 0);
+    const end = boundary === 'end'
+      ? Math.min(this.selectedSegmentDuration, Math.max(number, start + 0.1))
+      : Number(current.end || 0);
+    this.subtitleDrafts = this.subtitleDrafts.map((subtitle, itemIndex) => (
+      itemIndex === index ? {...subtitle, start, end} : subtitle
+    ));
+    this.changeDetector.markForCheck();
+  }
+
+  formatSubtitleTime(value: number): string {
+    const centiseconds = Math.max(0, Math.round(Number(value || 0) * 100));
+    const minutes = Math.floor(centiseconds / 6000);
+    const seconds = Math.floor((centiseconds % 6000) / 100);
+    const fraction = centiseconds % 100;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(fraction).padStart(2, '0')}`;
   }
 
   saveSubtitleEdits(): void {
@@ -923,6 +1012,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     if (next) this.selectSegment(next);
   }
 
+  nextSubtitle(offset: number): void {
+    if (!this.subtitleDrafts.length) return;
+    const index = this.activeSubtitleIndex < 0 ? 0 : this.activeSubtitleIndex;
+    const next = (index + offset + this.subtitleDrafts.length) % this.subtitleDrafts.length;
+    const subtitle = this.subtitleDrafts[next];
+    if (subtitle) this.seekSubtitleLine(subtitle);
+  }
+
   @HostListener('document:keydown', ['$event'])
   onShortcut(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
@@ -936,10 +1033,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     if (this.mediaMode === 'final' && ['i', 'o'].includes(event.key.toLowerCase())) return;
     if (event.key.toLowerCase() === 'j') {
       event.preventDefault();
-      this.nextSegment(1);
+      this.inspectorTab === 'subtitles' ? this.nextSubtitle(1) : this.nextSegment(1);
     } else if (event.key.toLowerCase() === 'k') {
       event.preventDefault();
-      this.nextSegment(-1);
+      this.inspectorTab === 'subtitles' ? this.nextSubtitle(-1) : this.nextSegment(-1);
     } else if (event.key.toLowerCase() === 'i') {
       event.preventDefault();
       this.updateRange('start', this.currentVideoTime());
