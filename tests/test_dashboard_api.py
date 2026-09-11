@@ -840,6 +840,39 @@ async def test_start_slice_api_queues_selected_source_recording_only(
     assert selected.with_suffix(".mp4.pending").exists()
     assert not other.with_suffix(".mp4.pending").exists()
 
+
+@pytest.mark.anyio
+async def test_start_slice_api_supports_named_room_directory(
+    videos_root,
+    write_source_recording,
+    dashboard_client,
+):
+    """Named room dirs like '22384516 - 呜米' must resolve to numeric room_id."""
+    import base64
+
+    selected = write_source_recording(
+        name="blive_22384516_2026-09-11-125713_(1).mp4",
+        room_id="22384516 - 呜米",
+    )
+    task_id = base64.urlsafe_b64encode(
+        selected.relative_to(videos_root).as_posix().encode("utf-8")
+    ).decode("ascii").rstrip("=")
+
+    async with dashboard_client(
+        videos_root,
+        remote_worker_trigger=lambda pending: {"status": "accepted", "pid": 1},
+    ) as client:
+        response = await client.post("/api/slice/start", json={"task_id": task_id})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["queued"] == 1
+    assert selected.with_suffix(".mp4.pending").exists()
+    marker = selected.with_suffix(".mp4.pending").read_text(encoding="utf-8")
+    assert '"room_id": "22384516"' in marker
+
+
 @pytest.mark.anyio
 async def test_start_slice_api_accepts_legacy_zero_arg_starter(tmp_path, dashboard_client):
     calls = []

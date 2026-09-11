@@ -85,11 +85,12 @@ class DashboardContext:
         if task_id:
             from src.dashboard.source_lifecycle import profile_slice_options
             from src.dashboard.task_state import resolve_task_id
+            from src.recording_paths import room_identity
 
             source = resolve_task_id(self.store.videos_root, task_id)
             profile_options = profile_slice_options(
                 self.store.videos_root,
-                source.parent.name,
+                room_identity(source.parent)[0],
             )
             slice_options = {**profile_options, **(slice_options or {})} or None
         return start_slice_scan(

@@ -57,8 +57,10 @@ def _workbench():
 
 
 def _recording_source(ctx: DashboardContext, task_id: str):
+    from src.recording_paths import room_identity
+
     source = resolve_task_id(ctx.store.videos_root, task_id)
-    return source, source.relative_to(ctx.store.videos_root).as_posix(), source.parent.name
+    return source, source.relative_to(ctx.store.videos_root).as_posix(), room_identity(source.parent)[0]
 
 
 def _queue_trash(ctx: DashboardContext, task_id: str) -> Dict[str, Any]:

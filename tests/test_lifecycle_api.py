@@ -3,10 +3,11 @@ from src.burn.task_history import write_task_history
 import pytest
 
 
-def _recording(videos_root, *, segments=None):
-    room = videos_root / "22384516"
+def _recording(videos_root, *, segments=None, room_dir="22384516", source_name=None):
+    room = videos_root / room_dir
     room.mkdir(parents=True)
-    source = room / "22384516_20260602-12-56-49.mp4"
+    name = source_name or "22384516_20260602-12-56-49.mp4"
+    source = room / name
     source.write_bytes(b"source")
     source.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
     source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
@@ -58,6 +59,38 @@ async def test_source_recording_api_requires_explicit_empty_review_and_queues_tr
     assert body["review_state"] == "trash_pending"
     assert body["trash_job"]["status"] == "accepted"
     assert trigger_calls == [1]
+
+
+@pytest.mark.anyio
+async def test_review_complete_trash_supports_named_room_directory(
+    tmp_path,
+    dashboard_client,
+):
+    """Trash via named room dir must use numeric room_id, not the directory name."""
+    from src.dashboard.source_lifecycle import read_recording_state
+
+    videos = tmp_path / "Videos"
+    _recording(
+        videos,
+        room_dir="22384516 - 呜米",
+        source_name="blive_22384516_2026-09-11-125713_(1).mp4",
+    )
+
+    async with dashboard_client(
+        videos,
+        remote_worker_trigger=lambda pending: {"status": "accepted"},
+    ) as client:
+        listing = await client.get("/api/source-recordings")
+        task_id = listing.json()[0]["task_id"]
+        completed = await client.post(
+            f"/api/source-recordings/{task_id}/review-complete",
+            json={"confirmed_no_content": True},
+        )
+
+    assert completed.status_code == 200
+    state = read_recording_state(videos, task_id)
+    assert state["review_state"] == "trash_pending"
+    assert state["room_id"] == "22384516"
 
 
 @pytest.mark.anyio
