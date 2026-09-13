@@ -70,3 +70,67 @@ def test_unconverted_flv_is_not_a_workbench_source(videos_root, make_room):
     source.with_suffix(".xml").write_text("<i/>")
     assert build_task_inventory(videos_root) == []
     assert start_slice_scan(videos_root)["queued"] == 0
+
+
+def test_upload_dashboard_reads_sidecar_from_named_room_directory(
+    videos_root,
+    monkeypatch,
+    make_room,
+):
+    from src.dashboard._helpers import read_upload_dashboard
+    from src.db import conn
+    from src.upload.slice_metadata import write_slice_upload_metadata
+
+    room = make_room("22384516 - 呜米")
+    video = room / "final.mp4"
+    video.write_bytes(b"fixture")
+    write_slice_upload_metadata(
+        video,
+        title="fixture",
+        source_task_id="source",
+        segment_id="segment",
+    )
+    monkeypatch.setenv("BILIVE_VIDEOS_DIR", str(videos_root))
+    # Path shape matches production Windows queue rows, with a named room dir.
+    conn.insert_upload_queue(r"D:\alldata\pi\bilive\Videos\22384516 - 呜米\final.mp4")
+    item = read_upload_dashboard()["items"][0]
+    assert item["room"] == "22384516 - 呜米"
+    assert item["source_task_id"] == "source"
+    assert item["segment_id"] == "segment"
+
+
+def test_progress_rel_path_prefers_named_room_directory(videos_root, make_room):
+    from src.dashboard._helpers import enrich_slice_progress
+
+    named = make_room("8792912 - 咩栗")
+    make_room("8792912")
+    source = named / "blive_8792912_2026-09-08-105557.mp4"
+    source.write_bytes(b"recording")
+    store = DashboardFileStore(videos_root)
+    # Windows absolute source_path is unresolvable on this node; fall back to room scan.
+    enriched = enrich_slice_progress(
+        {
+            "room_id": "8792912",
+            "source_name": source.name,
+            "source_path": r"D:\alldata\pi\bilive\Videos\8792912 - 咩栗\blive_8792912_2026-09-08-105557.mp4",
+        },
+        store,
+    )
+    assert enriched["source_rel_path"] == f"{named.name}/{source.name}"
+
+
+def test_progress_rel_path_prefers_named_dir_when_file_missing(videos_root, make_room):
+    from src.dashboard._helpers import enrich_slice_progress
+
+    make_room("8792912 - 咩栗")
+    make_room("8792912")
+    store = DashboardFileStore(videos_root)
+    enriched = enrich_slice_progress(
+        {
+            "room_id": "8792912",
+            "source_name": "blive_8792912_2026-09-08-105557.mp4",
+            "source_path": "",
+        },
+        store,
+    )
+    assert enriched["source_rel_path"] == "8792912 - 咩栗/blive_8792912_2026-09-08-105557.mp4"

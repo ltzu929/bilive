@@ -20,6 +20,7 @@ from fastapi import Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from src.dashboard.file_store import DashboardFileStore
+from src.recording_paths import ROOM_DIR_RE, room_directories, room_identity
 
 
 CHUNK_SIZE = 1024 * 1024
@@ -156,7 +157,12 @@ def read_upload_dashboard(*, status: str = "", limit: int = 50, offset: int = 0)
     for row in rows:
         name, room = upload_path_parts(str(row.get("video_path") or ""))
         # Queue paths belong to Windows; read sidecars in this node's media root.
-        metadata = (read_slice_upload_metadata(default_videos_root() / room / name) or {}) if room.isdigit() else {}
+        # room is the full directory name ("22384516" or "22384516 - 呜米").
+        metadata = (
+            read_slice_upload_metadata(default_videos_root() / room / name) or {}
+            if name and ROOM_DIR_RE.fullmatch(room)
+            else {}
+        )
         items.append({
             "id": row.get("id"),
             "source_task_id": str(metadata.get("source_task_id") or ""),
@@ -275,15 +281,24 @@ def _progress_source_rel_path(
     videos_root: Path,
 ) -> str:
     source_path = str(progress.get("source_path") or "")
+    root = Path(videos_root).expanduser().resolve()
     if source_path:
         try:
             resolved = Path(source_path).expanduser().resolve()
-            root = Path(videos_root).expanduser().resolve()
             return resolved.relative_to(root).as_posix()
         except (OSError, RuntimeError, ValueError):
             pass
     if room_id and source_name:
-        return f"{room_id}/{source_name}"
+        rooms = room_directories(root, room_id)
+        for room_dir in rooms:
+            if (room_dir / source_name).is_file():
+                return (room_dir / source_name).relative_to(root).as_posix()
+        if rooms:
+            named = next(
+                (directory for directory in rooms if room_identity(directory)[1] != room_id),
+                rooms[0],
+            )
+            return f"{named.name}/{source_name}"
     return ""
 
 
