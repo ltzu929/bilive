@@ -31,10 +31,12 @@ def maintain_recording_retention(
     *,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Warn at day 11 and enqueue day-14 recycle-bin actions.
+    """Warn at day 5 and enqueue day-7 recycle-bin actions.
 
-    The maintenance pass never moves files itself. It creates the same
-    Windows-only ``trash_recording`` action for the normal worker to consume.
+    After the retention deadline the source package is recycled with no
+    review/upload status exceptions (``force_expired``). The maintenance pass
+    never moves files itself. It creates the same Windows-only
+    ``trash_recording`` action for the normal worker to consume.
     It deliberately does not execute or wake that worker, so a maintenance pass
     cannot make unrelated pending actions run.
     """
@@ -66,7 +68,7 @@ def maintain_recording_retention(
                 {
                     "task_id": task_id,
                     "retention_deadline": fields["retention_deadline"],
-                    "message": "录播未完成复核，已进入第 11 天保留预警",
+                    "message": "录播未完成复核，已进入第 5 天保留预警",
                 }
             )
         if not fields["retention_expired"] or str(state.get("trash_status") or "") == "done":

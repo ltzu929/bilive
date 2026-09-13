@@ -33,8 +33,8 @@ REVIEW_STATES = (
 )
 REVIEWABLE_STATUSES = {"keep", "manual_keep", "drop"}
 UNRESOLVED_STATUSES = {"review", "judge_failed"}
-RETENTION_WARNING_DAYS = 11
-RETENTION_DAYS = 14
+RETENTION_WARNING_DAYS = 5
+RETENTION_DAYS = 7
 MISSED_SEGMENT_REASONS = {
     "mimo_missed": "MiMo 漏切",
     "boundary_incomplete": "边界不完整",

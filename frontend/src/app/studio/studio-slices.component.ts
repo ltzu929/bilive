@@ -994,8 +994,21 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return `${item.segment_count || 0} 候选 · ${review} 待复核 · ${keep} 已保留`;
   }
 
+  recordingTitle(item: StudioSourceRecording): string {
+    const streamer = item.room_name || item.room_id || '未知主播';
+    const recorded = item.recorded_at || this.fallbackRecordedLabel(item);
+    return recorded ? `${streamer} · ${recorded}` : streamer;
+  }
+
+  private fallbackRecordedLabel(item: StudioSourceRecording): string {
+    const name = item.source_name || item.source_rel_path || '';
+    const match = name.match(/(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})/);
+    if (!match) return '';
+    return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
+  }
+
   sourceDateLabel(item: StudioSourceRecording): string {
-    return item.recorded_at || item.source_name || item.source_rel_path || '-';
+    return item.recorded_at || this.fallbackRecordedLabel(item) || item.source_name || item.source_rel_path || '-';
   }
 
   isActionEnabled(action: string): boolean {

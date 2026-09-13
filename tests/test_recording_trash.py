@@ -240,3 +240,41 @@ def test_trash_plan_blocks_unknown_segment_action_state(tmp_path):
         recording_trash.build_trash_plan(videos, task["task_id"])
 
     assert "segment_action_state_active:seg1" in error.value.blockers
+
+
+def test_force_expired_trash_ignores_review_and_active_status(tmp_path):
+    """After retention deadline, recycle even without review_complete / .done."""
+    from datetime import datetime, timedelta, timezone
+
+    videos = tmp_path / "Videos"
+    source = _recording(videos)
+    # Simulate an incomplete review and an active-looking source marker.
+    source.with_suffix(".mp4.done").unlink()
+    source.with_suffix(".mp4.pending").write_text("{}", encoding="utf-8")
+    write_task_history(source, status="processing", videos_root=videos, segments=[])
+    task = build_task_inventory(videos)[0]
+    deadline = datetime.now(timezone.utc) - timedelta(days=1)
+    source_lifecycle.mutate_recording_state(
+        videos,
+        task["task_id"],
+        lambda state: {
+            **state,
+            "review_state": "unprocessed",
+            "retention_deadline": deadline.isoformat(timespec="seconds"),
+        },
+        source_rel_path=task["source_rel_path"],
+        room_id=task["room_id"],
+    )
+
+    with pytest.raises(recording_trash.RecordingTrashBlocked) as normal:
+        recording_trash.build_trash_plan(videos, task["task_id"])
+    assert "review_incomplete" in normal.value.blockers
+    assert "source_task_active" in normal.value.blockers
+
+    plan = recording_trash.build_trash_plan(
+        videos,
+        task["task_id"],
+        payload={"force_expired": True},
+    )
+    assert plan["status"] == "ready"
+    assert task["source_rel_path"] in plan["files"]

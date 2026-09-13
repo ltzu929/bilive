@@ -331,7 +331,7 @@ def test_lifecycle_retention_warning_and_expiry_are_exposed(tmp_path):
     )
     started = 1_000_000
     state["retention_started_at"] = "1970-01-12T13:46:40+00:00"
-    state["retention_deadline"] = "1970-01-26T13:46:40+00:00"
+    state["retention_deadline"] = "1970-01-19T13:46:40+00:00"
     mutate_recording_state(
         videos,
         task["task_id"],
@@ -345,7 +345,7 @@ def test_lifecycle_retention_warning_and_expiry_are_exposed(tmp_path):
         task,
         {"status": "done", "segments": []},
         [],
-        now=started + 11 * 86400,
+        now=started + 5 * 86400,
     )
     assert warning["retention_warning"] is True
     assert warning["trash_eligible"] is False
@@ -355,7 +355,7 @@ def test_lifecycle_retention_warning_and_expiry_are_exposed(tmp_path):
         task,
         {"status": "done", "segments": []},
         [],
-        now=started + 14 * 86400,
+        now=started + 7 * 86400,
     )
     assert expired["retention_expired"] is True
     assert expired["trash_eligible"] is True
@@ -372,6 +372,6 @@ def test_lifecycle_retention_warning_and_expiry_are_exposed(tmp_path):
         task,
         {"status": "done", "segments": []},
         [],
-        now=started + 11 * 86400,
+        now=started + 5 * 86400,
     )
     assert reviewed["retention_warning"] is False

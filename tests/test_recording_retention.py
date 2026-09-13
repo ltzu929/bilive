@@ -29,7 +29,7 @@ def _set_retention_window(videos, task_id, source_rel_path, room_id, start):
         start, timezone.utc
     ).isoformat()
     state["retention_deadline"] = datetime.fromtimestamp(
-        start + 14 * 86400, timezone.utc
+        start + 7 * 86400, timezone.utc
     ).isoformat()
     mutate_recording_state(
         videos,
@@ -40,7 +40,7 @@ def _set_retention_window(videos, task_id, source_rel_path, room_id, start):
     )
 
 
-def test_retention_warns_on_day_11_and_enqueues_day_14_recycle(tmp_path):
+def test_retention_warns_on_day_5_and_enqueues_day_7_recycle(tmp_path):
     videos = tmp_path / "Videos"
     source = _source(videos)
     task = build_task_inventory(videos)[0]
@@ -55,14 +55,14 @@ def test_retention_warns_on_day_11_and_enqueues_day_14_recycle(tmp_path):
 
     warning = maintain_recording_retention(
         videos,
-        now=start + 11 * 86400,
+        now=start + 5 * 86400,
     )
     assert [item["task_id"] for item in warning["warnings"]] == [task["task_id"]]
     assert warning["scheduled"] == []
 
     scheduled = maintain_recording_retention(
         videos,
-        now=start + 14 * 86400,
+        now=start + 7 * 86400,
     )
     assert scheduled["warnings"] == []
     assert len(scheduled["scheduled"]) == 1
@@ -96,7 +96,7 @@ def test_retention_enqueues_without_draining_unrelated_action_jobs(tmp_path):
     )["job"]
     result = maintain_recording_retention(
         videos,
-        now=start + 14 * 86400,
+        now=start + 7 * 86400,
     )
 
     assert (videos / ".bilive-jobs" / f"{unrelated['job_id']}.pending.json").is_file()
@@ -124,7 +124,7 @@ def test_retention_keeps_reason_when_active_recording_action_blocks_recycle(tmp_
 
     result = maintain_recording_retention(
         videos,
-        now=start + 14 * 86400,
+        now=start + 7 * 86400,
     )
 
     assert result["scheduled"] == []

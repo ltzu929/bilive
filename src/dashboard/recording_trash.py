@@ -76,86 +76,88 @@ def build_trash_plan(
     segments = history.get("segments")
     if not isinstance(segments, list):
         segments = []
+    forced = _expired_forced(state, options, now=now)
     blockers: list[str] = []
     marker_paths = [source.with_suffix(suffix) for suffix in _MARKER_SUFFIXES]
-    if marker_paths[0].is_file() or marker_paths[1].is_file():
-        blockers.append("source_task_active")
-    if str(history.get("status") or "") in {"pending", "processing"}:
-        blockers.append("source_task_active")
-    if not source.with_suffix(".mp4.done").is_file():
-        blockers.append("source_task_status_unknown")
+    if not forced:
+        if marker_paths[0].is_file() or marker_paths[1].is_file():
+            blockers.append("source_task_active")
+        if str(history.get("status") or "") in {"pending", "processing"}:
+            blockers.append("source_task_active")
+        if not source.with_suffix(".mp4.done").is_file():
+            blockers.append("source_task_status_unknown")
 
-    if str(state.get("review_state") or "") not in {"review_complete", "trash_pending"}:
-        if not _expired_forced(state, options, now=now):
+        if str(state.get("review_state") or "") not in {"review_complete", "trash_pending"}:
             blockers.append("review_incomplete")
-    if str(state.get("review_state") or "") == "processing":
-        blockers.append("source_state_active")
+        if str(state.get("review_state") or "") == "processing":
+            blockers.append("source_state_active")
 
     current_job_id = str(options.get("_job_id") or "")
     active_recording = find_active_recording_job(root, task_id)
     if active_recording and str(active_recording.get("job_id") or "") != current_job_id:
         blockers.append("trash_action_active")
-    for segment in segments:
-        if not isinstance(segment, dict):
-            continue
-        segment_id = str(segment.get("segment_id") or "")
-        if not segment_id:
-            blockers.append("segment_id_missing")
-            continue
-        active = find_active_segment_job(root, segment_id)
-        if active is not None:
-            blockers.append(f"segment_action_active:{segment_id}")
-        action_state = segment.get("action_state")
-        if isinstance(action_state, dict) and str(action_state.get("status") or "") in {
-            "pending",
-            "processing",
-        }:
-            blockers.append(f"segment_action_state_active:{segment_id}")
-        final_item = (
-            segment.get("artifacts", {}).get("final_output")
-            if isinstance(segment.get("artifacts"), dict)
-            else None
-        )
-        final_rel_path = (
-            str(final_item.get("rel_path") or "")
-            if isinstance(final_item, dict)
-            else ""
-        )
-        recorded_upload_status = str(segment.get("upload_status") or "")
-        upload_status_requires_row = recorded_upload_status in {
-            "awaiting_publish",
-            "staged",
-            "queued",
-            "uploading",
-            "uploaded",
-            "publishing",
-            "published",
-            "failed",
-        }
-        if upload_status_requires_row and final_rel_path and not Path(
-            upload_conn.DATA_BASE_FILE
-        ).is_file():
-            blockers.append("upload_status_unknown")
-        for path in _segment_paths(root, segment):
-            if not Path(upload_conn.DATA_BASE_FILE).is_file():
-                if upload_status_requires_row:
-                    blockers.append("upload_status_unknown")
-                break
-            try:
-                item = get_upload_item(str(path))
-            except Exception:
-                if upload_status_requires_row:
-                    blockers.append("upload_status_unknown")
+    if not forced:
+        for segment in segments:
+            if not isinstance(segment, dict):
                 continue
-            if item and str(item.get("status") or "") in _ACTIVE_UPLOAD_STATUSES:
-                blockers.append(f"upload_active:{segment_id}")
-            if (
-                final_rel_path
-                and path == (root / final_rel_path).resolve()
-                and upload_status_requires_row
-                and item is None
-            ):
-                blockers.append(f"upload_status_unknown:{segment_id}")
+            segment_id = str(segment.get("segment_id") or "")
+            if not segment_id:
+                blockers.append("segment_id_missing")
+                continue
+            active = find_active_segment_job(root, segment_id)
+            if active is not None:
+                blockers.append(f"segment_action_active:{segment_id}")
+            action_state = segment.get("action_state")
+            if isinstance(action_state, dict) and str(action_state.get("status") or "") in {
+                "pending",
+                "processing",
+            }:
+                blockers.append(f"segment_action_state_active:{segment_id}")
+            final_item = (
+                segment.get("artifacts", {}).get("final_output")
+                if isinstance(segment.get("artifacts"), dict)
+                else None
+            )
+            final_rel_path = (
+                str(final_item.get("rel_path") or "")
+                if isinstance(final_item, dict)
+                else ""
+            )
+            recorded_upload_status = str(segment.get("upload_status") or "")
+            upload_status_requires_row = recorded_upload_status in {
+                "awaiting_publish",
+                "staged",
+                "queued",
+                "uploading",
+                "uploaded",
+                "publishing",
+                "published",
+                "failed",
+            }
+            if upload_status_requires_row and final_rel_path and not Path(
+                upload_conn.DATA_BASE_FILE
+            ).is_file():
+                blockers.append("upload_status_unknown")
+            for path in _segment_paths(root, segment):
+                if not Path(upload_conn.DATA_BASE_FILE).is_file():
+                    if upload_status_requires_row:
+                        blockers.append("upload_status_unknown")
+                    break
+                try:
+                    item = get_upload_item(str(path))
+                except Exception:
+                    if upload_status_requires_row:
+                        blockers.append("upload_status_unknown")
+                    continue
+                if item and str(item.get("status") or "") in _ACTIVE_UPLOAD_STATUSES:
+                    blockers.append(f"upload_active:{segment_id}")
+                if (
+                    final_rel_path
+                    and path == (root / final_rel_path).resolve()
+                    and upload_status_requires_row
+                    and item is None
+                ):
+                    blockers.append(f"upload_status_unknown:{segment_id}")
 
     files, final_paths, missing_explicit = _resolve_package_files(
         root,
