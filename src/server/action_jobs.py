@@ -28,6 +28,7 @@ SUPPORTED_ACTIONS = {
     "create_missed_segment",
     "trash_recording",
     "retry_upload",
+    "approve_publish",
 }
 JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = ("pending", "processing", "done", "failed")
@@ -316,6 +317,7 @@ def _execute_action_job(
         return requeue_failed_upload(row["video_path"])
 
     from src.dashboard.source_workbench import (
+        approve_publish_segment,
         create_missed_segment,
         finalize_segment,
         reburn_segment_subtitles,
@@ -326,6 +328,12 @@ def _execute_action_job(
 
     if job["action"] == "retry_judge":
         return retry_segment_judge(videos_root, job["segment_id"])
+    if job["action"] == "approve_publish":
+        return approve_publish_segment(
+            videos_root,
+            job["segment_id"],
+            dict(job.get("payload") or {}),
+        )
     if job["action"] == "render_segment":
         if progress_callback is None:
             return render_segment(videos_root, job["segment_id"])

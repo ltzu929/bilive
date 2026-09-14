@@ -130,13 +130,18 @@ def segment_approve_publish(
     payload: Dict[str, Any],
     ctx: DashboardContext = Depends(get_context),
 ) -> Dict[str, Any]:
-    """Activate a staged final artifact after the second human confirmation."""
-    wb = _workbench()
-    return _segment_action(ctx,
+    """Queue Windows-side activation of a staged final after human confirmation."""
+    return _segment_action(
+        ctx,
         lambda: (
             _ensure_segment_idle(ctx, segment_id),
-            wb.approve_publish_segment(ctx.store.videos_root, segment_id, payload),
-        )[1]
+            ctx.queue_segment_action(
+                "approve_publish",
+                segment_id,
+                payload=dict(payload or {}),
+                wake=False,
+            ),
+        )[1],
     )
 
 

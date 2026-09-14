@@ -301,9 +301,48 @@ def test_finalize_action_dispatches_to_source_workbench(tmp_path, monkeypatch):
     ]
 
 
+def test_approve_publish_action_dispatches_to_source_workbench(tmp_path, monkeypatch):
+    from src.dashboard import source_workbench
+
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    calls = []
+    monkeypatch.setattr(action_jobs.os, "name", "nt")
+    monkeypatch.setattr(
+        source_workbench,
+        "approve_publish_segment",
+        lambda root, segment_id, payload=None: calls.append(
+            (root, segment_id, payload)
+        )
+        or {"segment_id": segment_id, "upload_status": "queued"},
+    )
+
+    result = action_jobs._execute_action_job(
+        videos,
+        {
+            "job_id": "b" * 32,
+            "action": "approve_publish",
+            "segment_id": "segment-1",
+            "payload": {
+                "expected_revision": 7,
+                "final_media_id": "media-1",
+            },
+        },
+    )
+
+    assert result["upload_status"] == "queued"
+    assert calls == [
+        (
+            videos,
+            "segment-1",
+            {"expected_revision": 7, "final_media_id": "media-1"},
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     "action",
-    ["finalize_segment", "retry_judge", "render_segment", "reburn_subtitles"],
+    ["finalize_segment", "retry_judge", "render_segment", "reburn_subtitles", "approve_publish"],
 )
 def test_all_heavy_actions_reject_non_windows_workers(tmp_path, monkeypatch, action):
     videos = tmp_path / "Videos"

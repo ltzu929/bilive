@@ -690,6 +690,41 @@ async def test_segment_finalize_api_persists_edits_then_queues_windows_job(
 
 
 @pytest.mark.anyio
+async def test_approve_publish_api_queues_windows_job_without_sqlite_write(
+    videos_root,
+    dashboard_client,
+):
+    from src.db import conn
+
+    _write_source_workbench_fixture(videos_root)
+    triggers = []
+
+    async with dashboard_client(
+        videos_root,
+        remote_worker_trigger=lambda pending: triggers.append(pending)
+        or {"status": "accepted", "pid": 2235},
+    ) as client:
+        response = await client.post(
+            "/api/segments/seg1/approve-publish",
+            json={
+                "expected_revision": 0,
+                "final_media_id": "media-placeholder",
+            },
+        )
+        job_response = await client.get(response.json()["status_url"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["job"]["action"] == "approve_publish"
+    assert body["job"]["execution_target"] == "windows"
+    assert body["job"]["payload"]["expected_revision"] == 0
+    assert job_response.json()["status"] == "pending"
+    assert triggers == [1]
+    assert conn.list_upload_queue() == []
+
+
+@pytest.mark.anyio
 async def test_segment_finalize_api_reuses_active_job_and_validates_style(
     videos_root,
     dashboard_client,

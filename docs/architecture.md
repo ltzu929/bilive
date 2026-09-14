@@ -96,7 +96,7 @@ Dashboard 提供桌面优先的三栏审核工作台，但不改变运行边界�
 - `POST /api/segments/{segment_id}/finalize` 是工作台的人工成片闸门：先保存轻量编辑，再创建 `finalize_segment` 动作任务。ASR、字幕、元数据和入队都在 Windows 完成。
 - `POST /api/segments/{segment_id}/subtitles` 只保存人工修正的片段相对字幕行和时间，不在 Dashboard 运行 ASR 或 ffmpeg；后续 finalize/reburn 在 Windows 将这些行应用到分析结果并重新烧录。
 - 分布式模式下，字幕或字幕样式修改不会让 Pi 通过 SMB 同步删除旧的 `staged` 队列行；该行不会被上传消费者领取，旧路径会随任务历史保留，并在 Windows 重新生成成片时清理后再暂存新成片。
-- `manual-keep` 作为兼容接口保留；新工作台使用异步 finalize。drop/range 仍是轻量状态修改，retry/render/reburn 创建 Windows 动作任务。
+- `manual-keep` 作为兼容接口保留；新工作台使用异步 finalize。drop/range 仍是轻量状态修改，retry/render/reburn/approve-publish 创建 Windows 动作任务；允许发布不在 Pi 写 SQLite，由 Windows 激活 `staged` 队列行。
 - `/api/upload-dashboard` 和 `/api/slice-performance` 都是只读状态接口；数据库或表不存在时返回 unavailable，不创建 SQLite 文件、不迁移 schema。
 - `/studio/uploads` 提供有界分页、状态筛选和源片段回链；`/studio/slices` 是人工审核入口。
 
