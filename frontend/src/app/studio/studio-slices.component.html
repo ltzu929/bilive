@@ -134,9 +134,15 @@
             </div>
             <div class="subtitle-workbench-actions">
               <button nz-button nzSize="small" (click)="addSubtitleLine()" [disabled]="selectedActionBusy">新增字幕行</button>
-              <button nz-button nzSize="small" (click)="saveSubtitleEdits()" [disabled]="selectedActionBusy || !subtitleDraftsValid || !subtitleDraftDirty">保存修改</button>
-              <button nz-button nzType="primary" nzSize="small" (click)="reburnSubtitles()" [disabled]="selectedActionBusy || subtitleDraftDirty">重新烧录</button>
+              <button nz-button nzSize="small" (click)="saveSubtitleEdits()" [disabled]="selectedActionBusy || !subtitleDraftsValid || !subtitleDraftDirty" [attr.title]="subtitleActionHint">{{ subtitleSaveState === 'saving' ? '保存中…' : '保存修改' }}</button>
+              <button nz-button nzType="primary" nzSize="small" (click)="reburnSubtitles()" [disabled]="selectedActionBusy || subtitleDraftDirty" [attr.title]="subtitleActionHint">重新烧录</button>
             </div>
+          </div>
+          <p class="review-note subtitle-action-hint" [class.subtitle-action-error]="!!subtitleValidationMessage && !!subtitleDrafts.length" role="status">{{ subtitleActionHint }}</p>
+          <div class="subtitle-job-progress" *ngIf="subtitleJobProgress as jobProgress" role="status" aria-live="polite">
+            <div class="subtitle-job-progress-heading"><span>{{ subtitleJobProgressMessage }}</span><small *ngIf="subtitleJobIdLabel">任务 {{ subtitleJobIdLabel }}</small></div>
+            <progress max="100" [value]="subtitleJobProgressPercent" [attr.aria-label]="subtitleJobProgressMessage"></progress>
+            <small>{{ subtitleJobProgressPercent }}%（阶段进度）</small>
           </div>
           <p class="review-note">点击字幕行定位视频；默认只改文本，需要时再展开时间。保存后重新烧录，不会自动发布。</p>
           <div class="subtitle-list" role="list" aria-label="字幕校对列表">
@@ -256,7 +262,7 @@
 
         <section role="tabpanel" id="panel-technical" aria-labelledby="tab-technical" *ngIf="inspectorTab === 'technical'" class="inspector-tab-panel">
 
-          <nz-descriptions nzSize="small" [nzColumn]="1"><nz-descriptions-item nzTitle="动作状态">{{ statusLabel(segment.action_state?.status) }}</nz-descriptions-item><nz-descriptions-item nzTitle="上传状态">{{ statusLabel(segment.upload_status) }}</nz-descriptions-item><nz-descriptions-item nzTitle="原始错误">{{ segment.failure?.technical_details || segment.judge_error || '无' }}</nz-descriptions-item></nz-descriptions>
+          <nz-descriptions nzSize="small" [nzColumn]="1"><nz-descriptions-item nzTitle="动作状态">{{ statusLabel(segment.action_state?.status) }}</nz-descriptions-item><nz-descriptions-item nzTitle="上传状态">{{ statusLabel(segment.upload_status) }}</nz-descriptions-item><nz-descriptions-item nzTitle="任务进度">{{ subtitleJobProgress ? subtitleJobProgressMessage + ' · ' + subtitleJobProgressPercent + '%' : '无后台任务' }}</nz-descriptions-item><nz-descriptions-item nzTitle="原始错误">{{ segment.failure?.technical_details || segment.judge_error || '无' }}</nz-descriptions-item></nz-descriptions>
           <div class="review-actions"><button nz-button (click)="retrySegment()" [disabled]="selectedActionBusy">重新分析</button><button nz-button (click)="renderSegment()" [disabled]="selectedActionBusy">重新渲染片段</button></div>
         </section>
 

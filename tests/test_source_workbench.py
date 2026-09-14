@@ -122,6 +122,30 @@ def test_source_recording_detail_exposes_timestamped_subtitles(tmp_path):
     ]
 
 
+def test_source_recording_detail_clamps_asr_subtitle_to_segment_duration(tmp_path):
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    candidate = source.parent / "10s_22384516_20260602-12-56-49_analysis.json"
+    analysis = AnalysisResult(
+        title="字幕边界测试",
+        description="",
+        transcript="最后一句",
+        source_start=10.0,
+        source_end=70.0,
+        transcript_segments=[
+            TranscriptSegment(start=59.0, end=60.24, text="最后一句"),
+        ],
+    )
+    assert analysis.to_json_file(str(candidate))
+
+    task_id = build_task_inventory(videos)[0]["task_id"]
+    detail = source_workbench.build_source_recording_detail(videos, task_id)
+
+    assert detail["segments"][0]["subtitle_segments"] == [
+        {"start": 59.0, "end": 60.0, "text": "最后一句"},
+    ]
+
+
 def test_source_recording_detail_rejects_stale_failed_preview_and_final_output(tmp_path):
     videos = tmp_path / "Videos"
     source = _create_processed_source(videos, failed_preview=True)
@@ -875,6 +899,57 @@ def test_update_segment_subtitles_persists_rows_and_bumps_revision(tmp_path):
     assert updated["preview_available"] is False
     history = json.loads(source.with_suffix(".mp4.task.json").read_text(encoding="utf-8"))
     assert history["segments"][0]["subtitle_segments"][0]["text"] == "修正后的黑话"
+
+
+def test_update_segment_subtitles_normalizes_small_end_boundary_tolerance(tmp_path):
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos)
+
+    updated = source_workbench.update_segment_subtitles(
+        videos,
+        "seg_keep",
+        {
+            "subtitle_segments": [
+                {"start": 59.0, "end": 60.005, "text": "贴近边界"},
+            ],
+        },
+    )
+
+    assert updated["subtitle_segments"] == [
+        {"start": 59.0, "end": 60.0, "text": "贴近边界"},
+    ]
+
+
+def test_update_segment_subtitles_rejects_clear_end_overrun(tmp_path):
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos)
+
+    with pytest.raises(ValueError, match="must stay within the segment range"):
+        source_workbench.update_segment_subtitles(
+            videos,
+            "seg_keep",
+            {
+                "subtitle_segments": [
+                    {"start": 59.0, "end": 60.24, "text": "明显越界"},
+                ],
+            },
+        )
+
+
+def test_update_segment_subtitles_rejects_negative_start(tmp_path):
+    videos = tmp_path / "Videos"
+    _create_processed_source(videos)
+
+    with pytest.raises(ValueError, match="times must be finite"):
+        source_workbench.update_segment_subtitles(
+            videos,
+            "seg_keep",
+            {
+                "subtitle_segments": [
+                    {"start": -0.1, "end": 1.0, "text": "非法时间"},
+                ],
+            },
+        )
 
 
 def test_finalize_applies_saved_manual_subtitles(tmp_path, monkeypatch):

@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import os
 import sqlite3
+import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -12,6 +14,43 @@ import toml
 
 DependencyChecker = Callable[[dict[str, Any]], tuple[bool, str]]
 LLMChecker = Callable[[dict[str, Any], Path], tuple[bool, str]]
+
+_CUDA_DLL_HANDLES: list[object] = []
+
+
+def _configure_cuda_dll_search_paths() -> None:
+    """Make the venv-scoped NVIDIA DLLs visible to this worker process.
+
+    The NVIDIA runtime wheels install their DLLs below the Python environment,
+    but a scheduled task does not inherit a PowerShell session's temporary
+    PATH.  Keep the DLL-directory handles alive and also propagate the paths to
+    child worker processes.
+    """
+    if os.name != "nt":
+        return
+
+    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
+    candidates = (
+        site_packages / "nvidia" / "cublas" / "bin",
+        site_packages / "nvidia" / "cuda_nvrtc" / "bin",
+        site_packages / "nvidia" / "cudnn" / "bin",
+        site_packages / "ctranslate2",
+    )
+    existing_path = os.environ.get("PATH", "").split(os.pathsep)
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        directory = str(candidate.resolve())
+        if directory not in existing_path:
+            existing_path.insert(0, directory)
+            os.environ["PATH"] = os.pathsep.join(existing_path)
+        if add_dll_directory is None:
+            continue
+        try:
+            _CUDA_DLL_HANDLES.append(add_dll_directory(directory))
+        except OSError:
+            continue
 
 
 def _load_config(project_root: Path) -> dict[str, Any]:
@@ -54,16 +93,93 @@ def _check_asr(config: dict[str, Any]) -> tuple[bool, str]:
     model = str(multi_modal.get("whisper_model", "large-v3"))
     model_path = Path(model).expanduser()
     if model_path.is_dir():
-        return True, str(model_path.resolve())
+        model_path = model_path.resolve()
+    else:
+        try:
+            from huggingface_hub import snapshot_download
+
+            repo_id = model if "/" in model else f"Systran/faster-whisper-{model}"
+            cached = snapshot_download(repo_id=repo_id, local_files_only=True)
+        except Exception as exc:
+            return False, f"ASR model is not cached locally: {exc}"
+        model_path = Path(cached).expanduser().resolve()
+
+    device = str(multi_modal.get("whisper_device", "cpu")).strip().lower()
+    if device not in {"cpu", "cuda"}:
+        return False, f"unsupported ASR device: {device}"
+    if device == "cuda":
+        compute_type = str(
+            multi_modal.get("whisper_compute_type", "float16")
+        ).strip()
+        try:
+            cpu_threads = int(multi_modal.get("whisper_cpu_threads", 8))
+        except (TypeError, ValueError):
+            cpu_threads = 8
+        return _check_cuda_asr_runtime(
+            str(model_path),
+            compute_type or "float16",
+            max(1, cpu_threads),
+        )
+    return True, str(model_path)
+
+
+@lru_cache(maxsize=8)
+def _check_cuda_asr_runtime(
+    model_path: str,
+    compute_type: str,
+    cpu_threads: int,
+) -> tuple[bool, str]:
+    """Validate CUDA and faster-whisper once before a worker claims work."""
+    _configure_cuda_dll_search_paths()
+    try:
+        import ctranslate2
+    except ImportError:
+        return False, "ctranslate2 is not installed for CUDA ASR"
 
     try:
-        from huggingface_hub import snapshot_download
-
-        repo_id = model if "/" in model else f"Systran/faster-whisper-{model}"
-        cached = snapshot_download(repo_id=repo_id, local_files_only=True)
+        device_count = int(ctranslate2.get_cuda_device_count())
     except Exception as exc:
-        return False, f"ASR model is not cached locally: {exc}"
-    return True, str(cached)
+        return False, f"CUDA runtime is unavailable: {exc}"
+    if device_count < 1:
+        return False, "CUDA ASR requires at least one visible device"
+
+    try:
+        supported = ctranslate2.get_supported_compute_types("cuda")
+    except Exception as exc:
+        return False, f"CUDA compute types are unavailable: {exc}"
+    if compute_type not in supported:
+        return False, (
+            f"CUDA compute type is unsupported: {compute_type}; "
+            f"available={sorted(str(item) for item in supported)}"
+        )
+
+    try:
+        from faster_whisper import WhisperModel
+        import numpy as np
+
+        model = WhisperModel(
+            model_path,
+            device="cuda",
+            compute_type=compute_type,
+            cpu_threads=max(1, int(cpu_threads)),
+        )
+        probe_audio = np.zeros(16000, dtype=np.float32)
+        probe_segments, _probe_info = model.transcribe(
+            probe_audio,
+            language="zh",
+            vad_filter=False,
+            without_timestamps=True,
+            beam_size=1,
+            best_of=1,
+        )
+        list(probe_segments)
+        del model
+    except Exception as exc:
+        return False, f"faster-whisper CUDA probe failed: {exc}"
+    return True, (
+        f"CUDA ASR ready: device_count={device_count}, "
+        f"compute_type={compute_type}"
+    )
 
 
 def run_worker_preflight(

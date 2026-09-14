@@ -15,7 +15,7 @@ from src.recording_paths import room_identity
 import re
 import threading
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 import uuid
 
 from src.autoslice.analysis_result import AnalysisResult, TranscriptSegment
@@ -54,6 +54,7 @@ from src.upload.slice_metadata import (
 
 
 SUMMARY_KEYS = ("keep", "manual_keep", "judge_failed", "drop", "review")
+ProgressReporter = Callable[[str, int, str], None]
 
 
 def _review_write(function):
@@ -541,6 +542,8 @@ def finalize_segment(
     videos_root: str | Path,
     segment_id: str,
     payload: dict[str, Any] | None = None,
+    *,
+    progress_callback: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Create a publishable final artifact without repeating MiMo analysis.
 
@@ -603,6 +606,12 @@ def finalize_segment(
     analysis_path = _artifact_path(root, plan["analysis_sidecar"]["rel_path"])
     final_path = _artifact_path(root, plan["final_output"]["rel_path"])
 
+    _emit_progress(
+        progress_callback,
+        "raw_render",
+        10,
+        "复用已有原始片段" if _nonempty_file(raw_path) else "正在生成原始片段",
+    )
     if not _nonempty_file(raw_path):
         stage_started = time.perf_counter()
         try:
@@ -643,6 +652,12 @@ def finalize_segment(
         end=end,
     )
     analysis_reused = analysis is not None
+    _emit_progress(
+        progress_callback,
+        "asr",
+        55,
+        "复用已有语音转写结果" if analysis_reused else "正在进行语音转写",
+    )
     if analysis is None:
         stage_started = time.perf_counter()
         try:
@@ -666,6 +681,7 @@ def finalize_segment(
 
     assert analysis is not None
     _apply_segment_metadata_to_analysis(analysis, segment, start=start, end=end)
+    _emit_progress(progress_callback, "analysis", 65, "正在保存转写结果")
     stage_started = time.perf_counter()
     try:
         _write_analysis_atomic(analysis_path, analysis)
@@ -687,6 +703,14 @@ def finalize_segment(
     _apply_manual_subtitles(analysis, segment, duration=duration)
 
     force_subtitle_burn = bool(segment.get("subtitle_needs_burn"))
+    _emit_progress(
+        progress_callback,
+        "subtitle_burn",
+        85,
+        "正在烧录字幕"
+        if force_subtitle_burn or not _nonempty_file(final_path) or not analysis_reused
+        else "复用现有字幕成片",
+    )
     if force_subtitle_burn or not _nonempty_file(final_path) or not analysis_reused:
         stage_started = time.perf_counter()
         try:
@@ -732,6 +756,7 @@ def finalize_segment(
     else:
         timings["subtitle_burn"] = 0
 
+    _emit_progress(progress_callback, "metadata", 92, "正在写入投稿元数据")
     stage_started = time.perf_counter()
     try:
         write_slice_upload_metadata(
@@ -784,6 +809,7 @@ def finalize_segment(
     # upload consumer. If this write fails, no upload row is created.
     _mutate_segment(videos_root, segment_id, mark_ready)
 
+    _emit_progress(progress_callback, "queue", 97, "正在写入人工确认队列")
     stage_started = time.perf_counter()
     try:
         if os.environ.get("BILIVE_SKIP_UPLOAD_QUEUE", "").strip() == "1":
@@ -1285,9 +1311,20 @@ def retry_segment_judge(videos_root: str | Path, segment_id: str) -> dict[str, A
     return _mutate_segment(videos_root, segment_id, mutate)
 
 
-def render_segment(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
+def render_segment(
+    videos_root: str | Path,
+    segment_id: str,
+    *,
+    progress_callback: ProgressReporter | None = None,
+) -> dict[str, Any]:
     """Regenerate a final through the same artifact and human approval contract."""
-    return finalize_segment(videos_root, segment_id)
+    if progress_callback is None:
+        return finalize_segment(videos_root, segment_id)
+    return finalize_segment(
+        videos_root,
+        segment_id,
+        progress_callback=progress_callback,
+    )
 
 
 @_review_write
@@ -1359,9 +1396,20 @@ def update_segment_subtitles(
     return _mutate_segment(videos_root, segment_id, mutate)
 
 
-def reburn_segment_subtitles(videos_root: str | Path, segment_id: str) -> dict[str, Any]:
+def reburn_segment_subtitles(
+    videos_root: str | Path,
+    segment_id: str,
+    *,
+    progress_callback: ProgressReporter | None = None,
+) -> dict[str, Any]:
     """Regenerate an unapproved final through the canonical publish gate."""
-    return finalize_segment(videos_root, segment_id)
+    if progress_callback is None:
+        return finalize_segment(videos_root, segment_id)
+    return finalize_segment(
+        videos_root,
+        segment_id,
+        progress_callback=progress_callback,
+    )
 
 
 def _artifact_plan(
@@ -1509,10 +1557,20 @@ def _normalize_subtitle_segments(
             raise ValueError(
                 f"subtitle_segments[{index}] end must be greater than start"
             )
-        if max_duration is not None and end > max_duration + 0.01:
-            raise ValueError(
-                f"subtitle_segments[{index}] must stay within the segment range"
-            )
+        if max_duration is not None:
+            limit = max(0.0, float(max_duration))
+            if start > limit + 0.01 or end > limit + 0.01:
+                raise ValueError(
+                    f"subtitle_segments[{index}] must stay within the segment range"
+                )
+            if start > limit:
+                start = limit
+            if end > limit:
+                end = limit
+            if end <= start:
+                raise ValueError(
+                    f"subtitle_segments[{index}] end must be greater than start"
+                )
         if not text:
             raise ValueError(f"subtitle_segments[{index}] text must not be empty")
         normalized.append({"start": start, "end": end, "text": text})
@@ -1524,16 +1582,25 @@ def _normalize_subtitle_segments(
 
 def _serialize_subtitle_segments(
     segments: list[TranscriptSegment],
+    *,
+    max_duration: float | None = None,
 ) -> list[dict[str, Any]]:
-    return [
-        {
-            "start": float(segment.start),
-            "end": float(segment.end),
-            "text": str(segment.text or "").strip(),
-        }
-        for segment in segments
-        if str(segment.text or "").strip() and float(segment.end) > float(segment.start)
-    ]
+    limit = max(0.0, float(max_duration)) if max_duration is not None else None
+    serialized: list[dict[str, Any]] = []
+    for segment in segments:
+        text = str(segment.text or "").strip()
+        if not text:
+            continue
+        start = max(0.0, float(segment.start))
+        end = float(segment.end)
+        if limit is not None:
+            if start >= limit:
+                continue
+            end = min(limit, end)
+        if end <= start:
+            continue
+        serialized.append({"start": start, "end": end, "text": text})
+    return serialized
 
 
 def _attach_subtitle_segments(
@@ -1574,7 +1641,10 @@ def _attach_subtitle_segments(
             end=end,
         )
         segment["subtitle_segments"] = (
-            _serialize_subtitle_segments(analysis.transcript_segments)
+            _serialize_subtitle_segments(
+                analysis.transcript_segments,
+                max_duration=duration,
+            )
             if analysis is not None
             else []
         )
@@ -1843,6 +1913,23 @@ def _elapsed_ms(started: float) -> int:
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _emit_progress(
+    callback: ProgressReporter | None,
+    phase: str,
+    percent: int,
+    message: str,
+) -> None:
+    """Report best-effort stage progress without changing action outcome."""
+    if callback is None:
+        return
+    try:
+        callback(phase, max(0, min(100, int(percent))), str(message))
+    except Exception:
+        # Progress is observability only; a failed status write must not make
+        # an otherwise valid render fail.
+        return
 
 
 def _load_segment_analysis(candidate: Path):

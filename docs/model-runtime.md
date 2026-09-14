@@ -35,8 +35,8 @@ min_confidence = 0.80
 
 [slice.multi_modal]
 whisper_model = "large-v3"
-whisper_device = "cpu"
-whisper_compute_type = "int8"
+whisper_device = "cuda"
+whisper_compute_type = "float16"
 whisper_batch_size = 8
 whisper_cpu_threads = 8
 whisper_vad_filter = true
@@ -102,7 +102,7 @@ MiMo `keep` 后，`candidate_analyzer` 先执行本地质量闸门，再校验�
 
 完成质量校验和跨候选去重后才运行 Whisper。ASR 只提取 trim 前后各 6 秒（靠近候选边缘时截断）的音频，以同一次段级时间戳把端点吸附到 3 秒内最近的分段边界，再裁成相对最终成片的字幕时间。不会为了边界吸附转写整个大候选，也不保证分段边界一定是语义完整句。
 
-`faster-whisper` 使用 `large-v3 CPU int8`，默认启用批量推理、8 个 CPU 线程和保守 VAD；批量模式异常时回退同模型串行推理。ASR 仍保持单实例，避免多个 large-v3 模型争用内存。字幕烧录用一次 ffmpeg 同时完成粗剪和字幕渲染。
+`faster-whisper` 使用 `large-v3 CUDA float16`，默认启用批量推理、8 个 CPU 线程和保守 VAD；批量模式异常时回退同模型串行推理。Windows 依赖通过 `requirements/windows.txt` 安装 CUDA 12 cuBLAS runtime；Worker preflight 会先执行真实 CUDA 探针，运行时不可用时保留 pending 任务，不静默回退 CPU。ASR 仍保持单实例，避免多个 large-v3 模型争用显存。字幕烧录用一次 ffmpeg 同时完成粗剪和字幕渲染。
 
 `AnalysisResult` 记录：
 

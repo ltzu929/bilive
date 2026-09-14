@@ -19,6 +19,11 @@ def test_enqueue_and_read_action_job(tmp_path):
     assert created["status"] == "accepted"
     assert created["job"]["action"] == "retry_judge"
     assert created["job"]["execution_target"] == "windows"
+    assert created["job"]["progress"] == {
+        "phase": "queued",
+        "percent": 0,
+        "message": "等待 Windows Worker",
+    }
     stored = action_jobs.read_action_job(videos, created["job"]["job_id"])
     assert stored["status"] == "pending"
     assert stored["segment_id"] == "segment-1"
@@ -186,6 +191,53 @@ def test_process_action_jobs_persists_failure(tmp_path):
         "summary": "LLM unavailable",
         "technical_details": "RuntimeError: LLM unavailable",
         "recovery_action": "检查技术详情后重试该任务",
+    }
+    assert job["progress"] == {
+        "phase": "failed",
+        "percent": 0,
+        "message": "LLM unavailable",
+        "last_phase": "queued",
+    }
+
+
+def test_process_action_jobs_persists_stage_progress_before_completion(
+    tmp_path,
+    monkeypatch,
+):
+    from src.dashboard import source_workbench
+
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    created = action_jobs.enqueue_action_job(
+        videos,
+        action="reburn_subtitles",
+        segment_id="segment-1",
+    )
+    observed = []
+
+    def fake_reburn(_root, _segment_id, *, progress_callback=None):
+        assert progress_callback is not None
+        progress_callback("asr", 55, "正在进行语音转写")
+        processing = next((videos / ".bilive-jobs").glob("*.processing.json"))
+        observed.append(json.loads(processing.read_text(encoding="utf-8"))["progress"])
+        return {"upload_status": "awaiting_publish"}
+
+    monkeypatch.setattr(action_jobs.os, "name", "nt")
+    monkeypatch.setattr(source_workbench, "reburn_segment_subtitles", fake_reburn)
+
+    assert action_jobs.process_action_jobs(videos) == 1
+
+    job = action_jobs.read_action_job(videos, created["job"]["job_id"])
+    assert observed == [{
+        "phase": "asr",
+        "percent": 55,
+        "message": "正在进行语音转写",
+    }]
+    assert job["status"] == "done"
+    assert job["progress"] == {
+        "phase": "complete",
+        "percent": 100,
+        "message": "处理完成",
     }
 
 

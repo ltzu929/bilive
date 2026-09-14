@@ -745,6 +745,12 @@ h1 {
 .subtitle-workbench-title { display: flex; align-items: center; min-width: 0; flex-wrap: wrap; gap: 8px; }
 .subtitle-workbench-title > span, .subtitle-eyebrow { color: rgba(0, 0, 0, .45); font-size: 12px; }
 .subtitle-workbench-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.subtitle-action-hint { margin: 8px 12px 0; }
+.subtitle-action-error { color: #cf1322; }
+.subtitle-job-progress { margin: 8px 12px 0; padding: 8px 10px; border: 1px solid #d9e8f5; border-radius: 4px; background: #fff; }
+.subtitle-job-progress-heading { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.subtitle-job-progress-heading small, .subtitle-job-progress > small { color: rgba(0, 0, 0, .45); }
+.subtitle-job-progress progress { display: block; width: 100%; height: 8px; margin: 7px 0 3px; accent-color: #1890ff; }
 .subtitle-list { max-height: min(58vh, 640px); overflow-y: auto; border-top: 1px solid #e8f1f8; background: #fff; }
 .subtitle-row { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; padding: 9px 12px; border-bottom: 1px solid #f0f0f0; }
 .subtitle-row.active { background: #f0f8ff; box-shadow: inset 3px 0 #1890ff; }

@@ -17,11 +17,14 @@ import {
   switchMap,
   take,
   takeUntil,
+  tap,
   timeout,
 } from 'rxjs/operators';
 
 import {
   StudioApiService,
+  StudioActionJob,
+  StudioJobProgress,
   StudioRoom,
   StudioSegment,
   StudioSubtitleSegment,
@@ -92,6 +95,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   mediaMode: 'source' | 'final' = 'source';
   draftConflict = false;
   observationError = '';
+  subtitleSaveState: 'idle' | 'saving' | 'saved' | 'failed' = 'idle';
+  subtitleSaveMessage = '';
+  subtitleRefreshPending = false;
+  jobProgressById: Record<string, StudioJobProgress> = {};
   private draftKey = '';
   private draftRevision = 0;
   private baseline = '';
@@ -100,6 +107,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   pendingDrops: Record<string, {taskId: string; reason: string; revision: number; due: number; uncertain?: boolean}> = {};
   private dropTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private observedJobs = new Set<string>();
+  private activeJobId = '';
+  private workerTriggerUnavailable = false;
   busySegments = new Set<string>();
   private requestId = 0;
   private detailRequestId = 0;
@@ -257,6 +266,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   get subtitleStatusLabel(): string {
     if (!this.subtitleDrafts.length) return '暂无字幕';
     if (this.subtitleDraftDirty) return '未保存修改';
+    if (this.subtitleSaveState === 'saving') return '正在保存';
+    if (this.subtitleSaveState === 'failed') return '保存失败';
     return '已保存，可重新烧录';
   }
 
@@ -404,15 +415,78 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return Math.max(0, this.endDraft - this.startDraft);
   }
 
-  get subtitleDraftsValid(): boolean {
+  get subtitleValidationMessage(): string {
+    if (!this.subtitleDrafts.length) return '当前没有字幕行';
     const duration = this.selectedSegmentDuration;
-    return this.subtitleDrafts.length > 0 && this.subtitleDrafts.every((subtitle) => {
+    for (let index = 0; index < this.subtitleDrafts.length; index += 1) {
+      const subtitle = this.subtitleDrafts[index];
       const start = Number(subtitle.start);
       const end = Number(subtitle.end);
-      return Number.isFinite(start) && Number.isFinite(end)
-        && start >= 0 && end > start && end <= duration + 0.01
-        && Boolean(String(subtitle.text || '').trim());
-    });
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        return `第 ${index + 1} 行时间必须是有效数字`;
+      }
+      if (start < 0) return `第 ${index + 1} 行开始时间不能小于 0`;
+      if (end <= start) return `第 ${index + 1} 行结束时间必须晚于开始时间`;
+      if (start > duration + 0.01) {
+        return `第 ${index + 1} 行开始时间超出片段长度 ${(
+          start - duration
+        ).toFixed(2)} 秒`;
+      }
+      if (end > duration + 0.01) {
+        return `第 ${index + 1} 行结束时间超出片段长度 ${(
+          end - duration
+        ).toFixed(2)} 秒`;
+      }
+      if (!String(subtitle.text || '').trim()) {
+        return `第 ${index + 1} 行字幕文本不能为空`;
+      }
+    }
+    return '';
+  }
+
+  get subtitleDraftsValid(): boolean {
+    return this.subtitleDrafts.length > 0 && !this.subtitleValidationMessage;
+  }
+
+  get subtitleJobProgress(): StudioJobProgress | null {
+    return this.activeJobId ? this.jobProgressById[this.activeJobId] || null : null;
+  }
+
+  get subtitleJobProgressPercent(): number {
+    const value = Number(this.subtitleJobProgress?.percent);
+    return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+  }
+
+  get subtitleJobProgressMessage(): string {
+    const progress = this.subtitleJobProgress;
+    if (!progress) return '';
+    if (progress.message) return progress.message;
+    return this.jobPhaseLabel(progress.phase);
+  }
+
+  get subtitleJobIdLabel(): string {
+    return this.activeJobId ? this.activeJobId.slice(0, 8) : '';
+  }
+
+  get subtitleActionHint(): string {
+    const validation = this.subtitleValidationMessage;
+    if (validation && this.subtitleDrafts.length) return validation;
+    if (this.subtitleSaveState === 'saving') return '正在保存字幕修改，请等待保存和刷新完成';
+    if (this.subtitleSaveState === 'failed' && this.subtitleSaveMessage) {
+      return this.subtitleSaveMessage;
+    }
+    if (this.subtitleRefreshPending) return '字幕已保存，正在刷新片段；刷新完成后才能重新烧录';
+    if (this.detailLoading) return '正在读取服务端字幕版本，请等待刷新完成';
+    if (this.draftConflict) return '服务端版本已改变，请先放弃旧草稿并重新读取';
+    if (this.busySegments.has(this.selectedSegmentId)) {
+      if (this.workerState === 'unavailable' && this.subtitleJobProgress?.phase === 'queued') {
+        return 'Windows Worker 当前不可用，任务已保留在队列；恢复 Worker 后会继续，请刷新查看状态';
+      }
+      return this.subtitleJobProgressMessage || '后台任务处理中，请等待任务完成';
+    }
+    if (this.subtitleDraftDirty) return '请先保存字幕修改，保存成功后才能重新烧录';
+    if (!this.subtitleDrafts.length) return '当前没有字幕行；如需字幕可以新增并保存一行';
+    return '字幕已保存。重新烧录会生成新的待确认成片，不会自动发布';
   }
 
   get selectedActionStatus(): string {
@@ -420,7 +494,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   get selectedActionBusy(): boolean {
-    return this.selectedSegment?.publish_approval === 'approved' || ['queued', 'uploading', 'uploaded', 'publishing', 'published', 'failed'].includes(this.selectedSegment?.upload_status || '') || this.detailLoading || this.draftConflict || this.busySegments.has(this.selectedSegmentId) || ['pending', 'processing', 'running', 'blocked'].includes(this.selectedActionStatus);
+    return this.selectedSegment?.publish_approval === 'approved' || ['queued', 'uploading', 'uploaded', 'publishing', 'published', 'failed'].includes(this.selectedSegment?.upload_status || '') || this.detailLoading || this.subtitleRefreshPending || this.draftConflict || this.busySegments.has(this.selectedSegmentId) || ['pending', 'processing', 'running', 'blocked'].includes(this.selectedActionStatus);
   }
 
   get subtitlePosition() { return subtitlePosition(this.subtitleAlignment); }
@@ -489,7 +563,15 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   selectSegment(segment: StudioSegment): void {
     this.saveDraft();
+    const segmentChanged = this.selectedSegmentId !== segment.segment_id;
     this.selectedSegmentId = segment.segment_id;
+    if (segmentChanged) {
+      this.activeJobId = '';
+      this.workerTriggerUnavailable = false;
+      this.subtitleSaveState = 'idle';
+      this.subtitleSaveMessage = '';
+      this.subtitleRefreshPending = false;
+    }
     this.titleDraft = segment.title || '';
     this.descriptionDraft = segment.description || '';
     this.tagsDraft = (segment.tags || []).join(', ');
@@ -526,7 +608,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     window.history.replaceState(window.history.state, '', url);
     this.positionVideo();
     if (segment.action_state?.job_id && ['pending', 'processing'].includes(segment.action_state.status || '')) {
-      this.waitForJob(segment.action_state.job_id, segment.segment_id);
+      this.waitForJob(
+        segment.action_state.job_id,
+        segment.segment_id,
+        segment.action_state.action || 'job',
+      );
     }
     this.changeDetector.markForCheck();
   }
@@ -894,9 +980,16 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   saveSubtitleEdits(): void {
     if (!this.selectedSegment) return;
     if (!this.subtitleDraftsValid) {
-      this.message.warning('请填写非空字幕，并检查每行的时间范围');
+      this.message.warning(this.subtitleValidationMessage || '请检查字幕内容和时间范围');
+      this.changeDetector.markForCheck();
       return;
     }
+    if (this.selectedActionBusy) {
+      this.message.info(this.subtitleActionHint);
+      return;
+    }
+    this.subtitleSaveState = 'saving';
+    this.subtitleSaveMessage = '正在保存字幕修改';
     this.runSegmentAction('subtitles', {
       expected_revision: this.draftRevision,
       subtitle_segments: this.cloneSubtitleSegments(this.subtitleDrafts),
@@ -904,7 +997,16 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   reburnSubtitles(): void {
-    if (this.selectedSegment) this.runSegmentAction('reburn');
+    if (!this.selectedSegment) return;
+    if (this.subtitleDraftDirty) {
+      this.message.warning('请先保存字幕修改，保存成功后才能重新烧录');
+      return;
+    }
+    if (this.selectedActionBusy) {
+      this.message.info(this.subtitleActionHint);
+      return;
+    }
+    this.runSegmentAction('reburn');
   }
 
   statusLabel(status: string | undefined): string {
@@ -933,6 +1035,21 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       trash: '回收源录播',
     };
     return labels[status || ''] || status || '未知';
+  }
+
+  private jobPhaseLabel(phase: string | undefined): string {
+    const labels: Record<string, string> = {
+      queued: '等待 Windows Worker',
+      raw_render: '生成原始片段',
+      asr: '语音转写',
+      analysis: '保存转写结果',
+      subtitle_burn: '字幕烧录',
+      metadata: '写入投稿元数据',
+      queue: '写入人工确认队列',
+      complete: '处理完成',
+      failed: '处理失败',
+    };
+    return labels[phase || ''] || '后台处理';
   }
 
   statusColor(status: string | undefined): string {
@@ -1104,6 +1221,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.selectedSegmentId = '';
     this.draftKey = '';
     this.detailLoading = false;
+    this.subtitleRefreshPending = false;
   }
 
   private loadDetail(taskId: string): void {
@@ -1122,11 +1240,13 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         const first = selected || detail.segments?.[0];
         if (first) this.selectSegment(first);
         else this.selectedSegmentId = '';
+        this.subtitleRefreshPending = false;
         this.changeDetector.markForCheck();
       },
       error: (error) => {
         if (requestId !== this.detailRequestId) return;
         this.clearDetail();
+        this.subtitleRefreshPending = false;
         this.error = this.describeError(error);
         this.changeDetector.markForCheck();
       },
@@ -1154,9 +1274,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
             : action === 'subtitle-style' ? draftFields.filter(field => field.startsWith('subtitle') && field !== 'subtitleDrafts')
             : action === 'subtitles' ? ['subtitleDrafts'] : [];
           const baseline = JSON.parse(this.baseline || '{}');
-          for (const field of accepted) baseline[field] = submitted[field];
-          this.baseline = JSON.stringify(baseline);
           const updated = (result.segment || result) as Record<string, any>;
+          for (const field of accepted) baseline[field] = submitted[field];
+          if (action === 'subtitles' && Array.isArray(updated.subtitle_segments)) {
+            const serverSubtitles = this.cloneSubtitleSegments(updated.subtitle_segments);
+            baseline.subtitleDrafts = serverSubtitles;
+            this.subtitleDrafts = serverSubtitles;
+          }
+          this.baseline = JSON.stringify(baseline);
           if (typeof updated.revision === 'number') this.draftRevision = updated.revision;
           this.saveDraft();
         } else if (action === 'finalize') {
@@ -1166,43 +1291,120 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         this.persistSession();
         const jobId = this.jobIdFromResult(result);
         if (jobId) {
-          this.message.info('已提交 Windows worker 处理');
-          this.waitForJob(jobId, segmentId);
+          this.activeJobId = jobId;
+          this.jobProgressById[jobId] = {
+            phase: 'queued',
+            percent: 0,
+            message: '已提交，等待 Windows Worker',
+          };
+          const workerTrigger = result.worker_trigger as Record<string, any> | undefined;
+          const workerMessage = String(workerTrigger?.message || '').trim();
+          this.workerTriggerUnavailable = ['unavailable', 'failed'].includes(
+            String(workerTrigger?.status || ''),
+          );
+          if (this.workerTriggerUnavailable) {
+            this.observationError = workerMessage || 'Windows Worker 当前不可用，任务已保留在队列';
+            this.message.warning(`任务 ${jobId.slice(0, 8)} 已入队，但 Worker 尚未接管`);
+          } else {
+            this.message.info(`已提交 Windows Worker，任务 ${jobId.slice(0, 8)}`);
+          }
+          this.waitForJob(jobId, segmentId, action);
           return;
         }
-        this.finishAction(segmentId, action, '操作已保存');
+        this.finishAction(
+          segmentId,
+          action,
+          action === 'subtitles'
+            ? '字幕已保存，旧成片已失效；请点击重新烧录'
+            : '操作已保存',
+        );
       },
       error: (error) => {
         this.busySegments.delete(segmentId);
+        if (action === 'subtitles') {
+          this.subtitleSaveState = 'failed';
+          this.subtitleSaveMessage = this.describeError(error);
+        }
         this.message.error(this.describeError(error));
         this.changeDetector.markForCheck();
       },
     });
   }
 
-  private waitForJob(jobId: string, segmentId: string): void {
+  private waitForJob(jobId: string, segmentId: string, action = 'job'): void {
     if (this.observedJobs.has(jobId)) return;
     this.observedJobs.add(jobId);
     this.busySegments.add(segmentId);
+    this.activeJobId = jobId;
     this.actionBusy = false;
     timer(0, 1500).pipe(
       switchMap(() => this.api.getJob(jobId).pipe(catchError(() => {
         this.observationError = '后台任务仍需跟踪，暂时无法获取状态';
         this.changeDetector.markForCheck();
         return of(null);
+      }), tap((job) => {
+        if (job) {
+          this.recordJobProgress(jobId, job);
+          if (this.workerTriggerUnavailable && this.subtitleJobProgress?.phase === 'queued') {
+            return;
+          }
+          this.workerTriggerUnavailable = false;
+          this.observationError = '';
+        }
       }))),
-      filter((job): job is Record<string, unknown> => !!job && ['done', 'failed', 'blocked'].includes(String(job.status || ''))),
+      filter((job): job is StudioActionJob => !!job && ['done', 'failed', 'blocked'].includes(String(job.status || ''))),
       take(1), takeUntil(this.destroyed)
     ).subscribe(job => {
       this.observedJobs.delete(jobId);
-      this.observationError = '';
-      this.finishAction(segmentId, 'job', job.status === 'done' ? '处理完成' : '处理失败');
+      if (job.status === 'done') {
+        this.finishAction(
+          segmentId,
+          action,
+          action === 'reburn'
+            ? '字幕重烧完成，已生成待确认成片'
+            : '后台处理完成',
+        );
+      } else {
+        const failure = job.failure?.summary || job.error || '后台任务未完成';
+        const recovery = job.failure?.recovery_action;
+        this.finishAction(
+          segmentId,
+          action,
+          recovery ? `${failure}；${recovery}` : failure,
+          true,
+        );
+      }
     });
   }
 
-  private finishAction(segmentId: string, action: string, message: string): void {
+  private recordJobProgress(jobId: string, job: StudioActionJob): void {
+    this.activeJobId = jobId;
+    const progress = job.progress || this.fallbackJobProgress(job.status);
+    this.jobProgressById[jobId] = progress;
+    this.changeDetector.markForCheck();
+  }
+
+  private fallbackJobProgress(status: string | undefined): StudioJobProgress {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'done') return {phase: 'complete', percent: 100, message: '处理完成'};
+    if (['failed', 'blocked'].includes(normalized)) return {phase: 'failed', percent: 0, message: '处理失败'};
+    return {phase: 'queued', percent: 0, message: '等待 Windows Worker 状态更新'};
+  }
+
+  private finishAction(
+    segmentId: string,
+    action: string,
+    message: string,
+    isError = false,
+  ): void {
     this.busySegments.delete(segmentId);
-    if (message === '处理失败') this.message.error(message);
+    if (action === 'subtitles' && !isError) {
+      this.subtitleSaveState = 'saved';
+      this.subtitleSaveMessage = message;
+      this.subtitleRefreshPending = true;
+    }
+    if (action === 'reburn' && !isError) this.subtitleRefreshPending = true;
+    if (isError) this.message.error(message);
     else this.message.success(message);
     this.refresh();
     this.changeDetector.markForCheck();

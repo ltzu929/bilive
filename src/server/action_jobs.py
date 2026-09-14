@@ -31,6 +31,20 @@ SUPPORTED_ACTIONS = {
 }
 JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = ("pending", "processing", "done", "failed")
+PROGRESS_PHASES = frozenset(
+    {
+        "queued",
+        "raw_render",
+        "asr",
+        "analysis",
+        "subtitle_burn",
+        "metadata",
+        "queue",
+        "complete",
+        "failed",
+    }
+)
+JobProgressReporter = Callable[[str, int, str], None]
 _THREAD_LOCKS: dict[str, threading.Lock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 _HELD_LOCKS = threading.local()
@@ -102,6 +116,7 @@ def enqueue_action_job(
             "segment_id": segment,
             "execution_target": "windows",
             "status": "pending",
+            "progress": _progress_payload("queued", 0, "等待 Windows Worker"),
             "created_at": now,
             "created_ns": time.time_ns(),
             "updated_at": now,
@@ -182,6 +197,7 @@ def claim_next_action_job(videos_root: str | Path) -> tuple[Path, dict[str, Any]
                 "updated_at": now,
             }
         )
+        job.setdefault("progress", _progress_payload("queued", 0, "等待 Windows Worker"))
         _write_json_atomic(processing, job)
         return processing, job
 
@@ -230,21 +246,30 @@ def process_action_jobs(
 ) -> int:
     root = Path(videos_root).expanduser().resolve()
     recover_action_jobs(root)
-    execute = executor or (lambda job: _execute_action_job(root, job))
     completed = 0
     while True:
         claimed = claim_next_action_job(root)
         if claimed is None:
             break
         processing, job = claimed
+        report_progress = _make_progress_reporter(processing, job)
         try:
             _record_segment_job_state(root, job, "processing")
-            result = execute(job)
+            if executor is None:
+                result = _execute_action_job(
+                    root,
+                    job,
+                    progress_callback=report_progress,
+                )
+            else:
+                result = executor(job)
+            report_progress("complete", 100, "处理完成")
             _record_segment_job_state(root, job, "done")
             _finish_job(processing, job, status="done", result=result)
             completed += 1
         except Exception as exc:
             failure = _structured_failure_from_exception(job, exc)
+            _mark_failed_progress(processing, job, failure)
             _record_segment_job_state(root, job, "failed", failure=failure)
             _finish_job(
                 processing,
@@ -257,7 +282,12 @@ def process_action_jobs(
     return completed
 
 
-def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any]:
+def _execute_action_job(
+    videos_root: Path,
+    job: dict[str, Any],
+    *,
+    progress_callback: JobProgressReporter | None = None,
+) -> dict[str, Any]:
     if os.name != "nt":
         raise ActionJobExecutionError(
             {
@@ -297,17 +327,36 @@ def _execute_action_job(videos_root: Path, job: dict[str, Any]) -> dict[str, Any
     if job["action"] == "retry_judge":
         return retry_segment_judge(videos_root, job["segment_id"])
     if job["action"] == "render_segment":
-        return render_segment(videos_root, job["segment_id"])
+        if progress_callback is None:
+            return render_segment(videos_root, job["segment_id"])
+        return render_segment(
+            videos_root,
+            job["segment_id"],
+            progress_callback=progress_callback,
+        )
     if job["action"] == "reburn_subtitles":
-        return reburn_segment_subtitles(videos_root, job["segment_id"])
+        if progress_callback is None:
+            return reburn_segment_subtitles(videos_root, job["segment_id"])
+        return reburn_segment_subtitles(
+            videos_root,
+            job["segment_id"],
+            progress_callback=progress_callback,
+        )
     if job["action"] == "finalize_segment":
         payload = dict(job.get("payload") or {})
         payload.pop("_review_request", None)
         payload["_job_id"] = str(job.get("job_id") or "")
+        if progress_callback is None:
+            return finalize_segment(
+                videos_root,
+                job["segment_id"],
+                payload=payload,
+            )
         return finalize_segment(
             videos_root,
             job["segment_id"],
             payload=payload,
+            progress_callback=progress_callback,
         )
     if job["action"] == "create_missed_segment":
         return create_missed_segment(
@@ -387,6 +436,66 @@ def _finish_job(
     destination = _state_path(processing.parent, payload["job_id"], status)
     _write_json_atomic(destination, payload)
     processing.unlink(missing_ok=True)
+
+
+def _progress_payload(phase: str, percent: int, message: str) -> dict[str, Any]:
+    normalized_phase = str(phase)
+    if normalized_phase not in PROGRESS_PHASES:
+        raise ValueError(f"Unsupported action job progress phase: {normalized_phase}")
+    return {
+        "phase": normalized_phase,
+        "percent": max(0, min(100, int(percent))),
+        "message": str(message),
+    }
+
+
+def _make_progress_reporter(
+    processing: Path,
+    job: dict[str, Any],
+) -> JobProgressReporter:
+    def report(phase: str, percent: int, message: str) -> None:
+        try:
+            progress = _progress_payload(phase, percent, message)
+        except (TypeError, ValueError):
+            return
+        job["progress"] = progress
+        job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        _persist_progress(processing, job)
+
+    return report
+
+
+def _mark_failed_progress(
+    processing: Path,
+    job: dict[str, Any],
+    failure: dict[str, str],
+) -> None:
+    previous = job.get("progress")
+    previous_phase = "queued"
+    previous_percent = 0
+    if isinstance(previous, dict):
+        if str(previous.get("phase") or "") in PROGRESS_PHASES - {"failed", "complete"}:
+            previous_phase = str(previous.get("phase"))
+        try:
+            previous_percent = max(0, min(100, int(previous.get("percent") or 0)))
+        except (TypeError, ValueError):
+            previous_percent = 0
+    job["progress"] = {
+        **_progress_payload("failed", previous_percent, str(failure.get("summary") or "处理失败")),
+        "last_phase": previous_phase,
+    }
+    job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    _persist_progress(processing, job)
+
+
+def _persist_progress(processing: Path, job: dict[str, Any]) -> None:
+    """Persist observability without allowing it to change job outcome."""
+    try:
+        with _queue_lock(processing.parent / ".progress.lock"):
+            if processing.is_file():
+                _write_json_atomic(processing, dict(job))
+    except Exception:
+        return
 
 
 def _structured_failure_from_exception(

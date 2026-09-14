@@ -40,6 +40,31 @@ export interface StudioSubtitleSegment {
   text: string;
 }
 
+export interface StudioJobProgress {
+  phase?: string;
+  percent?: number;
+  message?: string;
+  last_phase?: string;
+}
+
+export interface StudioActionJob {
+  job_id?: string;
+  action?: string;
+  status?: string;
+  state?: string;
+  progress?: StudioJobProgress;
+  failure?: {
+    stage?: string;
+    code?: string;
+    summary?: string;
+    technical_details?: string;
+    recovery_action?: string;
+  } | null;
+  error?: string;
+  error_type?: string;
+  result?: Record<string, unknown>;
+}
+
 export interface StudioSegment {
   segment_id: string;
   title?: string;
@@ -72,6 +97,7 @@ export interface StudioSegment {
     action?: string;
     status?: string;
     job_id?: string;
+    progress?: StudioJobProgress;
   };
   subtitle_style?: Record<string, number | string>;
   subtitle_segments?: StudioSubtitleSegment[];
@@ -215,8 +241,8 @@ export class StudioApiService {
     return this.http.post<Record<string, unknown>>(this.path('/worker-trigger/stop'), {});
   }
 
-  getJob(jobId: string): Observable<Record<string, unknown>> {
-    return this.http.get<Record<string, unknown>>(
+  getJob(jobId: string): Observable<StudioActionJob> {
+    return this.http.get<StudioActionJob>(
       this.path(`/jobs/${encodeURIComponent(jobId)}`)
     );
   }

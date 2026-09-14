@@ -82,7 +82,11 @@ describe('Studio review behavior', () => {
   });
 
   it('saves manually corrected subtitle rows with the current revision', () => {
-    api.segmentAction.and.returnValue(of({status: 'saved', segment: {...a, revision: 2}}));
+    api.segmentAction.and.returnValue(of({status: 'saved', segment: {
+      ...a,
+      revision: 2,
+      subtitle_segments: [{start: 0, end: 1.2, text: '正确黑话'}],
+    }}));
     component.selectSegment(a);
     component.subtitleDrafts[0].text = '正确黑话';
 
@@ -92,6 +96,55 @@ describe('Studio review behavior', () => {
       expected_revision: 1,
       subtitle_segments: [{start: 0, end: 1.2, text: '正确黑话'}],
     });
+  });
+
+  it('explains why a subtitle row beyond the segment disables saving', () => {
+    const segment: StudioSegment = {
+      ...a,
+      subtitle_segments: [{start: 0, end: 3.14, text: '越界字幕'}],
+    };
+    component.selectSegment(segment);
+
+    expect(component.subtitleDraftsValid).toBeFalse();
+    expect(component.subtitleValidationMessage).toBe('第 1 行结束时间超出片段长度 0.24 秒');
+    expect(component.subtitleActionHint).toContain('结束时间超出片段长度');
+  });
+
+  it('enables reburn after a successful subtitle save and keeps actions separate', () => {
+    const savedSegment = {
+      ...a,
+      revision: 2,
+      upload_status: 'not_queued',
+      subtitle_segments: [{start: 0, end: 1.2, text: '正确黑话'}],
+    };
+    api.segmentAction.and.returnValues(
+      of({status: 'saved', segment: savedSegment}),
+      of({status: 'accepted', job_id: 'job-b'}),
+    );
+    api.getSourceRecordings = () => of([{task_id: 'source'}]);
+    api.getSourceRecording = jasmine.createSpy().and.returnValue(of({
+      task_id: 'source',
+      segments: [savedSegment],
+    }));
+    component.selectSegment(a);
+    component.subtitleDrafts[0].text = '正确黑话';
+
+    component.saveSubtitleEdits();
+
+    expect(component.subtitleDraftDirty).toBeFalse();
+    expect(component.subtitleSaveState).toBe('saved');
+    expect(component.subtitleRefreshPending).toBeFalse();
+    expect(component.subtitleActionHint).toContain('重新烧录');
+
+    component.reburnSubtitles();
+
+    expect(api.segmentAction.calls.allArgs()).toEqual([
+      ['a', 'subtitles', {
+        expected_revision: 1,
+        subtitle_segments: [{start: 0, end: 1.2, text: '正确黑话'}],
+      }],
+      ['a', 'reburn', undefined],
+    ]);
   });
 
   it('follows the playing subtitle line and formats readable timecodes', () => {
@@ -152,6 +205,56 @@ describe('Studio review behavior', () => {
     tick(1500);
     expect(component.busySegments.has('a')).toBeFalse();
     expect(api.segmentAction.calls.count()).toBe(1);
+  }));
+
+  it('shows intermediate action-job progress before the terminal result', fakeAsync(() => {
+    api.getJob.and.returnValues(
+      of({status: 'processing', progress: {phase: 'asr', percent: 55, message: '正在进行语音转写'}}),
+      of({status: 'done', progress: {phase: 'complete', percent: 100, message: '处理完成'}}),
+    );
+    spyOn(component, 'refresh');
+    component.selectSegment(a);
+
+    component.finalizeSegment();
+    tick(0);
+
+    expect(component.subtitleJobProgressMessage).toBe('正在进行语音转写');
+    expect(component.subtitleJobProgressPercent).toBe(55);
+    expect(component.busySegments.has('a')).toBeTrue();
+
+    tick(1500);
+
+    expect(component.subtitleJobProgress?.phase).toBe('complete');
+    expect(component.subtitleJobProgressPercent).toBe(100);
+    expect(component.busySegments.has('a')).toBeFalse();
+  }));
+
+  it('explains that a queued job is waiting for an unavailable worker', fakeAsync(() => {
+    component.worker = {status: 'unavailable'};
+    message.warning = jasmine.createSpy('warning');
+    api.segmentAction.and.returnValue(of({
+      status: 'accepted',
+      job_id: 'b'.repeat(32),
+      worker_trigger: {status: 'unavailable', message: '2235 unavailable'},
+    }));
+    api.getJob.and.returnValue(of({
+      status: 'pending',
+      progress: {phase: 'queued', percent: 0, message: '等待 Windows Worker'},
+    }));
+    component.selectSegment(a);
+
+    component.reburnSubtitles();
+    tick(0);
+
+    expect(component.subtitleActionHint).toContain('Worker 当前不可用');
+    expect(component.observationError).toBe('2235 unavailable');
+    expect(message.warning).toHaveBeenCalledWith('任务 bbbbbbbb 已入队，但 Worker 尚未接管');
+
+    api.getJob.and.returnValue(of({
+      status: 'done',
+      progress: {phase: 'complete', percent: 100, message: '处理完成'},
+    }));
+    tick(1500);
   }));
 
   it('releases the action state and reports an uncertain timeout', fakeAsync(() => {

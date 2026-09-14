@@ -1,4 +1,6 @@
 import importlib
+import sys
+import types
 from pathlib import Path
 
 
@@ -86,6 +88,138 @@ def test_asr_check_cannot_be_disabled_while_pipeline_requires_it(monkeypatch):
 
     assert ready is False
     assert message == "faster-whisper is not installed"
+
+
+def test_cuda_asr_check_fails_closed_when_runtime_is_unavailable(tmp_path, monkeypatch):
+    preflight = _module()
+    model = tmp_path / "large-v3"
+    model.mkdir()
+    monkeypatch.setattr(preflight.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(
+        preflight,
+        "_check_cuda_asr_runtime",
+        lambda *_args: (False, "faster-whisper CUDA initialization failed: cublas64_12.dll"),
+    )
+
+    ready, message = preflight._check_asr(
+        {
+            "slice": {
+                "multi_modal": {
+                    "whisper_model": str(model),
+                    "whisper_device": "cuda",
+                    "whisper_compute_type": "float16",
+                }
+            }
+        }
+    )
+
+    assert ready is False
+    assert "cublas64_12.dll" in message
+
+
+def test_cuda_asr_check_reports_ready_after_runtime_validation(tmp_path, monkeypatch):
+    preflight = _module()
+    model = tmp_path / "large-v3"
+    model.mkdir()
+    monkeypatch.setattr(preflight.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(
+        preflight,
+        "_check_cuda_asr_runtime",
+        lambda *_args: (True, "CUDA ASR ready: device_count=1, compute_type=float16"),
+    )
+
+    ready, message = preflight._check_asr(
+        {
+            "slice": {
+                "multi_modal": {
+                    "whisper_model": str(model),
+                    "whisper_device": "cuda",
+                    "whisper_compute_type": "float16",
+                }
+            }
+        }
+    )
+
+    assert ready is True
+    assert message.endswith("compute_type=float16")
+
+
+def test_cuda_asr_check_runs_a_real_probe_before_reporting_ready(tmp_path, monkeypatch):
+    preflight = _module()
+    model = tmp_path / "large-v3"
+    model.mkdir()
+    calls = []
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+        def transcribe(self, audio, **kwargs):
+            assert len(audio) == 16000
+            assert kwargs["without_timestamps"] is True
+            return iter(()), object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "ctranslate2",
+        types.SimpleNamespace(
+            get_cuda_device_count=lambda: 1,
+            get_supported_compute_types=lambda _device: {"float16"},
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        types.SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+    preflight._check_cuda_asr_runtime.cache_clear()
+
+    ready, message = preflight._check_cuda_asr_runtime(
+        str(model),
+        "float16",
+        8,
+    )
+
+    assert ready is True
+    assert "CUDA ASR ready" in message
+    assert calls and calls[0][1]["device"] == "cuda"
+
+
+def test_cuda_asr_check_keeps_worker_unavailable_when_probe_fails(tmp_path, monkeypatch):
+    preflight = _module()
+    model = tmp_path / "large-v3"
+    model.mkdir()
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, *_args, **_kwargs):
+            raise RuntimeError("cublas64_12.dll is not found or cannot be loaded")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "ctranslate2",
+        types.SimpleNamespace(
+            get_cuda_device_count=lambda: 1,
+            get_supported_compute_types=lambda _device: {"float16"},
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        types.SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+    preflight._check_cuda_asr_runtime.cache_clear()
+
+    ready, message = preflight._check_cuda_asr_runtime(
+        str(model),
+        "float16",
+        8,
+    )
+
+    assert ready is False
+    assert "cublas64_12.dll" in message
 
 
 def test_mimo_check_requires_environment_api_key(monkeypatch, tmp_path):
