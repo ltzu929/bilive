@@ -204,6 +204,40 @@ def test_source_recording_list_counts_keep_and_judge_failed(tmp_path):
     assert items[0]["segment_count"] == 2
 
 
+def test_source_recording_list_hides_sub_threshold_stub_without_review(
+    tmp_path, monkeypatch
+):
+    from src.dashboard import task_state
+
+    videos = tmp_path / "Videos"
+    room = videos / "8792912"
+    room.mkdir(parents=True)
+    tiny = room / "blive_8792912_2026-09-13-130557.mp4"
+    tiny.write_bytes(b"x" * 1024)
+    tiny.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
+    monkeypatch.setattr(task_state, "MIN_SOURCE_RECORDING_SIZE_MB", 1)
+
+    assert source_workbench.build_source_recording_list(videos) == []
+
+    write_task_history(
+        tiny,
+        status="done",
+        videos_root=videos,
+        segments=[
+            {
+                "segment_id": "seg1",
+                "source_rel_path": "8792912/blive_8792912_2026-09-13-130557.mp4",
+                "start_seconds": 0,
+                "end_seconds": 3,
+                "judge_status": "keep",
+            }
+        ],
+    )
+    items = source_workbench.build_source_recording_list(videos)
+    assert len(items) == 1
+    assert items[0]["segment_count"] == 1
+
+
 def test_candidate_relative_path_cannot_escape_videos_root(tmp_path):
     videos = tmp_path / "Videos"
     videos.mkdir()

@@ -138,6 +138,21 @@ def burn_final_subtitles(
     )
 
 
+def _is_hidden_stub_recording(
+    task: dict[str, Any],
+    segments: list[dict[str, Any]],
+    lifecycle: dict[str, Any],
+) -> bool:
+    """Hide sub-threshold tail files that never entered review work."""
+    if task.get("processing_eligible") is not False:
+        return False
+    if segments:
+        return False
+    if str(lifecycle.get("review_state") or "") in {"review_complete", "trash_pending"}:
+        return False
+    return not str(lifecycle.get("trash_status") or "")
+
+
 def build_source_recording_list(
     videos_root: str | Path,
     room_names: dict[str, str] | None = None,
@@ -153,6 +168,8 @@ def build_source_recording_list(
         segments = _normalize_segments(root, source, history.get("segments") or [])
         counts = _summary_counts(segments)
         lifecycle = build_lifecycle_view(root, task, history, segments)
+        if _is_hidden_stub_recording(task, segments, lifecycle):
+            continue
         profile = read_streamer_profile(root, task["room_id"])
         room_name = str(profile.get("display_name") or "").strip() or names.get(
             task["room_id"], task.get("room_name") or task["room_id"]
@@ -1157,7 +1174,8 @@ def prepare_source_review_completion(
             continue
         if str(segment.get("publish_approval") or "") != "approved":
             raise SegmentStateConflict("仍有成片未完成第二次发布确认")
-        if str(segment.get("upload_status") or "") not in {
+        upload_status = str(segment.get("upload_status") or "")
+        if upload_status not in {
             "queued",
             "uploaded",
             "uploading",
@@ -1165,9 +1183,11 @@ def prepare_source_review_completion(
             "published",
         }:
             raise SegmentStateConflict("已保留片段尚未进入可发布状态")
-        final_item = (segment.get("artifacts") or {}).get("final_output")
-        if not isinstance(final_item, dict) or not bool(final_item.get("exists")):
-            raise SegmentStateConflict("已保留片段缺少最终成片")
+        # Upload success cleanup deletes the local final after publish.
+        if upload_status != "published":
+            final_item = (segment.get("artifacts") or {}).get("final_output")
+            if not isinstance(final_item, dict) or not bool(final_item.get("exists")):
+                raise SegmentStateConflict("已保留片段缺少最终成片")
 
     source_rel_path = source.relative_to(root).as_posix()
     completion = {

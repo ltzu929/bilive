@@ -124,6 +124,34 @@ def test_finalize_stages_until_explicit_publish_approval(tmp_path, monkeypatch):
     assert len(conn.list_upload_queue(db_path)) == 1
 
 
+def test_review_complete_allows_published_final_missing_after_upload_cleanup(
+    tmp_path, monkeypatch
+):
+    videos = tmp_path / "Videos"
+    source = _source(videos)
+    segment = _keep_segment(source, videos)
+    final = source.with_name("seg1_final.mp4")
+    final.write_bytes(b"final")
+    segment["artifacts"] = {
+        "final_output": {"rel_path": final.relative_to(videos).as_posix()}
+    }
+    segment["publish_approval"] = "approved"
+    segment["upload_status"] = "queued"
+    _history(source, videos, [segment])
+
+    db_path = tmp_path / "upload.db"
+    conn.migrate_upload_queue(db_path)
+    monkeypatch.setattr(conn, "DATA_BASE_FILE", str(db_path))
+    conn.insert_upload_queue(str(final), db_path=db_path)
+    conn.mark_upload_published(str(final), "BV1TEST", db_path=db_path)
+    final.unlink()
+
+    task_id = build_task_inventory(videos)[0]["task_id"]
+    completed = source_workbench.prepare_source_review_completion(videos, task_id)
+    assert completed["review_state"] == "review_complete"
+    assert completed["segments"][0]["upload_status"] == "published"
+
+
 def test_zero_candidate_requires_explicit_whole_recording_confirmation(tmp_path):
     videos = tmp_path / "Videos"
     source = _source(videos)
