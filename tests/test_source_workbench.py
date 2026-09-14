@@ -1198,6 +1198,32 @@ def test_deferred_staged_upload_is_removed_before_new_final_is_staged(tmp_path):
     assert conn.get_upload_item(str(old_final)) is None
 
 
+def test_deferred_cleanup_keeps_current_final_metadata_on_same_path_reburn(
+    tmp_path,
+):
+    from src.db import conn
+    from src.upload.slice_metadata import (
+        read_slice_upload_metadata,
+        write_slice_upload_metadata,
+    )
+
+    videos = tmp_path / "Videos"
+    final = videos / "22384516" / "preview_final.mp4"
+    final.parent.mkdir(parents=True)
+    final.write_bytes(b"final")
+    write_slice_upload_metadata(final, title="新字幕成片")
+    conn.stage_upload_queue(str(final))
+
+    source_workbench._withdraw_deferred_staged_uploads(
+        videos.resolve(),
+        {"final_output_history": ["22384516/preview_final.mp4"]},
+        current_final=final,
+    )
+
+    assert conn.get_upload_item(str(final)) is None
+    assert read_slice_upload_metadata(final)["title"] == "新字幕成片"
+
+
 def test_deferred_staged_cleanup_skips_activated_or_missing_rows(tmp_path):
     from src.db import conn
 

@@ -834,7 +834,7 @@ def finalize_segment(
             # A distributed Pi dashboard may have left a staged row in place
             # to avoid a synchronous SQLite write over SMB.  Clean that row
             # from the Windows side before exposing the replacement artifact.
-            _withdraw_deferred_staged_uploads(root, segment)
+            _withdraw_deferred_staged_uploads(root, segment, current_final=final_path)
             queue_result = stage_upload_queue(str(final_path))
             queue_status = str(queue_result.get("status") or "")
             if queue_status not in {
@@ -1837,11 +1837,18 @@ def _queue_final_output(final_path: Path) -> dict[str, Any]:
 def _withdraw_deferred_staged_uploads(
     root: Path,
     segment: dict[str, Any],
+    *,
+    current_final: Path | None = None,
 ) -> None:
     """Remove staged rows deferred by the Pi before staging a new Windows final."""
     previous_outputs = segment.get("final_output_history")
     if not isinstance(previous_outputs, list):
         return
+    current_key = (
+        str(current_final.resolve())
+        if current_final is not None
+        else ""
+    )
     for raw_rel_path in previous_outputs:
         rel_path = str(raw_rel_path or "")
         if not rel_path:
@@ -1854,6 +1861,9 @@ def _withdraw_deferred_staged_uploads(
             continue
         if not withdraw_staged_upload(str(previous_path)):
             raise RuntimeError("无法清理旧成片的等待确认队列项")
+        # Same-path reburn reuses the current final; keep its fresh metadata.
+        if current_key and str(previous_path.resolve()) == current_key:
+            continue
         delete_slice_upload_metadata(previous_path)
 
 
