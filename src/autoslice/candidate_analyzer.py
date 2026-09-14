@@ -40,6 +40,7 @@ def judge_candidate_clips_only(
     candidate_duration: float | None = None,
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
+    candidate_transcript: str = "",
     single_clip: bool = False,
     guidance: str = "",
 ) -> list[AnalysisResult]:
@@ -60,7 +61,22 @@ def judge_candidate_clips_only(
     }
     if guidance:
         kwargs["guidance"] = guidance
+    if str(candidate_transcript or "").strip():
+        kwargs["candidate_transcript"] = str(candidate_transcript)
     return judge_candidate_clips_with_mimo(**kwargs)
+
+
+def _attach_prepared_evidence(
+    result: AnalysisResult,
+    candidate_transcript: str | None,
+    candidate_transcript_segments: list[TranscriptSegment] | None,
+) -> None:
+    segments = list(candidate_transcript_segments or [])
+    transcript = str(candidate_transcript or "").strip()
+    if not transcript and segments:
+        transcript = " ".join(segment.text for segment in segments if segment.text).strip()
+    result.transcript = transcript
+    result.transcript_segments = segments
 
 
 def analyze_candidate_clip_results(
@@ -97,7 +113,13 @@ def analyze_candidate_clip_results(
             analyzed.append(result)
             continue
         if result.judge_status == "review":
-            if post_judge_asr and result.suggested_trim is not None:
+            if candidate_transcript_segments:
+                _attach_prepared_evidence(
+                    result,
+                    candidate_transcript,
+                    candidate_transcript_segments,
+                )
+            elif post_judge_asr and result.suggested_trim is not None:
                 error, transcript, segments = _run_post_judge_asr(
                     video_path,
                     result,
@@ -142,7 +164,13 @@ def analyze_candidate_clip_results(
             analyzed.append(_failed_result(artist, trim_error, base=result))
             continue
         if route_below_quality_gate_to_review(result):
-            if post_judge_asr:
+            if candidate_transcript_segments:
+                _attach_prepared_evidence(
+                    result,
+                    candidate_transcript,
+                    candidate_transcript_segments,
+                )
+            elif post_judge_asr:
                 error, transcript, segments = _run_post_judge_asr(
                     video_path,
                     result,

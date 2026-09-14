@@ -51,6 +51,7 @@ def analyze_clips_stage(
     candidate_duration: float | None = None,
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
+    candidate_transcript: str = "",
     single_clip: bool = False,
     guidance: str = "",
     analyzer: Callable[..., Any],
@@ -66,6 +67,8 @@ def analyze_clips_stage(
     }
     if str(guidance or "").strip():
         kwargs["guidance"] = guidance
+    if str(candidate_transcript or "").strip():
+        kwargs["candidate_transcript"] = str(candidate_transcript)
     results = analyzer(
         video_path,
         artist,

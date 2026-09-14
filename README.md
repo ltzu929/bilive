@@ -66,9 +66,9 @@ Tailscale Serve `2233`；`2234` 仅提供 API，不再托管页面。
   -> 分数不足或 MiMo/Whisper/渲染/元数据/队列失败：保留人工复核
 ```
 
-MiMo 输入候选视频、窗口弹幕、主播名和候选时长。视频以临时 720p H.264/AAC 分析副本 Base64 传输；`MIMO_API_KEY` 默认从项目本地 `.secrets/env` 读取，也可由进程环境变量覆盖，不写入 git、日志或公共配置。
+MiMo 输入候选视频、窗口弹幕、主播名、候选时长，以及可选的判断前 ASR 转写。视频以临时 720p H.264/AAC 分析副本 Base64 传输；`MIMO_API_KEY` 默认从项目本地 `.secrets/env` 读取，也可由进程环境变量覆盖，不写入 git、日志或公共配置。
 
-当前不使用 `mimo-v2.5-asr`。自动字幕烧录需要可靠段级时间戳，仍由 `faster-whisper large-v3 CPU int8` 生成。
+当前不使用 `mimo-v2.5-asr`。自动字幕烧录需要可靠段级时间戳，仍由 `faster-whisper large-v3` 生成（生产配置为 GPU `cuda`/`float16`）。成片字幕可在烧录前做一次专名/同音字轻量修正，失败时保留原 ASR。
 
 ## 切片工作台
 

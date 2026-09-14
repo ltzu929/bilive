@@ -20,7 +20,7 @@ Bilive 分为 Pi 轻服务和 Windows 重任务：
 - Windows Worker API：按需启动，空闲 15 分钟后退出。
 - Windows watcher：一次性领取 pending 任务，完成后退出。
 - MiMo：云端 `mimo-v2.5`，负责大范围候选视频全模态判断和 0..N 个聊天片段粗剪建议。
-- Whisper：Windows 本地 `faster-whisper large-v3 CPU int8`，只在 MiMo keep 后运行。
+- Whisper：Windows 本地 `faster-whisper large-v3`（生产 `bilive-server.toml` 为 `cuda`/`float16`），判断前可对候选窗预跑 ASR 并注入 MiMo prompt；keep 后仍用段级时间戳做边界吸附和字幕。
 - 上传消费者：由 Worker API 单实例管理，和切片 watcher 独立。
 
 端口：
@@ -117,7 +117,7 @@ Eagle 插件不扫描 `Videos/`，不写 bilive 任务文件，也不复制原�
 5. 本地同时检查质量分、完整度和置信度；任一缺失或低于阈值都不自动入队。
 6. MiMo 异常、非法 JSON、超限视频或非法 trim 都返回 `judge_failed`，候选保留人工复核。
 
-候选分析采用分阶段并发：分析副本编码使用低并发，MiMo HTTP 请求独立并发；完成本地质量闸门和跨候选去重后，合格结果即可进入单实例 ASR，不需要等待无关候选。ASR 继续使用 `large-v3 CPU int8`，只转写 trim 前后的小范围音频，并复用同一次转录完成段级时间戳边界吸附和字幕生成。
+候选分析采用分阶段并发：分析副本编码使用低并发，MiMo HTTP 请求独立并发；可选在判断前对候选窗跑一次 ASR，把带时间戳转写注入 MiMo prompt，并把同一批分句复用到 keep 后的边界吸附与字幕，避免二次全量转写。完成本地质量闸门和跨候选去重后，合格结果进入字幕阶段；成片字幕可再做一次专名/同音字轻量修正（失败则保留原 ASR）。
 
 旧本地模型运行时代码仍保留在 `src/autoslice/mllm_sdk/managed_runtime.py`，仅作为手动回滚能力；生产 watcher 和预检不再启动或要求本地模型文件。
 

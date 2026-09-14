@@ -89,6 +89,9 @@ write_analysis_json = true
 snap_trim_to_segments = true
 snap_trim_tolerance = 3.0
 trim_asr_padding_seconds = 6.0
+# 判断前对候选窗跑 ASR，把带时间戳转写注入 MiMo prompt；失败时仍可继续判断
+pre_judge_asr = true
+pre_judge_asr_max_chars = 4000
 
 [slice.edit]
 enable_edit_instruction = true
@@ -97,6 +100,8 @@ max_subtitle_evidence = 6
 default_highlight_window = 12
 
 [slice.subtitle]
+# ASR 成片字幕先做轻量专名/同音字修正；失败时保留原转写
+enable_subtitle_correct = true
 # 硬烧字幕外观（全局默认，可被单切片编辑覆盖）
 font_name = "Noto Sans SC"
 font_size = 20

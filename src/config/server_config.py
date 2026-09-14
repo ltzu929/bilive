@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from .base import (
     BILIVE_DIR,
@@ -189,6 +190,35 @@ TRIM_ASR_PADDING_SECONDS = float(
         "BILIVE_TRIM_ASR_PADDING_SECONDS",
         analysis.get("trim_asr_padding_seconds", 6.0),
     )
+)
+
+
+def _flag_from_env_or_config(env_key: str, value: Any, default: bool) -> bool:
+    raw = os.environ.get(env_key)
+    if raw is not None:
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+PRE_JUDGE_ASR = _flag_from_env_or_config(
+    "BILIVE_PRE_JUDGE_ASR",
+    analysis.get("pre_judge_asr"),
+    True,
+)
+PRE_JUDGE_ASR_MAX_CHARS = int(
+    os.environ.get(
+        "BILIVE_PRE_JUDGE_ASR_MAX_CHARS",
+        analysis.get("pre_judge_asr_max_chars", 4000),
+    )
+)
+ENABLE_SUBTITLE_CORRECT = _flag_from_env_or_config(
+    "BILIVE_ENABLE_SUBTITLE_CORRECT",
+    subtitle.get("enable_subtitle_correct"),
+    True,
 )
 MIN_QUALITY_SCORE = float(
     os.environ.get(

@@ -183,6 +183,7 @@ def judge_candidate_clips_with_mimo(
     candidate_start: float = 0.0,
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
+    candidate_transcript: str = "",
     single_clip: bool = False,
     guidance: str = "",
     model: str = MIMO_MODEL,
@@ -232,6 +233,7 @@ def judge_candidate_clips_with_mimo(
                                 candidate_start=candidate_start,
                                 core_start=candidate_core_start,
                                 core_end=candidate_core_end,
+                                candidate_transcript=candidate_transcript,
                                 guidance=guidance,
                             ),
                         },
@@ -317,6 +319,7 @@ def judge_candidate_with_mimo(
     candidate_start: float = 0.0,
     candidate_core_start: float | None = None,
     candidate_core_end: float | None = None,
+    candidate_transcript: str = "",
     guidance: str = "",
     model: str = MIMO_MODEL,
     base_url: str = MIMO_BASE_URL,
@@ -335,6 +338,7 @@ def judge_candidate_with_mimo(
         candidate_start=candidate_start,
         candidate_core_start=candidate_core_start,
         candidate_core_end=candidate_core_end,
+        candidate_transcript=candidate_transcript,
         model=model,
         base_url=base_url,
         fps=fps,
@@ -365,6 +369,7 @@ def _build_prompt(
     candidate_start: float = 0.0,
     core_start: float | None = None,
     core_end: float | None = None,
+    candidate_transcript: str = "",
     guidance: str = "",
 ) -> str:
     core_text = (
@@ -379,6 +384,14 @@ def _build_prompt(
         if guidance_text
         else ""
     )
+    transcript_text = str(candidate_transcript or "").strip()
+    asr_evidence = (
+        "\n候选 ASR 转写（相对候选 00:00，可能有个别错字；用于判断对白与主题，"
+        "不要因转写噪声否定画面/音频里的真实事件）:\n"
+        f"{transcript_text}\n"
+        if transcript_text
+        else ""
+    )
     return (
         "候选元数据:\n"
         f"- 主播: {artist or 'unknown'}\n"
@@ -387,7 +400,8 @@ def _build_prompt(
         "（仅用于溯源；本次视频、弹幕时间轴、爆点核心和 trim 均从候选"
         " 00:00 起算，不要叠加该偏移）\n"
         f"- 弹幕检测到的爆点核心（相对候选）: {core_text}\n"
-        f"- 候选范围内弹幕: {str(danmaku_text or '').strip() or '(none)'}\n\n"
+        f"- 候选范围内弹幕: {str(danmaku_text or '').strip() or '(none)'}\n"
+        f"{asr_evidence}\n"
         f"{approved_guidance}"
         "你的角色:\n"
         "你是短视频剪辑师 + 严格主编。你的目标不是多产出切片，"

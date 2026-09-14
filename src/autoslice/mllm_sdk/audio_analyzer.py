@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -25,6 +26,8 @@ from src.log.logger import scan_log
 _whisper_model = None
 _whisper_batch_pipeline = None
 _whisper_model_key: tuple[str, str, str, int] | None = None
+# Serialise Whisper usage so concurrent MiMo workers never share the model.
+_asr_lock = threading.Lock()
 
 _EXCITED_WORDS = re.compile(r"哈哈|好棒|太强了|厉害|牛逼|太好了|开心|666|绝了")
 _FILLER_WORDS = re.compile(r"嗯|额|然后|就是|那个|这个|一个|的话|对吧")
@@ -75,6 +78,44 @@ def format_transcript_segments(
             chars_since_sentence = 0
         parts.append(f"{text}{punctuation}")
     return "".join(parts).strip() or normalize_transcript(fallback_text)
+
+
+def format_timed_transcript_for_prompt(
+    segments: list[Any],
+    *,
+    max_chars: int = 4000,
+    max_segments: int = 240,
+) -> str:
+    """Render candidate-relative ASR segments as ``[mm:ss] text`` lines.
+
+    Accepts dicts from ``analyze_audio`` or objects with ``start``/``end``/``text``.
+    """
+    if not segments:
+        return ""
+
+    lines: list[str] = []
+    used = 0
+    for segment in segments:
+        if isinstance(segment, dict):
+            start = float(segment.get("start") or 0.0)
+            end = float(segment.get("end") or 0.0)
+            text = str(segment.get("text") or "").strip()
+        else:
+            start = float(getattr(segment, "start", 0.0) or 0.0)
+            end = float(getattr(segment, "end", 0.0) or 0.0)
+            text = str(getattr(segment, "text", "") or "").strip()
+        if not text:
+            continue
+        minutes = int(start) // 60
+        seconds = int(start) % 60
+        line = f"[{minutes:02d}:{seconds:02d}] {text}"
+        if used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+        if len(lines) >= max_segments:
+            break
+    return "\n".join(lines)
 
 
 def extract_audio(
@@ -147,50 +188,51 @@ def transcribe_audio_whisper(
         "speech_pad_ms": max(0, int(vad_speech_pad_ms)),
     }
     try:
-        if _whisper_model is None or _whisper_model_key != model_key:
-            _whisper_model = WhisperModel(
-                model_size,
-                device=device,
-                compute_type=resolved_compute_type,
-                cpu_threads=resolved_cpu_threads,
-            )
-            _whisper_model_key = model_key
-            _whisper_batch_pipeline = (
-                BatchedInferencePipeline(_whisper_model)
-                if BatchedInferencePipeline is not None
-                else None
-            )
+        with _asr_lock:
+            if _whisper_model is None or _whisper_model_key != model_key:
+                _whisper_model = WhisperModel(
+                    model_size,
+                    device=device,
+                    compute_type=resolved_compute_type,
+                    cpu_threads=resolved_cpu_threads,
+                )
+                _whisper_model_key = model_key
+                _whisper_batch_pipeline = (
+                    BatchedInferencePipeline(_whisper_model)
+                    if BatchedInferencePipeline is not None
+                    else None
+                )
 
-        transcription_options = {
-            "language": "zh",
-            "vad_filter": bool(vad_filter),
-            "vad_parameters": vad_parameters if vad_filter else None,
-            "without_timestamps": False,
-        }
-        if _whisper_batch_pipeline is not None:
-            try:
-                segment_iter, info = _whisper_batch_pipeline.transcribe(
-                    audio_path,
-                    batch_size=resolved_batch_size,
-                    **transcription_options,
-                )
-                raw_segments = list(segment_iter)
-            except Exception as batch_exc:
-                scan_log.warning(
-                    "Batched faster-whisper transcription failed; "
-                    f"falling back to sequential mode: {batch_exc}"
-                )
+            transcription_options = {
+                "language": "zh",
+                "vad_filter": bool(vad_filter),
+                "vad_parameters": vad_parameters if vad_filter else None,
+                "without_timestamps": False,
+            }
+            if _whisper_batch_pipeline is not None:
+                try:
+                    segment_iter, info = _whisper_batch_pipeline.transcribe(
+                        audio_path,
+                        batch_size=resolved_batch_size,
+                        **transcription_options,
+                    )
+                    raw_segments = list(segment_iter)
+                except Exception as batch_exc:
+                    scan_log.warning(
+                        "Batched faster-whisper transcription failed; "
+                        f"falling back to sequential mode: {batch_exc}"
+                    )
+                    segment_iter, info = _whisper_model.transcribe(
+                        audio_path,
+                        **transcription_options,
+                    )
+                    raw_segments = list(segment_iter)
+            else:
                 segment_iter, info = _whisper_model.transcribe(
                     audio_path,
                     **transcription_options,
                 )
                 raw_segments = list(segment_iter)
-        else:
-            segment_iter, info = _whisper_model.transcribe(
-                audio_path,
-                **transcription_options,
-            )
-            raw_segments = list(segment_iter)
         segments = [
             {
                 "start": float(segment.start),

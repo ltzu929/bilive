@@ -20,6 +20,12 @@ from src.config import (
     DANMAKU_MAX_CHARS,
     DANMAKU_TIMELINE,
     MIMO_REQUEST_PARALLELISM,
+    PRE_JUDGE_ASR,
+    PRE_JUDGE_ASR_MAX_CHARS,
+    ENABLE_SUBTITLE_CORRECT,
+    MULTI_MODAL_WHISPER_MODEL,
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_DEVICE,
 )
 from src.autoslice import slice_video_by_danmaku
 from src.autoslice.candidate_analyzer import (
@@ -30,6 +36,12 @@ from src.autoslice.candidate_analyzer import (
     route_below_quality_gate_to_review,
     unload_candidate_models,
 )
+from src.autoslice.analysis_result import TranscriptSegment
+from src.autoslice.mllm_sdk.audio_analyzer import (
+    analyze_audio,
+    format_timed_transcript_for_prompt,
+)
+from src.autoslice.transcript_correct import correct_analysis_subtitles
 from src.autoslice.danmaku_slice import extract_danmaku_text, format_seconds_for_filename
 from src.burn.subtitle_burn import burn_subtitles_from_analysis
 from src.burn.pipeline_stages import (
@@ -70,6 +82,50 @@ judge_candidate_clips_with_mimo = _mimo_candidate_judge
 
 def analyze_candidate_clip_results(*args, **kwargs):
     return _candidate_clip_result_analyzer(*args, **kwargs)
+
+
+def _pre_judge_asr(
+    candidate_path: str,
+    duration: float,
+) -> tuple[str, list[TranscriptSegment]]:
+    """Transcribe the full candidate window before MiMo judgment.
+
+    Failure is non-fatal: the pipeline still judges with video+danmaku only.
+    """
+    try:
+        audio = analyze_audio(
+            candidate_path,
+            MULTI_MODAL_WHISPER_MODEL,
+            whisper_device=WHISPER_DEVICE,
+            whisper_compute_type=WHISPER_COMPUTE_TYPE,
+            start_seconds=0.0,
+            duration_seconds=float(duration or 0.0) or None,
+        )
+    except Exception as exc:
+        scan_log.warning(f"Pre-judge ASR failed; judging without transcript: {exc}")
+        return "", []
+
+    raw_segments = audio.get("segments") or []
+    segments = [
+        TranscriptSegment(
+            start=float(segment.get("start") or 0.0),
+            end=float(segment.get("end") or 0.0),
+            text=str(segment.get("text") or "").strip(),
+        )
+        for segment in raw_segments
+        if isinstance(segment, dict)
+    ]
+    segments = [segment for segment in segments if segment.text]
+    transcript = format_timed_transcript_for_prompt(
+        segments,
+        max_chars=PRE_JUDGE_ASR_MAX_CHARS,
+    )
+    if not transcript:
+        error = str(audio.get("error") or "")
+        if error:
+            scan_log.warning(f"Pre-judge ASR produced no transcript: {error}")
+        return "", []
+    return transcript, segments
 
 
 def burn_subtitles_for_output(video_path, analysis, output_path, style=None):
@@ -756,6 +812,16 @@ def slice_only(video_path, **_slice_options):
     def run_mimo_candidate(index, generated_slice):
         started = time.perf_counter()
         core_start, core_end = _relative_core_range(generated_slice)
+        candidate_transcript = ""
+        candidate_segments: list[TranscriptSegment] = []
+        asr_ms = 0.0
+        if PRE_JUDGE_ASR:
+            asr_started = time.perf_counter()
+            candidate_transcript, candidate_segments = _pre_judge_asr(
+                generated_slice.path,
+                generated_slice.duration,
+            )
+            asr_ms = round((time.perf_counter() - asr_started) * 1000, 1)
         results = analyze_clips_stage(
             generated_slice.path,
             artist=artist,
@@ -765,6 +831,7 @@ def slice_only(video_path, **_slice_options):
             candidate_duration=generated_slice.duration,
             candidate_core_start=core_start,
             candidate_core_end=core_end,
+            candidate_transcript=candidate_transcript,
             single_clip=True,
             guidance=guidance,
             analyzer=judge_candidate_clips_with_mimo,
@@ -773,7 +840,10 @@ def slice_only(video_path, **_slice_options):
             "index": index,
             "danmaku_text": danmaku_by_index[index],
             "results": results,
+            "candidate_transcript": candidate_transcript,
+            "candidate_segments": candidate_segments,
             "timings_ms": {
+                **({"asr_pre_judge": asr_ms} if PRE_JUDGE_ASR else {}),
                 "mimo": round((time.perf_counter() - started) * 1000, 1),
             },
         }
@@ -940,6 +1010,8 @@ def slice_only(video_path, **_slice_options):
                 danmaku_text = precomputed_mimo.get("danmaku_text", danmaku_text)
                 empty_result_source = precomputed_mimo["results"]
                 core_start, core_end = _relative_core_range(generated_slice)
+                pre_transcript = precomputed_mimo.get("candidate_transcript") or ""
+                pre_segments = list(precomputed_mimo.get("candidate_segments") or [])
                 asr_started = time.perf_counter()
                 results = analyze_candidate_clip_results(
                     precomputed_mimo["results"],
@@ -950,6 +1022,8 @@ def slice_only(video_path, **_slice_options):
                     candidate_duration=generated_slice.duration,
                     candidate_core_start=core_start,
                     candidate_core_end=core_end,
+                    candidate_transcript=pre_transcript or None,
+                    candidate_transcript_segments=pre_segments or None,
                     post_judge_asr=True,
                 )
                 candidate_timings["asr"] = round(
@@ -1103,6 +1177,24 @@ def slice_only(video_path, **_slice_options):
                     analysis_json_path = output_path[:-4] + "_analysis.json"
                     result.to_json_file(analysis_json_path)
                     scan_log.info(f"Analysis result saved: {analysis_json_path}")
+
+                if ENABLE_SUBTITLE_CORRECT and result.transcript_segments:
+                    correct_started = time.perf_counter()
+                    try:
+                        correct_analysis_subtitles(
+                            result,
+                            artist=artist,
+                            context=danmaku_text,
+                        )
+                    except Exception as correct_error:
+                        scan_log.warning(
+                            f"Subtitle correction error; burning original ASR: "
+                            f"{correct_error}"
+                        )
+                    segment["timings_ms"]["subtitle_correct"] = round(
+                        (time.perf_counter() - correct_started) * 1000,
+                        1,
+                    )
 
                 subtitle_started = time.perf_counter()
                 burn_result = subtitle_stage(
