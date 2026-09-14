@@ -55,6 +55,7 @@ from src.upload.slice_metadata import (
 
 SUMMARY_KEYS = ("keep", "manual_keep", "judge_failed", "drop", "review")
 ProgressReporter = Callable[[str, int, str], None]
+_SHARED_WINDOWS_MOUNT = Path("/mnt/win")
 
 
 def _review_write(function):
@@ -300,6 +301,17 @@ def _ensure_unpublished(root: Path, segment: dict[str, Any]) -> None:
             raise SegmentStateConflict("成片已进入发布流程，不能覆盖")
 
 
+def _defer_staged_upload_withdrawal(root: Path) -> bool:
+    """Avoid Pi-side SQLite writes when the queue lives on the Windows SMB mount."""
+    if os.name == "nt":
+        return False
+    try:
+        root.resolve().relative_to(_SHARED_WINDOWS_MOUNT)
+    except ValueError:
+        return False
+    return True
+
+
 def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
     """Clear an unapproved final when a review edit needs regeneration."""
     _ensure_unpublished(root, segment)
@@ -335,8 +347,12 @@ def _invalidate_final_output(root: Path, segment: dict[str, Any]) -> bool:
             raise SegmentStateConflict(
                 f"成片当前处于 {queue_status or '未知'} 状态，不能覆盖"
             )
-        if not withdraw_staged_upload(str(final_path)):
-            raise SegmentStateConflict("无法安全撤销成片的等待确认队列项")
+        if not (
+            queue_status == "staged"
+            and _defer_staged_upload_withdrawal(root)
+        ):
+            if not withdraw_staged_upload(str(final_path)):
+                raise SegmentStateConflict("无法安全撤销成片的等待确认队列项")
         delete_slice_upload_metadata(final_path)
 
     previous_outputs = segment.get("final_output_history")
@@ -815,6 +831,10 @@ def finalize_segment(
         if os.environ.get("BILIVE_SKIP_UPLOAD_QUEUE", "").strip() == "1":
             queue_result = {"status": "skipped", "created": False}
         else:
+            # A distributed Pi dashboard may have left a staged row in place
+            # to avoid a synchronous SQLite write over SMB.  Clean that row
+            # from the Windows side before exposing the replacement artifact.
+            _withdraw_deferred_staged_uploads(root, segment)
             queue_result = stage_upload_queue(str(final_path))
             queue_status = str(queue_result.get("status") or "")
             if queue_status not in {
@@ -1812,6 +1832,29 @@ def _queue_final_output(final_path: Path) -> dict[str, Any]:
                 raise RuntimeError("failed upload row could not be requeued")
         return {"status": status, "created": False}
     raise RuntimeError("upload queue insert returned false")
+
+
+def _withdraw_deferred_staged_uploads(
+    root: Path,
+    segment: dict[str, Any],
+) -> None:
+    """Remove staged rows deferred by the Pi before staging a new Windows final."""
+    previous_outputs = segment.get("final_output_history")
+    if not isinstance(previous_outputs, list):
+        return
+    for raw_rel_path in previous_outputs:
+        rel_path = str(raw_rel_path or "")
+        if not rel_path:
+            continue
+        previous_path = _artifact_path(root, rel_path)
+        item = get_upload_item(str(previous_path))
+        if item is None or str(item.get("status") or "") != "staged":
+            continue
+        if str(item.get("remote_filename") or "").strip():
+            continue
+        if not withdraw_staged_upload(str(previous_path)):
+            raise RuntimeError("无法清理旧成片的等待确认队列项")
+        delete_slice_upload_metadata(previous_path)
 
 
 def _read_segment(

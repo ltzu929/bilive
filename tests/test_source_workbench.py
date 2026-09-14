@@ -1103,6 +1103,137 @@ def test_update_subtitle_style_with_windows_queue_path_withdraws_staged_final(
     assert final.exists()
 
 
+def test_update_subtitles_defers_staged_withdrawal_on_shared_dashboard(
+    tmp_path,
+    monkeypatch,
+):
+    from src.db import conn
+
+    videos = tmp_path / "Videos"
+    source = _create_processed_source(videos)
+    final = videos / "22384516" / "preview_final.mp4"
+    final.write_bytes(b"final")
+    history_path = source.with_suffix(".mp4.task.json")
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    history["segments"][0].update(
+        {
+            "artifacts": {
+                "final_output": {"rel_path": "22384516/preview_final.mp4"}
+            },
+            "upload_status": "awaiting_publish",
+            "preview_available": True,
+        }
+    )
+    history_path.write_text(
+        json.dumps(history, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    windows_path = r"D:\alldata\pi\bilive\Videos\22384516\preview_final.mp4"
+    conn.stage_upload_queue(windows_path)
+
+    monkeypatch.setattr(
+        source_workbench,
+        "_defer_staged_upload_withdrawal",
+        lambda _root: True,
+    )
+    monkeypatch.setattr(
+        source_workbench,
+        "withdraw_staged_upload",
+        lambda *_args, **_kwargs: pytest.fail(
+            "shared-dashboard subtitle save must not write SQLite"
+        ),
+    )
+
+    updated = source_workbench.update_segment_subtitles(
+        videos,
+        "seg_keep",
+        {
+            "expected_revision": 0,
+            "subtitle_segments": [
+                {"start": 0.0, "end": 1.0, "text": "共享盘保存测试"},
+            ],
+        },
+    )
+
+    assert updated["subtitle_segments"] == [
+        {"start": 0.0, "end": 1.0, "text": "共享盘保存测试"},
+    ]
+    assert updated["upload_status"] == "not_queued"
+    assert conn.get_upload_item(windows_path)["status"] == "staged"
+
+
+def test_defer_staged_upload_withdrawal_only_on_shared_pi_mount(
+    tmp_path,
+    monkeypatch,
+):
+    mount = tmp_path / "mnt" / "win"
+    shared = mount / "bilive" / "Videos"
+    shared.mkdir(parents=True)
+    local = tmp_path / "local" / "Videos"
+    local.mkdir(parents=True)
+    monkeypatch.setattr(source_workbench, "_SHARED_WINDOWS_MOUNT", mount)
+
+    monkeypatch.setattr(source_workbench.os, "name", "nt")
+    assert source_workbench._defer_staged_upload_withdrawal(shared) is False
+
+    monkeypatch.setattr(source_workbench.os, "name", "posix")
+    assert source_workbench._defer_staged_upload_withdrawal(shared) is True
+    assert source_workbench._defer_staged_upload_withdrawal(local) is False
+
+
+def test_deferred_staged_upload_is_removed_before_new_final_is_staged(tmp_path):
+    from src.db import conn
+
+    videos = tmp_path / "Videos"
+    old_final = videos / "22384516" / "preview_final.mp4"
+    old_final.parent.mkdir(parents=True)
+    old_final.write_bytes(b"old-final")
+    conn.stage_upload_queue(str(old_final))
+
+    source_workbench._withdraw_deferred_staged_uploads(
+        videos.resolve(),
+        {"final_output_history": ["22384516/preview_final.mp4"]},
+    )
+
+    assert conn.get_upload_item(str(old_final)) is None
+
+
+def test_deferred_staged_cleanup_skips_activated_or_missing_rows(tmp_path):
+    from src.db import conn
+
+    videos = tmp_path / "Videos"
+    room = videos / "22384516"
+    room.mkdir(parents=True)
+    activated = room / "activated_final.mp4"
+    activated.write_bytes(b"activated")
+    missing = room / "missing_final.mp4"
+    conn.stage_upload_queue(str(activated))
+    # Simulate a completed CDN upload: staged row is already activated.
+    with conn.connect() as db:
+        db.execute(
+            "update upload_queue set status = 'queued', remote_filename = 'cdn/x.mp4' "
+            "where video_path = ?",
+            (str(activated),),
+        )
+        db.commit()
+
+    source_workbench._withdraw_deferred_staged_uploads(
+        videos.resolve(),
+        {
+            "final_output_history": [
+                "22384516/activated_final.mp4",
+                "22384516/missing_final.mp4",
+            ]
+        },
+    )
+
+    remaining = conn.get_upload_item(str(activated))
+    assert remaining is not None
+    assert remaining["status"] == "queued"
+    assert remaining["remote_filename"] == "cdn/x.mp4"
+    assert conn.get_upload_item(str(missing)) is None
+
+
 def test_reburn_uses_canonical_finalize(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(source_workbench, "finalize_segment", lambda root, segment: calls.append((root, segment)) or {"upload_status": "awaiting_publish"})
