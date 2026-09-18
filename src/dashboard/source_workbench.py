@@ -931,7 +931,13 @@ def approve_publish_segment(
     root, _source, segment = _read_segment(videos_root, segment_id)
     if str(segment.get("judge_status") or "") not in {"keep", "manual_keep"}:
         raise SegmentStateConflict("片段未通过内容复核，不能允许发布")
-    if (segment.get("action_state") or {}).get("status") in {"pending", "processing"}:
+    # The job worker marks this segment processing before executing approve_publish.
+    # Only block when a different background action still owns the segment.
+    action_state = segment.get("action_state") or {}
+    if (
+        action_state.get("status") in {"pending", "processing"}
+        and str(action_state.get("action") or "") != "approve_publish"
+    ):
         raise SegmentStateConflict("成片仍在后台处理，不能允许发布")
     artifacts = _normalize_artifacts(root, segment)
     final_item = artifacts.get("final_output") or {}

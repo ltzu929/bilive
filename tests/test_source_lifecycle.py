@@ -124,6 +124,52 @@ def test_finalize_stages_until_explicit_publish_approval(tmp_path, monkeypatch):
     assert len(conn.list_upload_queue(db_path)) == 1
 
 
+def test_approve_publish_ignores_own_processing_action_state(tmp_path, monkeypatch):
+    """Job worker marks the segment processing before approve_publish runs."""
+    videos = tmp_path / "Videos"
+    source = _source(videos)
+    final = source.with_name("seg1_final.mp4")
+    final.write_bytes(b"final")
+    segment = _keep_segment(source, videos)
+    segment["judge_status"] = "manual_keep"
+    segment["upload_status"] = "awaiting_publish"
+    segment["artifacts"] = {
+        "final_output": {"rel_path": final.relative_to(videos).as_posix()}
+    }
+    _history(source, videos, [segment])
+
+    db_path = tmp_path / "upload.db"
+    conn.migrate_upload_queue(db_path)
+    monkeypatch.setattr(conn, "DATA_BASE_FILE", str(db_path))
+    conn.stage_upload_queue(str(final), db_path=db_path)
+
+    root, _src, current = source_workbench._read_segment(videos, "seg1")
+    final_media_id = source_workbench._media_id(root, final)
+    approval = {
+        "expected_revision": current["revision"],
+        "final_media_id": final_media_id,
+    }
+
+    source_workbench.record_segment_action_state(
+        videos,
+        "seg1",
+        status="processing",
+        action="finalize_segment",
+    )
+    with pytest.raises(source_workbench.SegmentStateConflict):
+        source_workbench.approve_publish_segment(videos, "seg1", approval)
+
+    source_workbench.record_segment_action_state(
+        videos,
+        "seg1",
+        status="processing",
+        action="approve_publish",
+    )
+    approved = source_workbench.approve_publish_segment(videos, "seg1", approval)
+    assert approved["upload_status"] == "queued"
+    assert approved["publish_approval"] == "approved"
+
+
 def test_review_complete_allows_published_final_missing_after_upload_cleanup(
     tmp_path, monkeypatch
 ):
