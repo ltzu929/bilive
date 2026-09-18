@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import re
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ from src.config import (
     WHISPER_VAD_MIN_SILENCE_MS,
     WHISPER_VAD_SPEECH_PAD_MS,
 )
+from src.cuda_runtime import configure_cuda_dll_search_paths
 from src.log.logger import scan_log
 
 
@@ -145,12 +147,20 @@ def extract_audio(
         "1",
         str(audio_path),
     ])
+    started = time.perf_counter()
     try:
         subprocess.run(command, capture_output=True, check=True, timeout=3600)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
         scan_log.error(f"ffmpeg audio extraction failed: {exc}")
         return ""
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    scan_log.info(
+        "ASR audio extract: "
+        f"video={Path(video_path).name} "
+        f"window={start_seconds or 0:.1f}s+{duration_seconds or 'full'} "
+        f"elapsed_ms={elapsed_ms}"
+    )
     return str(audio_path)
 
 
@@ -179,29 +189,66 @@ def transcribe_audio_whisper(
         BatchedInferencePipeline = None
 
     global _whisper_batch_pipeline, _whisper_model, _whisper_model_key
-    resolved_compute_type = compute_type or ("int8" if device == "cpu" else "float16")
+    resolved_device = str(device or "cpu").strip().lower()
+    resolved_compute_type = compute_type or (
+        "int8" if resolved_device == "cpu" else "float16"
+    )
     resolved_cpu_threads = max(1, int(cpu_threads))
     resolved_batch_size = max(1, int(batch_size))
-    model_key = (model_size, device, resolved_compute_type, resolved_cpu_threads)
+    model_key = (
+        model_size,
+        resolved_device,
+        resolved_compute_type,
+        resolved_cpu_threads,
+    )
     vad_parameters = {
         "min_silence_duration_ms": max(0, int(vad_min_silence_ms)),
         "speech_pad_ms": max(0, int(vad_speech_pad_ms)),
     }
+    device_tag = (
+        f"model={model_size} device={resolved_device} "
+        f"compute_type={resolved_compute_type} threads={resolved_cpu_threads} "
+        f"pid={os.getpid()}"
+    )
+    if resolved_device == "cuda":
+        dll_dirs = configure_cuda_dll_search_paths()
+        scan_log.info(
+            "ASR cuda dll paths: "
+            f"added={len(dll_dirs)} dirs={dll_dirs if dll_dirs else 'none'}"
+        )
     try:
         with _asr_lock:
-            if _whisper_model is None or _whisper_model_key != model_key:
-                _whisper_model = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=resolved_compute_type,
-                    cpu_threads=resolved_cpu_threads,
-                )
+            model_cached = (
+                _whisper_model is not None and _whisper_model_key == model_key
+            )
+            if not model_cached:
+                load_started = time.perf_counter()
+                scan_log.info(f"ASR model load start: {device_tag}")
+                try:
+                    _whisper_model = WhisperModel(
+                        model_size,
+                        device=resolved_device,
+                        compute_type=resolved_compute_type,
+                        cpu_threads=resolved_cpu_threads,
+                    )
+                except Exception as load_exc:
+                    scan_log.error(
+                        f"ASR model load failed: {device_tag} error={load_exc}"
+                    )
+                    raise
                 _whisper_model_key = model_key
                 _whisper_batch_pipeline = (
                     BatchedInferencePipeline(_whisper_model)
                     if BatchedInferencePipeline is not None
                     else None
                 )
+                load_ms = round((time.perf_counter() - load_started) * 1000, 1)
+                scan_log.info(
+                    f"ASR model load ok: {device_tag} load_ms={load_ms} "
+                    f"batched={_whisper_batch_pipeline is not None}"
+                )
+            else:
+                scan_log.info(f"ASR model cache hit: {device_tag}")
 
             transcription_options = {
                 "language": "zh",
@@ -209,6 +256,8 @@ def transcribe_audio_whisper(
                 "vad_parameters": vad_parameters if vad_filter else None,
                 "without_timestamps": False,
             }
+            mode = "batched" if _whisper_batch_pipeline is not None else "sequential"
+            transcribe_started = time.perf_counter()
             if _whisper_batch_pipeline is not None:
                 try:
                     segment_iter, info = _whisper_batch_pipeline.transcribe(
@@ -219,9 +268,11 @@ def transcribe_audio_whisper(
                     raw_segments = list(segment_iter)
                 except Exception as batch_exc:
                     scan_log.warning(
-                        "Batched faster-whisper transcription failed; "
-                        f"falling back to sequential mode: {batch_exc}"
+                        "ASR batched transcription failed; "
+                        f"falling back to sequential mode: {device_tag} "
+                        f"error={batch_exc}"
                     )
+                    mode = "sequential-fallback"
                     segment_iter, info = _whisper_model.transcribe(
                         audio_path,
                         **transcription_options,
@@ -233,6 +284,9 @@ def transcribe_audio_whisper(
                     **transcription_options,
                 )
                 raw_segments = list(segment_iter)
+            transcribe_ms = round(
+                (time.perf_counter() - transcribe_started) * 1000, 1
+            )
         segments = [
             {
                 "start": float(segment.start),
@@ -241,14 +295,33 @@ def transcribe_audio_whisper(
             }
             for segment in raw_segments
         ]
+        transcript = format_transcript_segments(segments)
+        scan_log.info(
+            "ASR transcribe done: "
+            f"{device_tag} mode={mode} "
+            f"batch_size={resolved_batch_size if mode.startswith('batched') else 1} "
+            f"vad={bool(vad_filter)} segments={len(segments)} "
+            f"chars={len(transcript)} transcribe_ms={transcribe_ms}"
+        )
         return {
-            "transcript": format_transcript_segments(segments),
+            "transcript": transcript,
             "segments": segments,
             "language": getattr(info, "language", "zh"),
+            "device": resolved_device,
+            "compute_type": resolved_compute_type,
+            "mode": mode,
         }
     except Exception as exc:
-        scan_log.error(f"faster-whisper transcription failed: {exc}")
-        return {"transcript": "", "segments": [], "error": str(exc)}
+        scan_log.error(
+            f"faster-whisper transcription failed: {device_tag} error={exc}"
+        )
+        return {
+            "transcript": "",
+            "segments": [],
+            "error": str(exc),
+            "device": resolved_device,
+            "compute_type": resolved_compute_type,
+        }
 
 
 def extract_keywords(text: str, max_keywords: int = 5) -> list[str]:
@@ -336,6 +409,10 @@ def release_gpu_memory(delay: float = 3.0) -> None:
 
 def unload_asr_models() -> None:
     global _whisper_batch_pipeline, _whisper_model, _whisper_model_key
+    if _whisper_model is not None:
+        scan_log.info(
+            f"ASR model unload: model_key={_whisper_model_key} pid={os.getpid()}"
+        )
     _whisper_batch_pipeline = None
     _whisper_model = None
     _whisper_model_key = None
@@ -355,6 +432,7 @@ def analyze_audio(
     start_seconds: float | None = None,
     duration_seconds: float | None = None,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     audio_path = extract_audio(
         video_path,
         start_seconds=start_seconds,
@@ -365,14 +443,23 @@ def analyze_audio(
             "transcript": "",
             "segments": [],
             "error": "audio_extraction_failed",
+            "device": whisper_device,
         }
     try:
-        return transcribe_audio_whisper(
+        result = transcribe_audio_whisper(
             audio_path,
             whisper_model,
             device=whisper_device,
             engine="faster-whisper",
             compute_type=whisper_compute_type,
         )
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        scan_log.info(
+            "ASR analyze_audio done: "
+            f"video={Path(video_path).name} device={result.get('device', whisper_device)} "
+            f"error={bool(result.get('error'))} segments={len(result.get('segments') or [])} "
+            f"total_ms={elapsed_ms}"
+        )
+        return result
     finally:
         cleanup_audio(audio_path)

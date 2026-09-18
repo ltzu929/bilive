@@ -61,8 +61,50 @@ def test_batched_whisper_falls_back_to_sequential(monkeypatch):
     result = audio_analyzer.transcribe_audio_whisper("audio.wav")
 
     assert result["transcript"] == "有效字幕。"
+    assert result["device"] == "cpu"
+    assert result["mode"] == "sequential-fallback"
     assert calls[0][1]["cpu_threads"] == 8
     assert calls[1][0] == "batch"
     assert calls[1][1]["batch_size"] == 8
     assert calls[1][1]["vad_parameters"]["min_silence_duration_ms"] == 2000
     assert calls[2][0] == "sequential"
+
+
+def test_transcribe_loads_cuda_model_with_dll_paths(monkeypatch):
+    calls = []
+
+    class Segment:
+        start = 0.0
+        end = 1.0
+        text = "上卡"
+
+    class WhisperModel:
+        def __init__(self, *args, **kwargs):
+            calls.append(("model", kwargs))
+
+        def transcribe(self, *args, **kwargs):
+            return iter([Segment()]), types.SimpleNamespace(language="zh")
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = WhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+    monkeypatch.setattr(
+        audio_analyzer,
+        "configure_cuda_dll_search_paths",
+        lambda: ["C:/nvidia/cublas/bin"],
+    )
+    audio_analyzer._whisper_model = None
+    audio_analyzer._whisper_batch_pipeline = None
+    audio_analyzer._whisper_model_key = None
+
+    result = audio_analyzer.transcribe_audio_whisper(
+        "audio.wav",
+        device="cuda",
+        compute_type="float16",
+    )
+
+    assert result["device"] == "cuda"
+    assert result["compute_type"] == "float16"
+    assert result["mode"] == "sequential"
+    assert calls[0][1]["device"] == "cuda"
+    assert calls[0][1]["compute_type"] == "float16"

@@ -5,52 +5,20 @@ from __future__ import annotations
 import importlib.util
 import os
 import sqlite3
-import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
 import toml
 
+from src.cuda_runtime import configure_cuda_dll_search_paths
+
 DependencyChecker = Callable[[dict[str, Any]], tuple[bool, str]]
 LLMChecker = Callable[[dict[str, Any], Path], tuple[bool, str]]
 
-_CUDA_DLL_HANDLES: list[object] = []
-
 
 def _configure_cuda_dll_search_paths() -> None:
-    """Make the venv-scoped NVIDIA DLLs visible to this worker process.
-
-    The NVIDIA runtime wheels install their DLLs below the Python environment,
-    but a scheduled task does not inherit a PowerShell session's temporary
-    PATH.  Keep the DLL-directory handles alive and also propagate the paths to
-    child worker processes.
-    """
-    if os.name != "nt":
-        return
-
-    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
-    candidates = (
-        site_packages / "nvidia" / "cublas" / "bin",
-        site_packages / "nvidia" / "cuda_nvrtc" / "bin",
-        site_packages / "nvidia" / "cudnn" / "bin",
-        site_packages / "ctranslate2",
-    )
-    existing_path = os.environ.get("PATH", "").split(os.pathsep)
-    add_dll_directory = getattr(os, "add_dll_directory", None)
-    for candidate in candidates:
-        if not candidate.is_dir():
-            continue
-        directory = str(candidate.resolve())
-        if directory not in existing_path:
-            existing_path.insert(0, directory)
-            os.environ["PATH"] = os.pathsep.join(existing_path)
-        if add_dll_directory is None:
-            continue
-        try:
-            _CUDA_DLL_HANDLES.append(add_dll_directory(directory))
-        except OSError:
-            continue
+    configure_cuda_dll_search_paths()
 
 
 def _load_config(project_root: Path) -> dict[str, Any]:
