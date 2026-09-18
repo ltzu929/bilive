@@ -1,13 +1,13 @@
-<section (input)="saveDraft()" (change)="saveDraft()" class="studio-page slices-page" [class.compact-queue]="compactQueue">
-  <div class="studio-topbar">
+<section (input)="saveDraft()" (change)="saveDraft()" class="studio-page slices-page stage-page" [class.compact-queue]="compactQueue">
+  <div class="studio-topbar stage-topbar">
     <div class="title-block">
       <div class="title-line">
-        <h1>切片工作台</h1>
+        <h1>切片流水线</h1>
         <span class="live-pill" [class.live-pill-busy]="actionBusy">
           <span class="live-dot"></span>{{ (actionBusy || busySegments.size) ? '后台处理中，可继续审核' : '等待审核' }}
         </span>
       </div>
-      <p>处理当前录播：补标漏切、生成最终成片，最后单独确认发布</p>
+      <p>{{ stageMeta.step }} {{ stageMeta.label }} · {{ stageMeta.hint }}</p>
     </div>
     <div class="command-bar">
       <span
@@ -18,11 +18,11 @@
         <i nz-icon nzType="cloud-server"></i>
         {{ workerLabel }}
       </span>
-      <button nz-button (click)="toggleQueue()" [attr.aria-expanded]="queueOpen">
-        <i nz-icon nzType="unordered-list"></i>{{ queueOpen ? '收起队列' : '录播队列' }}
-      </button>
       <button nz-button (click)="refresh()" [disabled]="loading || actionBusy">
         <i nz-icon nzType="reload"></i>刷新
+      </button>
+      <button nz-button (click)="wakeWorker()" [disabled]="actionBusy" [hidden]="workerState === 'running'">
+        <i nz-icon nzType="thunderbolt"></i>唤醒 Worker
       </button>
       <button nz-button nzDanger (click)="stopWorker()" [disabled]="actionBusy">
         <i nz-icon nzType="stop"></i>停止任务
@@ -36,6 +36,22 @@
     </div>
   </div>
 
+  <nav class="stage-nav" role="tablist" aria-label="流水线阶段">
+    <button
+      *ngFor="let stage of stages; let last = last"
+      type="button"
+      role="tab"
+      class="stage-tab"
+      [class.active]="stage.id === activeStage"
+      [attr.aria-selected]="stage.id === activeStage"
+      (click)="setStage(stage.id)"
+    >
+      <span class="stage-label"><span class="stage-step">{{ stage.step }}</span>{{ stage.label }}<span *ngIf="!last" class="stage-arrow">→</span></span>
+      <span class="stage-count">{{ stageCounts[stage.id] }} 项</span>
+    </button>
+  </nav>
+  <div class="stage-hint">{{ stageMeta.hint }}</div>
+
   <nz-alert *ngIf="error" nzType="error" nzShowIcon [nzMessage]="error" class="studio-alert"></nz-alert>
 
   <div class="overview-strip">
@@ -44,240 +60,357 @@
       <nz-progress [nzPercent]="progress.current_slice_percent || 0" [nzStatus]="progress.status === 'error' ? 'exception' : 'active'"></nz-progress>
       <div class="overview-meta"><span>{{ progress.display_title || progress.source_file || '暂无切片任务' }}</span><span>{{ progress.message || '等待 Windows worker' }}</span></div>
     </div>
-    <div class="overview-card metric-card"><span>录播场次</span><strong>{{ recordings.length }}</strong><small>当前筛选结果</small></div>
-    <div class="overview-card metric-card"><span>待复核</span><strong>{{ reviewCount }}</strong><small>候选需要人工确认</small></div>
-    <div class="overview-card metric-card"><span>待发布 / 待修复</span><strong>{{ awaitingPublishCount }} / {{ repairCount }}</strong><small>成片确认与失败恢复</small></div>
+    <div class="overview-card metric-card"><span>录播</span><strong>{{ stageCounts.recordings }}</strong><small>全量场次</small></div>
+    <div class="overview-card metric-card"><span>AI 需关注</span><strong>{{ stageCounts.judge }}</strong><small>review / 失败</small></div>
+    <div class="overview-card metric-card"><span>样片生产</span><strong>{{ stageCounts.sample }}</strong><small>成片进行中或待修复</small></div>
+    <div class="overview-card metric-card"><span>待上传决定</span><strong>{{ stageCounts.subtitle }}</strong><small>字幕精修末板</small></div>
   </div>
 
-  <div class="studio-toolbar">
-    <label for="room-filter">UP 主</label>
-    <nz-select id="room-filter" nzAllowClear nzPlaceHolder="全部 UP 主" [(ngModel)]="roomFilter" (ngModelChange)="onRoomChanged()">
-      <nz-option *ngFor="let room of rooms" [nzValue]="room.room_id" [nzLabel]="room.name || room.room_id"></nz-option>
-    </nz-select>
-    <label for="status-filter">状态</label>
-    <nz-select id="status-filter" [(ngModel)]="statusFilter" (ngModelChange)="onStatusChanged()">
-      <nz-option nzValue="all" nzLabel="全部"></nz-option>
-      <nz-option nzValue="todo" nzLabel="待处理"></nz-option>
-      <nz-option nzValue="processing" nzLabel="处理中"></nz-option>
-      <nz-option nzValue="failed" nzLabel="失败"></nz-option>
-      <nz-option nzValue="done" nzLabel="已完成"></nz-option>
-      <nz-option nzValue="awaiting_publish" nzLabel="待发布"></nz-option>
-      <nz-option nzValue="needs_repair" nzLabel="需要修复"></nz-option>
-      <nz-option nzValue="has_keep" nzLabel="有保留片段"></nz-option>
-    </nz-select>
-    <label for="queue-order">排序</label>
-    <nz-select id="queue-order" [(ngModel)]="queueOrder">
-      <nz-option nzValue="newest" nzLabel="最新录播优先"></nz-option>
-      <nz-option nzValue="oldest" nzLabel="最早录播优先"></nz-option>
-      <nz-option nzValue="grouped" nzLabel="按 UP 主分组"></nz-option>
-    </nz-select>
-    <span class="toolbar-hint">点击密度图定位候选，拖动边界或使用 I/O 调整区间</span>
-    <span class="toolbar-shortcuts">J/K 切换候选 · 空格播放 · Ctrl+Enter 通过</span>
-  </div>
-
-  <div
-    class="review-workspace"
-    [class.queue-collapsed]="!queueOpen"
-    [class.inspector-empty]="!selectedSegment"
-    [class.subtitle-mode]="inspectorTab === 'subtitles' && !!selectedSegment"
-  >
-    <nz-card *ngIf="queueOpen" class="queue-panel panel" nzTitle="UP 主队列" [nzExtra]="queueExtra" [nzBodyStyle]="{ padding: '24px 0' }">
-      <ng-template #queueExtra><span class="panel-meta">{{ filteredRecordings.length }} 场录播</span></ng-template>
-      <nz-spin [nzSpinning]="loading">
-        <ng-container *ngIf="groupedRecordings.length; else noRecordings">
-          <div class="source-group" *ngFor="let group of groupedRecordings; trackBy: trackByGroup">
-            <div class="source-group-header" *ngIf="group.room"><strong>{{ group.room }}</strong><span>{{ group.items.length }} 场</span></div>
-            <button class="source-row" *ngFor="let item of group.items; trackBy: trackByRecording" type="button" [class.selected]="item.task_id === selectedTaskId" (click)="selectRecording(item.task_id)">
-              <span class="source-row-main"><strong>{{ recordingTitle(item) }}</strong><small>{{ sourceDateLabel(item) }}</small><small>{{ recordingSummary(item) }}</small></span>
-              <nz-tag [nzColor]="reviewStateColor(item.review_state)">{{ reviewStateLabel(item.review_state || item.status) }}</nz-tag>
+  <!-- 01 录播 -->
+  <ng-container *ngIf="activeStage === 'recordings'">
+    <div class="stage-layout recordings-layout">
+      <aside class="panel card-panel">
+        <div class="panel-title">筛选</div>
+        <label for="room-filter">UP 主</label>
+        <nz-select id="room-filter" nzAllowClear nzPlaceHolder="全部 UP 主" [(ngModel)]="roomFilter" (ngModelChange)="onRoomChanged()">
+          <nz-option *ngFor="let room of rooms" [nzValue]="room.room_id" [nzLabel]="room.name || room.room_id"></nz-option>
+        </nz-select>
+        <label for="status-filter">状态</label>
+        <nz-select id="status-filter" [(ngModel)]="statusFilter" (ngModelChange)="onStatusChanged()">
+          <nz-option nzValue="all" nzLabel="全部"></nz-option>
+          <nz-option nzValue="todo" nzLabel="待处理"></nz-option>
+          <nz-option nzValue="processing" nzLabel="处理中"></nz-option>
+          <nz-option nzValue="failed" nzLabel="失败"></nz-option>
+          <nz-option nzValue="done" nzLabel="已完成"></nz-option>
+          <nz-option nzValue="awaiting_publish" nzLabel="待发布"></nz-option>
+          <nz-option nzValue="needs_repair" nzLabel="需要修复"></nz-option>
+          <nz-option nzValue="has_keep" nzLabel="有保留片段"></nz-option>
+        </nz-select>
+        <label for="queue-order">排序</label>
+        <nz-select id="queue-order" [(ngModel)]="queueOrder">
+          <nz-option nzValue="newest" nzLabel="最新录播优先"></nz-option>
+          <nz-option nzValue="oldest" nzLabel="最早录播优先"></nz-option>
+          <nz-option nzValue="grouped" nzLabel="按 UP 主分组"></nz-option>
+        </nz-select>
+        <div class="filter-list">
+          <div class="filter-group" *ngFor="let group of groupedRecordings; trackBy: trackByGroup">
+            <button type="button" (click)="group.items[0] && selectRecording(group.items[0].task_id)">
+              <strong *ngIf="group.room">{{ group.room }}</strong>
+              <span>{{ group.items.length }} 场</span>
             </button>
           </div>
-        </ng-container>
-      </nz-spin>
-      <ng-template #noRecordings><nz-empty nzNotFoundContent="暂无符合条件的录播"></nz-empty></ng-template>
-
-      <nz-divider *ngIf="failureItems.length" nzText="失败收件箱"></nz-divider>
-      <div class="failure-inbox" *ngIf="failureItems.length">
-        <button class="failure-row" type="button" *ngFor="let item of failureItems | slice:0:4" (click)="selectRecording(item.task_id)">
-          <i nz-icon nzType="warning" nzTheme="fill"></i><span>{{ recordingTitle(item) }}</span><nz-tag nzColor="error">{{ statusLabel(item.status) }}</nz-tag>
-        </button>
-      </div>
-    </nz-card>
-
-    <nz-card class="preview-panel panel" nzTitle="片段预览" [nzExtra]="previewExtra">
-      <ng-template #previewExtra><span class="panel-meta">{{ detail?.source_size_mb || 0 }} MB</span></ng-template>
-      <div *ngIf="selectedSegment" class="review-actions">
-        <button nz-button (click)="setMediaMode('source')">源录像（源时间）</button>
-        <button nz-button (click)="setMediaMode('final')" [disabled]="!selectedSegment.final_media_id">最终成片（从零开始）</button>
-        <span>{{ mediaMode === 'final' ? '正在预览最终成片' : '正在预览源录像' }} · 版本 {{ selectedSegment.revision || 0 }}</span>
-      </div>
-      <nz-alert *ngIf="observationError" nzType="warning" [nzMessage]="observationError"></nz-alert>
-      <nz-alert *ngIf="draftConflict" nzType="warning" nzMessage="服务端版本已改变。草稿已保留，请核对后放弃旧草稿并重新编辑。"></nz-alert>
-      <div *ngIf="hasDraft" class="review-actions"><span>有未提交草稿（同标签页刷新可恢复）</span><button nz-button (click)="discardDraft()">放弃草稿并读取当前版本</button></div>
-      <div *ngFor="let id of pendingDropIds" class="review-actions">
-        <span>{{ id }}：{{ pendingDrops[id].uncertain ? '结果待核对' : '丢弃尚未提交' }}</span>
-        <button nz-button (click)="undoDrop(id)">撤销本地待办</button>
-        <button nz-button (click)="submitDrop(id)" [disabled]="pendingDrops[id].uncertain">提交丢弃</button>
-      </div>
-      <p *ngIf="detail?.skip_reason">{{ detail?.skip_reason }}</p>
-      <nz-spin [nzSpinning]="detailLoading">
-        <video #sourceVideo *ngIf="selectedMediaUrl; else noPreview" class="source-video" controls preload="none" [src]="selectedMediaUrl" (loadedmetadata)="positionVideo()" (timeupdate)="onVideoTimeUpdate($event)"></video>
-        <ng-template #noPreview><div class="empty-preview"><nz-empty nzNotFoundContent="从左侧选择录播后显示预览"></nz-empty></div></ng-template>
-        <div class="source-meta" *ngIf="detail"><strong>{{ recordingTitle(detail) }}</strong><span>{{ detail.message || statusLabel(detail.status) }}</span></div>
-
-        <section *ngIf="selectedSegment && inspectorTab === 'subtitles'" class="subtitle-workbench" aria-labelledby="subtitle-workbench-title">
-          <div class="subtitle-workbench-toolbar">
-            <div class="subtitle-workbench-title">
-              <strong id="subtitle-workbench-title">字幕校对</strong>
-              <span>{{ subtitleProgressLabel }} · {{ subtitleDrafts.length }} 行</span>
-              <nz-tag [nzColor]="subtitleDraftDirty ? 'warning' : 'success'">{{ subtitleStatusLabel }}</nz-tag>
-            </div>
-            <div class="subtitle-workbench-actions">
-              <button nz-button nzSize="small" (click)="addSubtitleLine()" [disabled]="selectedActionBusy">新增字幕行</button>
-              <button nz-button nzSize="small" (click)="saveSubtitleEdits()" [disabled]="selectedActionBusy || !subtitleDraftsValid || !subtitleDraftDirty" [attr.title]="subtitleActionHint">{{ subtitleSaveState === 'saving' ? '保存中…' : '保存修改' }}</button>
-              <button nz-button nzType="primary" nzSize="small" (click)="reburnSubtitles()" [disabled]="selectedActionBusy || subtitleDraftDirty" [attr.title]="subtitleActionHint">重新烧录</button>
-            </div>
-          </div>
-          <p class="review-note subtitle-action-hint" [class.subtitle-action-error]="!!subtitleValidationMessage && !!subtitleDrafts.length" role="status">{{ subtitleActionHint }}</p>
-          <div class="subtitle-job-progress" *ngIf="subtitleJobProgress as jobProgress" role="status" aria-live="polite">
-            <div class="subtitle-job-progress-heading"><span>{{ subtitleJobProgressMessage }}</span><small *ngIf="subtitleJobIdLabel">任务 {{ subtitleJobIdLabel }}</small></div>
-            <progress max="100" [value]="subtitleJobProgressPercent" [attr.aria-label]="subtitleJobProgressMessage"></progress>
-            <small>{{ subtitleJobProgressPercent }}%（阶段进度）</small>
-          </div>
-          <p class="review-note">点击字幕行定位视频；默认只改文本，需要时再展开时间。保存后重新烧录，不会自动发布。</p>
-          <div class="subtitle-list" role="list" aria-label="字幕校对列表">
-            <ng-container *ngIf="subtitleDrafts.length; else noSubtitleLines">
-              <div class="subtitle-row" *ngFor="let subtitle of subtitleDrafts; let index = index; trackBy: trackBySubtitle" [class.active]="index === activeSubtitleIndex" [class.invalid]="!subtitle.text.trim()" role="listitem">
-                <button type="button" class="subtitle-row-index" (click)="seekSubtitleLine(subtitle)" [attr.aria-label]="'定位第 ' + (index + 1) + ' 行字幕'">{{ index + 1 }}</button>
-                <div class="subtitle-row-main">
-                  <div class="subtitle-row-meta">
-                    <button nz-button nzType="link" nzSize="small" type="button" class="subtitle-row-time" (click)="seekSubtitleLine(subtitle)">{{ formatSubtitleTime(subtitle.start) }} — {{ formatSubtitleTime(subtitle.end) }}</button>
-                    <span *ngIf="index === activeSubtitleIndex" class="subtitle-current-label">当前句</span>
-                    <button type="button" class="subtitle-row-more" (click)="toggleSubtitleActions(index)" [attr.aria-expanded]="subtitleActionsIndex === index" aria-label="更多字幕操作"><i nz-icon nzType="more"></i></button>
-                  </div>
-                  <textarea nz-input rows="1" [(ngModel)]="subtitle.text" [name]="'subtitleText' + index" placeholder="输入正确台词或直播间黑话"></textarea>
-                  <div class="review-actions subtitle-row-actions" *ngIf="subtitleActionsIndex === index">
-                    <button nz-button nzType="link" nzSize="small" (click)="toggleSubtitleTimeEdit()">{{ subtitleTimeEditOpen && index === activeSubtitleIndex ? '收起时间' : '调整时间' }}</button>
-                    <button nz-button nzType="link" nzDanger nzSize="small" (click)="removeSubtitleLine(index)" [disabled]="selectedActionBusy || subtitleDrafts.length <= 1">删除</button>
-                  </div>
-                  <div class="range-fields subtitle-row-time-editor" *ngIf="subtitleTimeEditOpen && index === activeSubtitleIndex">
-                    <label>开始<input nz-input type="number" min="0" step="0.1" [ngModel]="subtitle.start" (ngModelChange)="updateActiveSubtitleTime('start', $event)" [max]="selectedSegmentDuration" [name]="'subtitleStart' + index"></label>
-                    <label>结束<input nz-input type="number" min="0" step="0.1" [ngModel]="subtitle.end" (ngModelChange)="updateActiveSubtitleTime('end', $event)" [max]="selectedSegmentDuration" [name]="'subtitleEnd' + index"></label>
-                  </div>
-                </div>
-              </div>
-            </ng-container>
-            <ng-template #noSubtitleLines><div class="subtitle-editor-empty">当前还没有可编辑字幕，可以新增一行并手工填写。</div></ng-template>
-          </div>
-        </section>
-
-        <ng-container *ngIf="inspectorTab !== 'subtitles'">
-        <details class="recording-lifecycle" *ngIf="detail"><summary>整场复核与源回收</summary>
-          <div class="recording-lifecycle-heading">
-            <strong>整场审核：{{ reviewStateLabel(detail.review_state) }}</strong>
-            <nz-tag [nzColor]="reviewStateColor(detail.review_state)">{{ detail.trash_status === 'done' ? '源录播已回收' : (detail.retention_warning ? '第 11 天保留预警' : '源录播保留中') }}</nz-tag>
-          </div>
-          <p *ngIf="detail.trash_block_reason" class="lifecycle-blocker">{{ detail.trash_block_reason }}</p>
-          <p *ngIf="detail.retention_deadline" class="lifecycle-deadline">保留截止：{{ detail.retention_deadline }}</p>
-          <div class="review-actions" *ngIf="canCompleteReview()">
-            <button nz-button nzType="primary" (click)="completeReview(false)" [disabled]="actionBusy || !detail.segments?.length">完成整场复核并回收源录播</button>
-            <button nz-button (click)="completeReview(true)" [disabled]="actionBusy || !canConfirmNoContent()">人工检查也没有精彩片段</button>
-          </div>
-          <p *ngIf="detail.review_state === 'review_complete' || detail.review_state === 'trash_pending'" class="lifecycle-note">已通过整场复核；源录播回收由 Windows worker 执行，最终成片和上传记录不会进入回收清单。</p>
-        </details>
-
-        <details class="missed-segment-panel" *ngIf="detail && detail.trash_status !== 'done' && detail.review_state !== 'trash_pending'">
-          <summary>人工补标漏切</summary>
-          <div class="density-header"><strong>源时间范围</strong><span>当前时间：{{ missedStartDraft.toFixed(1) }}s - {{ missedEndDraft.toFixed(1) }}s</span></div>
-          <div class="range-fields"><label>入点<input nz-input type="number" min="0" [(ngModel)]="missedStartDraft" name="missedStart"></label><label>出点<input nz-input type="number" min="0" [(ngModel)]="missedEndDraft" name="missedEnd"></label></div>
-          <div class="review-actions missed-actions"><button nz-button nzSize="small" (click)="markMissedBoundary('start')" [disabled]="actionBusy || mediaMode !== 'source'">I 取当前时间</button><button nz-button nzSize="small" (click)="markMissedBoundary('end')" [disabled]="actionBusy || mediaMode !== 'source'">O 取当前时间</button><select nz-input [(ngModel)]="missedReason" name="missedReason"><option value="mimo_missed">MiMo 漏切</option><option value="boundary_incomplete">边界不完整</option><option value="low_danmaku_signal">弹幕信号弱</option><option value="other">其他</option></select></div>
-          <textarea nz-input rows="2" [(ngModel)]="missedNote" name="missedNote" placeholder="可选：说明漏切原因或希望保留的上下文"></textarea>
-          <div class="review-actions"><button nz-button (click)="addMissedSegment()" [disabled]="actionBusy">生成人工候选</button></div>
-        </details>
-
-        <div class="density-card">
-          <div class="density-header"><strong>弹幕密度与候选区间</strong><span>{{ selectedRangeLabel }}</span></div>
-          <svg #densityChart class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图">
-            <path class="density-area" [attr.d]="densityPath"></path>
-            <ng-container *ngFor="let segment of detail?.segments || []">
-              <rect [attr.x]="densityX(segment.start_seconds || 0)" y="3" [attr.width]="densityWidth(segment.start_seconds || 0, segment.end_seconds || 0)" height="34" [ngClass]="densitySegmentClass(segment)" role="button" tabindex="0" [attr.aria-label]="segment.title || '选择候选'" (keydown.enter)="selectSegment(segment)" (keydown.space)="$event.preventDefault(); selectSegment(segment)" (click)="selectSegment(segment)"></rect>
-            </ng-container>
-            <ng-container *ngIf="selectedSegment">
-              <rect class="selected-range-overlay" [attr.x]="densityX(startDraft)" y="1.5" [attr.width]="densityWidth(startDraft, endDraft)" height="37"></rect>
-              <rect class="range-handle" [attr.x]="densityX(startDraft) - 0.45" y="0.5" width="0.9" height="39" (pointerdown)="beginRangeDrag($event, 'start')"></rect>
-              <rect class="range-handle" [attr.x]="densityX(endDraft) - 0.45" y="0.5" width="0.9" height="39" (pointerdown)="beginRangeDrag($event, 'end')"></rect>
-            </ng-container>
-          </svg>
-          <div class="density-legend"><span><i class="legend-dot keep"></i>已保留</span><span><i class="legend-dot failed"></i>判断失败</span><span><i class="legend-dot selected"></i>当前区间</span></div>
         </div>
+      </aside>
 
-        <nz-divider nzText="候选片段"></nz-divider>
-        <div class="segment-strip" *ngIf="detail?.segments?.length; else noSegments">
-          <button class="segment-chip" *ngFor="let segment of detail?.segments" type="button" [class.active]="segment.segment_id === selectedSegmentId" (click)="selectSegment(segment)">
-            <span>{{ segment.title || '未命名候选' }}</span><small>{{ segment.start_seconds | number:'1.0-1' }}s - {{ segment.end_seconds | number:'1.0-1' }}s</small><nz-tag [nzColor]="statusColor(segment.judge_status)">{{ statusLabel(segment.judge_status) }}</nz-tag>
+      <section class="panel card-panel main-panel">
+        <div class="panel-title">源录播列表 <span class="panel-meta">{{ filteredRecordings.length }} 场</span></div>
+        <nz-spin [nzSpinning]="loading">
+          <table class="stage-table" *ngIf="filteredRecordings.length; else noRecordings">
+            <thead>
+              <tr><th>场次</th><th>状态</th><th>片段摘要</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let item of filteredRecordings; trackBy: trackByRecording" [class.selected]="item.task_id === selectedTaskId">
+                <td>
+                  <button type="button" class="linkish" (click)="selectRecording(item.task_id)">
+                    <strong>{{ recordingTitle(item) }}</strong>
+                    <small>{{ sourceDateLabel(item) }}</small>
+                  </button>
+                </td>
+                <td><nz-tag [nzColor]="reviewStateColor(item.review_state || item.status)">{{ reviewStateLabel(item.review_state || item.status) }}</nz-tag></td>
+                <td class="mono">{{ recordingSummary(item) }}</td>
+                <td>
+                  <div class="row-actions">
+                    <button nz-button nzSize="small" (click)="selectRecording(item.task_id)">详情</button>
+                    <button nz-button nzSize="small" nzType="primary" (click)="selectRecording(item.task_id); startSelectedSlice()" [disabled]="actionBusy">启动切片</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <ng-template #noRecordings><nz-empty nzNotFoundContent="暂无符合条件的录播"></nz-empty></ng-template>
+        </nz-spin>
+        <div class="failure-inbox" *ngIf="failureItems.length">
+          <strong>失败收件箱</strong>
+          <button type="button" *ngFor="let item of failureItems | slice:0:4" (click)="selectRecording(item.task_id)">
+            {{ recordingTitle(item) }} <nz-tag nzColor="error">{{ statusLabel(item.status) }}</nz-tag>
           </button>
         </div>
-        <ng-template #noSegments><nz-empty nzNotFoundContent="当前录播暂无候选片段"></nz-empty></ng-template>
+      </section>
+
+      <aside class="panel card-panel side-panel">
+        <div class="panel-title">场次详情</div>
+        <ng-container *ngIf="detail as d; else selectHint">
+          <strong>{{ recordingTitle(d) }}</strong>
+          <nz-tag [nzColor]="reviewStateColor(d.review_state)">{{ reviewStateLabel(d.review_state || d.status) }}</nz-tag>
+          <p class="muted">{{ d.message || statusLabel(d.status) }}</p>
+          <dl class="kv">
+            <dt>片段</dt><dd>{{ d.segment_count || 0 }}</dd>
+            <dt>体积</dt><dd>{{ d.source_size_mb || 0 }} MB</dd>
+            <dt>源回收</dt><dd>{{ d.trash_status === 'done' ? '已回收' : (d.trash_block_reason || '保留中') }}</dd>
+            <dt>保留截止</dt><dd>{{ d.retention_deadline || '-' }}</dd>
+          </dl>
+          <div class="stack-actions">
+            <button nz-button nzType="primary" (click)="startSelectedSlice()" [disabled]="!selectedTaskId || actionBusy">启动 / 继续处理</button>
+            <button nz-button (click)="setStage('burst')">查看爆点阶段</button>
+            <button nz-button (click)="completeReview(false)" [disabled]="actionBusy || !canCompleteReview()">完成整场复核并回收</button>
+            <button nz-button (click)="completeReview(true)" [disabled]="actionBusy || !canConfirmNoContent()">人工检查也没有精彩片段</button>
+          </div>
+          <details class="missed-segment-panel" *ngIf="d.trash_status !== 'done'">
+            <summary>人工补标漏切</summary>
+            <div class="range-fields">
+              <label>入点<input nz-input type="number" min="0" [(ngModel)]="missedStartDraft" name="missedStart"></label>
+              <label>出点<input nz-input type="number" min="0" [(ngModel)]="missedEndDraft" name="missedEnd"></label>
+            </div>
+            <div class="review-actions">
+              <button nz-button nzSize="small" (click)="markMissedBoundary('start')" [disabled]="actionBusy || mediaMode !== 'source'">I 取当前时间</button>
+              <button nz-button nzSize="small" (click)="markMissedBoundary('end')" [disabled]="actionBusy || mediaMode !== 'source'">O 取当前时间</button>
+            </div>
+            <select nz-input [(ngModel)]="missedReason" name="missedReason">
+              <option value="mimo_missed">MiMo 漏切</option>
+              <option value="boundary_incomplete">边界不完整</option>
+              <option value="low_danmaku_signal">弹幕信号弱</option>
+              <option value="other">其他</option>
+            </select>
+            <textarea nz-input rows="2" [(ngModel)]="missedNote" name="missedNote" placeholder="可选：说明漏切原因"></textarea>
+            <button nz-button (click)="addMissedSegment()" [disabled]="actionBusy">生成人工候选</button>
+          </details>
         </ng-container>
-      </nz-spin>
-    </nz-card>
+        <ng-template #selectHint><nz-empty nzNotFoundContent="从左侧选择录播"></nz-empty></ng-template>
+      </aside>
+    </div>
+  </ng-container>
 
-    <nz-card class="review-panel panel" nzTitle="审核检查器" [nzExtra]="reviewExtra">
-      <ng-template #reviewExtra><nz-tag *ngIf="selectedSegment" [nzColor]="statusColor(selectedSegment.judge_status)">{{ statusLabel(selectedSegment.judge_status) }}</nz-tag></ng-template>
-      <ng-container *ngIf="selectedSegment as segment; else selectHint">
-        <div class="review-summary"><span class="review-symbol">AI</span><div><strong>模型建议</strong><small>结合转录、弹幕峰值和质量分人工复核</small></div></div>
-        <div class="inspector-tabs" role="tablist">
-          <button type="button" role="tab" id="tab-content" aria-controls="panel-content" [attr.aria-selected]="inspectorTab === 'content'" [class.active]="inspectorTab === 'content'" (click)="setInspectorTab('content')">内容</button>
-          <button type="button" role="tab" id="tab-subtitles" aria-controls="panel-subtitles" [attr.aria-selected]="inspectorTab === 'subtitles'" [class.active]="inspectorTab === 'subtitles'" (click)="setInspectorTab('subtitles')">字幕</button>
-          <button type="button" role="tab" id="tab-technical" aria-controls="panel-technical" [attr.aria-selected]="inspectorTab === 'technical'" [class.active]="inspectorTab === 'technical'" (click)="setInspectorTab('technical')">技术详情</button>
+  <!-- 02 筛选爆点 -->
+  <ng-container *ngIf="activeStage === 'burst'">
+    <div class="stage-layout burst-layout">
+      <aside class="panel card-panel">
+        <div class="panel-title">本板场次 <span class="panel-meta">{{ stageRecordings.length }}</span></div>
+        <nz-spin [nzSpinning]="loading">
+          <button
+            type="button"
+            class="queue-item"
+            *ngFor="let item of stageRecordings; trackBy: trackByRecording"
+            [class.selected]="item.task_id === selectedTaskId"
+            (click)="selectRecording(item.task_id)"
+          >
+            <strong>{{ recordingTitle(item) }}</strong>
+            <div class="queue-meta">
+              <nz-tag [nzColor]="statusColor(item.status)">{{ statusLabel(item.status) }}</nz-tag>
+              <span>{{ recordingSummary(item) }}</span>
+            </div>
+          </button>
+          <nz-empty *ngIf="!stageRecordings.length" nzNotFoundContent="当前没有处于爆点召回阶段的场次"></nz-empty>
+        </nz-spin>
+      </aside>
+      <section class="panel card-panel main-panel">
+        <div class="panel-title">密度与候选窗 <span class="panel-meta">{{ detail ? recordingTitle(detail) : '选择场次' }}</span></div>
+        <nz-spin [nzSpinning]="detailLoading">
+          <div class="density-hero">
+            <svg #densityChart class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图">
+              <path class="density-area" [attr.d]="densityPath"></path>
+              <ng-container *ngFor="let segment of detail?.segments || []">
+                <rect [attr.x]="densityX(segment.start_seconds || 0)" y="3" [attr.width]="densityWidth(segment.start_seconds || 0, segment.end_seconds || 0)" height="34" [ngClass]="densitySegmentClass(segment)" (click)="selectSegment(segment)"></rect>
+              </ng-container>
+              <ng-container *ngIf="selectedSegment">
+                <rect class="selected-range-overlay" [attr.x]="densityX(startDraft)" y="1.5" [attr.width]="densityWidth(startDraft, endDraft)" height="37"></rect>
+              </ng-container>
+            </svg>
+            <div class="density-legend"><span>弹幕密度</span><span>候选区间可点击</span></div>
+          </div>
+          <div class="burst-cards">
+            <div class="burst-card" *ngFor="let segment of detail?.segments || []">
+              <div class="row-between">
+                <strong>{{ segment.title || '未命名候选' }}</strong>
+                <nz-tag [nzColor]="statusColor(segment.judge_status)">{{ statusLabel(segment.judge_status) }}</nz-tag>
+              </div>
+              <div class="mono">{{ segment.start_seconds | number:'1.0-1' }}s - {{ segment.end_seconds | number:'1.0-1' }}s</div>
+              <div class="muted">弹幕 {{ segment.danmaku_count ?? '-' }} · {{ segment.manual_origin ? '人工候选' : '密度召回' }}</div>
+              <button nz-button nzSize="small" (click)="setStage('judge'); selectSegment(segment)">进入 AI 判断板</button>
+            </div>
+          </div>
+          <p class="muted">密度完成后 Worker 会自动送 MiMo；本板不做人工闸门。</p>
+        </nz-spin>
+      </section>
+    </div>
+  </ng-container>
+
+  <!-- 03 AI判断 -->
+  <ng-container *ngIf="activeStage === 'judge'">
+    <div class="stage-layout judge-layout">
+      <aside class="panel card-panel">
+        <div class="panel-title">判断结果 <span class="panel-meta">{{ stageSegments.length }}</span></div>
+        <button
+          type="button"
+          class="queue-item segment-item"
+          *ngFor="let segment of stageSegments"
+          [class.selected]="segment.segment_id === selectedSegmentId"
+          [class.need-human]="segment.judge_status === 'review' || segment.judge_status === 'judge_failed'"
+          (click)="selectSegment(segment)"
+        >
+          <div class="row-between">
+            <strong>{{ segment.title || '未命名候选' }}</strong>
+            <nz-tag [nzColor]="statusColor(segment.judge_status)">{{ statusLabel(segment.judge_status) }}</nz-tag>
+          </div>
+          <div class="mono">{{ segment.start_seconds | number:'1.0-1' }}s - {{ segment.end_seconds | number:'1.0-1' }}s</div>
+          <div class="score-row">
+            <span>Q {{ segment.quality_score ?? '-' }}</span>
+            <span>C {{ segment.completeness_score ?? '-' }}</span>
+            <span>conf {{ segment.confidence ?? '-' }}</span>
+          </div>
+          <span *ngIf="segment.judge_status === 'review' || segment.judge_status === 'judge_failed'" class="need-human-label">需人工</span>
+        </button>
+        <nz-empty *ngIf="!stageSegments.length" nzNotFoundContent="当前录播没有待判断/需人工候选"></nz-empty>
+      </aside>
+      <section class="panel card-panel main-panel">
+        <div class="panel-title">候选预览 <span class="panel-meta">{{ selectedSegment?.title || '选择左侧候选' }}</span></div>
+        <ng-container *ngIf="selectedSegment as segment">
+          <video #sourceVideo *ngIf="selectedMediaUrl; else noPreview" class="source-video" controls preload="none" [src]="selectedMediaUrl" (loadedmetadata)="positionVideo()" (timeupdate)="onVideoTimeUpdate($event)"></video>
+          <ng-template #noPreview><div class="empty-preview"><nz-empty nzNotFoundContent="暂无可预览媒体"></nz-empty></div></ng-template>
+          <div class="verdict-grid">
+            <div>
+              <div class="row-between">
+                <strong>AI 结论</strong>
+                <nz-tag [nzColor]="statusColor(segment.judge_status)">{{ statusLabel(segment.judge_status) }}</nz-tag>
+              </div>
+              <p class="muted">{{ segment.failure?.summary || segment.judge_error || segment.quality_reason || '结合转录、弹幕峰值与质量分复核' }}</p>
+              <div class="score-grid">
+                <div class="score-box"><strong>{{ segment.quality_score ?? '—' }}</strong><span>质量分</span></div>
+                <div class="score-box"><strong>{{ segment.completeness_score ?? '—' }}</strong><span>完整度</span></div>
+                <div class="score-box"><strong>{{ segment.confidence ?? '—' }}</strong><span>置信度</span></div>
+              </div>
+            </div>
+            <div class="stack-actions">
+              <div class="range-fields">
+                <label>入点<input nz-input type="number" [ngModel]="startDraft" (ngModelChange)="updateRange('start', $event)" name="judgeStart"></label>
+                <label>出点<input nz-input type="number" [ngModel]="endDraft" (ngModelChange)="updateRange('end', $event)" name="judgeEnd"></label>
+              </div>
+              <button nz-button (click)="saveRange()" [disabled]="selectedActionBusy">保存边界</button>
+              <button nz-button nzDanger (click)="scheduleDrop()" [disabled]="selectedActionBusy">丢弃</button>
+              <button nz-button (click)="retrySegment()" [disabled]="selectedActionBusy">重新分析</button>
+              <button nz-button nzType="primary" (click)="finalizeSegment()" [disabled]="selectedActionBusy">送交生成样片</button>
+            </div>
+          </div>
+        </ng-container>
+        <nz-empty *ngIf="!selectedSegment" nzNotFoundContent="从左侧选择候选片段"></nz-empty>
+      </section>
+    </div>
+  </ng-container>
+
+  <!-- 04 样片 -->
+  <ng-container *ngIf="activeStage === 'sample'">
+    <div class="stage-layout sample-layout">
+      <section class="panel card-panel main-panel">
+        <div class="panel-title">样片生产 <span class="panel-meta">可预览后自动进入字幕精修</span></div>
+        <div class="sample-grid" *ngIf="stageSegments.length; else noSamples">
+          <article class="sample-card" *ngFor="let segment of stageSegments" [class.failed]="!!segment.failure || segment.upload_status === 'failed'">
+            <div class="sample-thumb">{{ segment.failure || segment.upload_status === 'failed' ? '渲染失败' : '成片生成中…' }}</div>
+            <div class="sample-body">
+              <div class="row-between">
+                <strong>{{ segment.title || '未命名成片' }}</strong>
+                <nz-tag [nzColor]="statusColor(segment.action_state?.status || segment.judge_status)">{{ statusLabel(segment.action_state?.status || segment.judge_status) }}</nz-tag>
+              </div>
+              <div class="muted mono">{{ segment.action_state?.action || 'finalize' }} · {{ segmentJobMessage(segment) }}</div>
+              <nz-progress [nzPercent]="segmentJobPercent(segment)" [nzStatus]="segment.failure || segment.upload_status === 'failed' ? 'exception' : 'active'"></nz-progress>
+              <div class="row-actions">
+                <button nz-button nzSize="small" (click)="selectSegment(segment)">查看</button>
+                <button nz-button nzSize="small" nzType="primary" (click)="selectSegment(segment); renderSegment()" [disabled]="selectedActionBusy">重试成片</button>
+              </div>
+            </div>
+          </article>
         </div>
+        <ng-template #noSamples><nz-empty nzNotFoundContent="当前没有样片生产任务"></nz-empty></ng-template>
+      </section>
+      <aside class="panel card-panel side-panel">
+        <div class="panel-title">本板规则</div>
+        <p>样片板展示 keep 且尚未具备可预览成片的片段，以及失败待修项。</p>
+        <p class="muted">成片一旦可预览，会自动出现在「字幕精修」板。</p>
+        <video #sourceVideo *ngIf="selectedMediaUrl" class="source-video" controls preload="none" [src]="selectedMediaUrl" (loadedmetadata)="positionVideo()"></video>
+        <div class="stack-actions" *ngIf="selectedSegment">
+          <button nz-button (click)="retrySegment()" [disabled]="selectedActionBusy">重新分析</button>
+          <button nz-button (click)="renderSegment()" [disabled]="selectedActionBusy">重新渲染</button>
+          <button nz-button nzType="primary" (click)="setStage('subtitle')">去字幕精修板</button>
+        </div>
+      </aside>
+    </div>
+  </ng-container>
 
-        <section role="tabpanel" id="panel-content" aria-labelledby="tab-content" *ngIf="inspectorTab === 'content'" class="inspector-tab-panel">
-          <form nz-form nzLayout="vertical" class="review-form">
-            <nz-form-item><nz-form-label nzFor="segment-title">标题</nz-form-label><nz-form-control><input nz-input id="segment-title" [(ngModel)]="titleDraft" name="title"></nz-form-control></nz-form-item>
-            <nz-form-item><nz-form-label nzFor="segment-description">描述</nz-form-label><nz-form-control><textarea nz-input id="segment-description" rows="3" [(ngModel)]="descriptionDraft" name="description"></textarea></nz-form-control></nz-form-item>
-            <nz-form-item><nz-form-label nzFor="segment-tags">标签</nz-form-label><nz-form-control><input nz-input id="segment-tags" [(ngModel)]="tagsDraft" name="tags" placeholder="直播切片, 聊天, 弹幕互动"></nz-form-control></nz-form-item>
-            <nz-form-item><nz-form-label nzFor="quality-reason">质量备注</nz-form-label><nz-form-control><textarea nz-input id="quality-reason" rows="2" [(ngModel)]="qualityReasonDraft" name="qualityReason"></textarea></nz-form-control></nz-form-item>
-          </form>
-          <div class="range-fields"><label>入点<input nz-input type="number" min="0" [ngModel]="startDraft" (ngModelChange)="updateRange('start', $event)" name="start"></label><label>出点<input nz-input type="number" min="0" [ngModel]="endDraft" (ngModelChange)="updateRange('end', $event)" name="end"></label></div>
-          <p class="range-status" [class.dirty]="rangeDirty">{{ rangeDirty ? '区间有未保存修改' : '区间未修改' }}</p>
-          <nz-descriptions nzSize="small" [nzColumn]="2" class="segment-stats">
-            <nz-descriptions-item nzTitle="弹幕数">{{ segment.danmaku_count ?? '-' }}</nz-descriptions-item><nz-descriptions-item nzTitle="质量分">{{ segment.quality_score == null ? '-' : segment.quality_score }}</nz-descriptions-item>
-            <nz-descriptions-item nzTitle="完整度">{{ segment.completeness_score == null ? '-' : segment.completeness_score }}</nz-descriptions-item><nz-descriptions-item nzTitle="置信度">{{ segment.confidence == null ? '-' : segment.confidence }}</nz-descriptions-item>
-          </nz-descriptions>
-        </section>
+  <!-- 05 字幕精修 + 上传 -->
+  <ng-container *ngIf="activeStage === 'subtitle'">
+    <div class="stage-layout subtitle-layout">
+      <aside class="panel card-panel">
+        <div class="panel-title">末板队列 <span class="panel-meta">{{ stageSegments.length }}</span></div>
+        <button
+          type="button"
+          class="queue-item"
+          *ngFor="let segment of stageSegments"
+          [class.selected]="segment.segment_id === selectedSegmentId"
+          (click)="selectSegment(segment)"
+        >
+          <div class="row-between">
+            <strong>{{ segment.title || '未命名成片' }}</strong>
+            <nz-tag [nzColor]="statusColor(segment.upload_status || 'awaiting_publish')">{{ statusLabel(segment.upload_status || 'awaiting_publish') }}</nz-tag>
+          </div>
+          <div class="muted">版本 {{ segment.revision || 0 }}</div>
+        </button>
+        <nz-empty *ngIf="!stageSegments.length" nzNotFoundContent="暂无待确认成片"></nz-empty>
+      </aside>
+      <section class="panel card-panel main-panel">
+        <div class="panel-title">成片预览 <span class="panel-meta">{{ selectedSegment?.title || '选择左侧成片' }}</span></div>
+        <ng-container *ngIf="selectedSegment">
+          <div class="review-actions">
+            <button nz-button nzSize="small" (click)="setMediaMode('source')">源录像</button>
+            <button nz-button nzSize="small" (click)="setMediaMode('final')" [disabled]="!selectedSegment.final_media_id">最终成片</button>
+            <span class="muted">{{ mediaMode === 'final' ? '正在预览最终成片' : '正在预览源录像' }}</span>
+          </div>
+          <video #sourceVideo *ngIf="selectedMediaUrl" class="source-video" controls preload="none" [src]="selectedMediaUrl" (loadedmetadata)="positionVideo()" (timeupdate)="onVideoTimeUpdate($event)"></video>
+          <div class="subtitle-workbench">
+            <div class="row-between">
+              <strong>字幕精修</strong>
+              <span class="muted">{{ subtitleProgressLabel }} · {{ subtitleStatusLabel }}</span>
+            </div>
+            <div class="subtitle-list">
+              <div class="subtitle-row" *ngFor="let subtitle of subtitleDrafts; let index = index; trackBy: trackBySubtitle" [class.active]="index === activeSubtitleIndex">
+                <button type="button" class="subtitle-row-index" (click)="seekSubtitleLine(subtitle)">{{ index + 1 }}</button>
+                <div class="subtitle-row-main">
+                  <button nz-button nzType="link" nzSize="small" (click)="seekSubtitleLine(subtitle)">{{ formatSubtitleTime(subtitle.start) }} — {{ formatSubtitleTime(subtitle.end) }}</button>
+                  <textarea nz-input rows="1" [(ngModel)]="subtitle.text" [name]="'subtitleText' + index"></textarea>
+                </div>
+              </div>
+            </div>
+            <div class="row-actions">
+              <button nz-button nzSize="small" (click)="addSubtitleLine()" [disabled]="selectedActionBusy">新增字幕行</button>
+              <button nz-button nzSize="small" (click)="saveSubtitleEdits()" [disabled]="selectedActionBusy || !subtitleDraftsValid || !subtitleDraftDirty">保存字幕</button>
+              <button nz-button nzSize="small" nzType="primary" (click)="reburnSubtitles()" [disabled]="selectedActionBusy || subtitleDraftDirty" [attr.title]="subtitleActionHint">重新烧录</button>
+            </div>
+            <p class="muted">{{ subtitleActionHint }}</p>
+          </div>
+        </ng-container>
+        <nz-empty *ngIf="!selectedSegment" nzNotFoundContent="从左侧选择待确认成片"></nz-empty>
+      </section>
+      <aside class="panel card-panel upload-gate">
+        <div class="panel-title">是否上传？</div>
+        <ng-container *ngIf="selectedSegment as segment; else uploadHint">
+          <p>确认后激活上传队列（staged → CDN/B站）。暂不上传会把成片留在本板。</p>
+          <dl class="kv">
+            <dt>上传状态</dt><dd>{{ statusLabel(segment.upload_status) }}</dd>
+            <dt>最终成片</dt><dd>{{ segment.final_media_id ? '已生成' : '未生成' }}</dd>
+            <dt>草稿</dt><dd>{{ hasDraft ? '有未保存修改' : '无' }}</dd>
+          </dl>
+          <div class="upload-actions">
+            <button nz-button class="btn-lg" (click)="deferUpload()">暂不上传</button>
+            <button nz-button nzType="primary" class="btn-lg" (click)="approvePublish()" [disabled]="!canApprovePublish || selectedActionBusy">确认上传</button>
+          </div>
+          <p class="muted">对应既有「允许发布」；Dashboard 不直接执行重处理。</p>
+        </ng-container>
+        <ng-template #uploadHint><nz-empty nzNotFoundContent="选择成片后再决定是否上传"></nz-empty></ng-template>
+      </aside>
+    </div>
+  </ng-container>
 
-        <section role="tabpanel" id="panel-subtitles" aria-labelledby="tab-subtitles" *ngIf="inspectorTab === 'subtitles'" class="inspector-tab-panel subtitle-context-panel">
-          <div class="recording-lifecycle-heading subtitle-context-heading"><div><span class="subtitle-eyebrow">当前句</span><strong>{{ subtitleProgressLabel }}</strong></div><button nz-button nzSize="small" (click)="toggleSubtitleTimeEdit()">{{ subtitleTimeEditOpen ? '收起时间' : '调整时间' }}</button></div>
-          <ng-container *ngIf="activeSubtitle as subtitle; else noActiveSubtitle">
-            <div class="subtitle-context-text">{{ subtitle.text || '这一行还没有文字' }}</div>
-            <div class="source-meta subtitle-context-time"><span>{{ formatSubtitleTime(subtitle.start) }}</span><i>—</i><span>{{ formatSubtitleTime(subtitle.end) }}</span></div>
-            <div class="review-actions subtitle-context-actions"><button nz-button nzSize="small" (click)="nextSubtitle(-1)">上一句</button><button nz-button nzSize="small" (click)="seekSubtitleLine(subtitle)">定位当前句</button><button nz-button nzSize="small" (click)="nextSubtitle(1)">下一句</button></div>
-            <div class="range-fields subtitle-context-fields" *ngIf="subtitleTimeEditOpen"><label>开始<input nz-input type="number" min="0" step="0.1" [ngModel]="subtitle.start" (ngModelChange)="updateActiveSubtitleTime('start', $event)" [max]="selectedSegmentDuration" name="activeSubtitleStart"></label><label>结束<input nz-input type="number" min="0" step="0.1" [ngModel]="subtitle.end" (ngModelChange)="updateActiveSubtitleTime('end', $event)" [max]="selectedSegmentDuration" name="activeSubtitleEnd"></label></div>
-          </ng-container>
-          <ng-template #noActiveSubtitle><div class="subtitle-context-empty">当前没有字幕行。请在左侧字幕列表新增一行。</div></ng-template>
-          <p class="review-note">播放视频时当前句会自动高亮。文本修改在列表中完成，时间只在需要时调整。</p>
-          <details class="subtitle-style-details"><summary>字幕样式</summary><p class="review-note">样式修改只影响重新烧录后的成片。</p><div class="subtitle-grid"><label>字体<input nz-input [(ngModel)]="subtitleFontName" name="subtitleFontName"></label><label>字号<input nz-input type="number" min="8" [(ngModel)]="subtitleFontSize" name="subtitleFontSize"></label><label>底边距<input nz-input type="number" min="0" [(ngModel)]="subtitleMarginV" name="subtitleMarginV"></label><label>描边宽度<input nz-input type="number" min="0" step="0.5" [(ngModel)]="subtitleOutline" name="subtitleOutline"></label><label>位置<select nz-input [(ngModel)]="subtitleAlignment" name="subtitleAlignment"><option [ngValue]="1">左下</option><option [ngValue]="2">中下</option><option [ngValue]="3">右下</option><option [ngValue]="4">左中</option><option [ngValue]="5">居中</option><option [ngValue]="6">右中</option><option [ngValue]="7">左上</option><option [ngValue]="8">中上</option><option [ngValue]="9">右上</option></select></label><label>文字色<input nz-input type="color" [(ngModel)]="subtitleTextColor" name="subtitleTextColor"></label><label>描边色<input nz-input type="color" [(ngModel)]="subtitleOutlineColor" name="subtitleOutlineColor"></label></div><div class="subtitle-preview-frame" [style.justify-content]="subtitlePosition.horizontal" [style.align-items]="subtitlePosition.vertical"><div class="subtitle-preview" [style.font-family]="subtitleFontName" [style.font-size.px]="subtitleFontSize" [style.margin-bottom.px]="subtitleAlignment <= 3 ? subtitleMarginV / 4 : 0" [style.margin-top.px]="subtitleAlignment >= 7 ? subtitleMarginV / 4 : 0" [style.color]="subtitleTextColor" [style.text-shadow]="subtitlePreviewShadow">示例字幕：最终成片以此样式烧录</div></div><div class="review-actions"><button nz-button (click)="saveSubtitleStyle()" [disabled]="selectedActionBusy">保存字幕样式</button></div></details>
-        </section>
-
-        <section role="tabpanel" id="panel-technical" aria-labelledby="tab-technical" *ngIf="inspectorTab === 'technical'" class="inspector-tab-panel">
-
-          <nz-descriptions nzSize="small" [nzColumn]="1"><nz-descriptions-item nzTitle="动作状态">{{ statusLabel(segment.action_state?.status) }}</nz-descriptions-item><nz-descriptions-item nzTitle="上传状态">{{ statusLabel(segment.upload_status) }}</nz-descriptions-item><nz-descriptions-item nzTitle="任务进度">{{ subtitleJobProgress ? subtitleJobProgressMessage + ' · ' + subtitleJobProgressPercent + '%' : '无后台任务' }}</nz-descriptions-item><nz-descriptions-item nzTitle="原始错误">{{ segment.failure?.technical_details || segment.judge_error || '无' }}</nz-descriptions-item></nz-descriptions>
-          <div class="review-actions"><button nz-button (click)="retrySegment()" [disabled]="selectedActionBusy">重新分析</button><button nz-button (click)="renderSegment()" [disabled]="selectedActionBusy">重新渲染片段</button></div>
-        </section>
-
-        <nz-alert *ngIf="segment.failure" nzType="warning" nzShowIcon [nzMessage]="segment.failure.summary || '片段处理失败'" [nzDescription]="segment.failure.recovery_action || ''"></nz-alert>
-        <div class="inspector-action-bar"><button nz-button (click)="saveRange()" [disabled]="selectedActionBusy">保存边界</button><button nz-button nzDanger (click)="scheduleDrop()" [disabled]="selectedActionBusy">丢弃</button><button nz-button nzType="primary" class="primary-action" (click)="finalizeSegment()" [disabled]="selectedActionBusy">生成最终成片</button><button nz-button nzType="primary" nzGhost (click)="approvePublish()" [disabled]="selectedActionBusy || hasDraft || !segment.final_media_id || segment.upload_status !== 'awaiting_publish'">允许发布</button></div>
-      </ng-container>
-      <ng-template #selectHint><nz-empty nzNotFoundContent="从中间选择候选片段"></nz-empty></ng-template>
-    </nz-card>
-  </div>
-
-  <div class="action-toast" *ngIf="dropPending" role="status"><span>将在 5 秒后丢弃当前候选</span><button nz-button nzSize="small" (click)="undoDrop()">撤销</button></div>
-
-  <div class="status-grid">
-    <nz-card nzTitle="Worker 状态" nzSize="small"><div class="status-line"><span>{{ worker.status || '未知' }}</span><span>{{ worker.message || '等待状态' }}</span></div><div class="review-actions"><button nz-button nzSize="small" (click)="wakeWorker()" [disabled]="actionBusy">唤醒</button><button nz-button nzSize="small" nzDanger (click)="stopWorker()" [disabled]="actionBusy">停止</button></div></nz-card>
-    <nz-card nzTitle="诊断" nzSize="small"><ng-container *ngIf="diagnosticItems.length; else noDiagnostics"><div class="diagnostic-item" *ngFor="let item of diagnosticItems | slice:0:4"><nz-tag [nzColor]="statusColor(item.status)">{{ item.status || 'info' }}</nz-tag><span>{{ item.title || item.message }}</span></div></ng-container><ng-template #noDiagnostics><span class="muted">暂无诊断信息</span></ng-template></nz-card>
-    <nz-card nzTitle="快捷键" nzSize="small"><p class="shortcut-help">J/K 切换候选 · 空格播放/暂停 · I/O 设置边界 · Ctrl+Enter 通过</p></nz-card>
+  <div class="action-toast" *ngIf="dropPending" role="status">
+    <span>将在 5 秒后丢弃当前候选</span>
+    <button nz-button nzSize="small" (click)="undoDrop()">撤销</button>
+    <button nz-button nzSize="small" (click)="submitDrop(selectedSegmentId)" [disabled]="pendingDrops[selectedSegmentId] && pendingDrops[selectedSegmentId].uncertain">提交丢弃</button>
   </div>
 </section>

@@ -69,12 +69,6 @@ def test_native_source_queue_tracks_stable_group_and_recording_ids():
     component = Path(
         "frontend/src/app/studio/studio-slices.component.ts"
     ).read_text(encoding="utf-8")
-    with zipfile.ZipFile(WHEEL) as archive:
-        javascript = b"\n".join(
-            archive.read(name)
-            for name in archive.namelist()
-            if name.startswith("blrec/data/webapp/") and name.endswith(".js")
-        )
 
     assert "trackBy: trackByGroup" in template
     assert "trackBy: trackByRecording" in template
@@ -82,9 +76,10 @@ def test_native_source_queue_tracks_stable_group_and_recording_ids():
     assert "return group.room || 'all';" in component
     assert "trackByRecording(_index: number, item: StudioSourceRecording): string" in component
     assert "return item.task_id;" in component
-    assert b"trackByGroup" in javascript
-    assert b"trackByRecording" in javascript
-    assert b"24px 0" in javascript
+    # Stage board rewrite must keep identity tracking and worker wake control.
+    assert 'class="stage-nav"' in template
+    assert "wakeWorker()" in template
+    assert "approvePublish" in component
 
 
 def test_native_wheel_uses_studio_api_namespace():

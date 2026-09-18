@@ -19,6 +19,12 @@ describe('Studio review behavior', () => {
       segmentAction: jasmine.createSpy().and.returnValue(of({status: 'accepted', job_id: 'job-a'})),
       getRooms: () => of([]),
       getSourceRecordings: () => of([]),
+      getSourceRecording: jasmine.createSpy().and.returnValue(of({
+        task_id: 'source',
+        room_id: '1',
+        source_media_id: 'source-media',
+        segments: [a, b],
+      })),
     };
     message = {info() {}, success() {}, error: jasmine.createSpy(), warning() {}};
     component = new StudioSlicesComponent(api, message as any,
@@ -78,6 +84,51 @@ describe('Studio review behavior', () => {
     component.selectSegment(a);
     component.titleDraft = 'Unsaved';
     component.approvePublish();
+    expect(api.segmentAction).not.toHaveBeenCalled();
+  });
+
+  it('switches stage boards and keeps drop items out of stage segment lists', () => {
+    const dropped: StudioSegment = {segment_id: 'd', judge_status: 'drop'};
+    const review: StudioSegment = {segment_id: 'r', judge_status: 'review'};
+    const finalItem: StudioSegment = {
+      segment_id: 'f',
+      judge_status: 'keep',
+      final_media_id: 'final-f',
+      upload_status: 'awaiting_publish',
+    };
+    spyOn(component as any, 'loadDetail');
+    component.detail = {task_id: 'source', room_id: '1', segments: [dropped, review, finalItem]};
+    component.recordings = [
+      {task_id: 'source', room_id: '1', status: 'done', summary_counts: {review: 1, keep: 1, awaiting_publish: 1}},
+      {task_id: 'busy', room_id: '1', status: 'processing'},
+    ];
+
+    component.setStage('judge');
+    expect(component.activeStage).toBe('judge');
+    expect(component.stageSegments.map((item) => item.segment_id)).toEqual(['r']);
+
+    component.setStage('subtitle');
+    expect(component.stageSegments.map((item) => item.segment_id)).toEqual(['f']);
+    expect(component.stageCounts.subtitle).toBe(1);
+    expect(component.stageCounts.burst).toBe(1);
+  });
+
+  it('confirms upload through the existing approve-publish action', () => {
+    spyOn(component as any, 'loadDetail');
+    component.setStage('subtitle');
+    component.selectSegment(a);
+    component.approvePublish();
+    expect(api.segmentAction).toHaveBeenCalledWith('a', 'approve-publish', {
+      expected_revision: 1,
+      final_media_id: 'final-a',
+    });
+  });
+
+  it('defers upload without calling the API', () => {
+    spyOn(component as any, 'loadDetail');
+    component.setStage('subtitle');
+    component.selectSegment(a);
+    component.deferUpload();
     expect(api.segmentAction).not.toHaveBeenCalled();
   });
 

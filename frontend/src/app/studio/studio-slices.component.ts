@@ -34,6 +34,15 @@ import {
 import { StudioPreferencesService } from './studio-preferences.service';
 
 import { subtitlePosition } from './subtitle-position';
+import {
+  SLICE_STAGES,
+  SliceStageId,
+  StageCounts,
+  computeStageCounts,
+  filterSegmentsByStage,
+  isSliceStageId,
+  recordingInBurst,
+} from './slice-stage';
 
 type InspectorTab = 'content' | 'subtitles' | 'technical';
 type RangeBoundary = 'start' | 'end';
@@ -60,6 +69,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   statusFilter = 'all';
   queueOrder: QueueOrder = 'newest';
   queueOpen = true;
+  activeStage: SliceStageId = 'recordings';
+  readonly stages = SLICE_STAGES;
   inspectorTab: InspectorTab = 'content';
   rooms: StudioRoom[] = [];
   recordings: StudioSourceRecording[] = [];
@@ -127,6 +138,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.restoreSession();
     const query = new URL(window.location.href).searchParams;
+    const stageParam = query.get('stage');
+    if (isSliceStageId(stageParam)) this.activeStage = stageParam;
     this.selectedTaskId = query.get('source_task_id') || '';
     this.selectedSegmentId = query.get('segment_id') || '';
     this.breakpointObserver
@@ -169,6 +182,44 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   get compactQueue(): boolean {
     return this.preferences.value.compactQueue;
+  }
+
+  get stageMeta() {
+    return this.stages.find((stage) => stage.id === this.activeStage) || this.stages[0];
+  }
+
+  get stageCounts(): StageCounts {
+    return computeStageCounts(this.recordings);
+  }
+
+  get stageRecordings(): StudioSourceRecording[] {
+    if (this.activeStage === 'recordings') return this.filteredRecordings;
+    if (this.activeStage === 'burst') {
+      return this.filteredRecordings.filter((item) => recordingInBurst(item));
+    }
+    return this.filteredRecordings.filter((item) => {
+      const counts = item.summary_counts || {};
+      const num = (key: string) => Number(counts[key] || 0);
+      if (this.activeStage === 'judge') return num('review') + num('judge_failed') > 0;
+      if (this.activeStage === 'sample') {
+        return Math.max(0, num('keep') + num('manual_keep') - num('awaiting_publish')) > 0
+          || num('needs_repair') > 0;
+      }
+      if (this.activeStage === 'subtitle') return num('awaiting_publish') > 0;
+      return true;
+    });
+  }
+
+  get stageSegments(): StudioSegment[] {
+    return filterSegmentsByStage(this.detail?.segments || [], this.activeStage);
+  }
+
+  get canApprovePublish(): boolean {
+    return Boolean(
+      this.selectedSegment?.final_media_id &&
+      !this.hasDraft &&
+      this.selectedSegment.upload_status === 'awaiting_publish'
+    );
   }
 
   get workerState(): 'running' | 'idle' | 'unavailable' {
@@ -553,12 +604,56 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.changeDetector.markForCheck();
   }
 
+  setStage(stage: SliceStageId): void {
+    if (this.activeStage === stage) return;
+    this.saveDraft();
+    this.activeStage = stage;
+    const url = new URL(window.location.href);
+    url.searchParams.set('stage', stage);
+    window.history.replaceState(window.history.state, '', url);
+    const preferred = this.stageRecordings[0]?.task_id;
+    if (preferred && preferred !== this.selectedTaskId) {
+      this.selectedTaskId = preferred;
+      this.selectedSegmentId = '';
+      this.loadDetail(preferred);
+    } else if (this.selectedTaskId) {
+      this.loadDetail(this.selectedTaskId);
+    }
+    this.changeDetector.markForCheck();
+  }
+
   selectRecording(taskId: string): void {
     this.saveDraft();
     if (taskId === this.selectedTaskId && this.detail) return;
     this.selectedTaskId = taskId;
     this.selectedSegmentId = '';
     this.loadDetail(taskId);
+  }
+
+  deferUpload(): void {
+    this.message.info('已保留在字幕精修板，稍后可再确认上传');
+    this.changeDetector.markForCheck();
+  }
+
+  segmentJobPercent(segment: StudioSegment): number {
+    const fromAction = Number(segment.action_state?.progress?.percent);
+    if (Number.isFinite(fromAction)) return Math.max(0, Math.min(100, fromAction));
+    if (String(segment.action_state?.status || '') === 'done') return 100;
+    if (segment.failure || segment.upload_status === 'failed') return 0;
+    return 0;
+  }
+
+  segmentJobMessage(segment: StudioSegment): string {
+    const progress = segment.action_state?.progress;
+    if (progress?.message) return progress.message;
+    const status = String(segment.action_state?.status || '');
+    if (['pending', 'processing', 'running', 'blocked'].includes(status)) {
+      return this.jobPhaseLabel(progress?.phase) || '等待 Windows Worker';
+    }
+    if (segment.failure || segment.upload_status === 'failed') {
+      return segment.failure?.summary || '成片失败，可重试';
+    }
+    return '等待生成可预览成片';
   }
 
   selectSegment(segment: StudioSegment): void {
@@ -601,8 +696,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.activeSubtitleIndex = this.subtitleDrafts.length ? 0 : -1;
     this.subtitleTimeEditOpen = false;
     this.subtitleActionsIndex = -1;
-    this.mediaMode = segment.final_media_id && segment.upload_status === 'awaiting_publish' ? 'final' : 'source';
+    this.mediaMode = segment.final_media_id && (segment.upload_status === 'awaiting_publish' || this.activeStage === 'subtitle')
+      ? 'final'
+      : 'source';
     const url = new URL(window.location.href);
+    url.searchParams.set('stage', this.activeStage);
     url.searchParams.set('source_task_id', this.selectedTaskId);
     url.searchParams.set('segment_id', segment.segment_id);
     window.history.replaceState(window.history.state, '', url);
@@ -1236,8 +1334,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         this.detail = detail;
         this.detailLoading = false;
         if (detail.trash_job_id && ['pending', 'processing'].includes(detail.trash_status || '')) this.waitForRecordingJob(detail.trash_job_id);
-        const selected = detail.segments?.find((segment) => segment.segment_id === this.selectedSegmentId);
-        const first = selected || detail.segments?.[0];
+        const stageSegments = filterSegmentsByStage(detail.segments || [], this.activeStage);
+        const allowAnySegment = this.activeStage === 'recordings' || this.activeStage === 'burst';
+        const pool = allowAnySegment ? (detail.segments || []) : stageSegments;
+        const selected = pool.find((segment) => segment.segment_id === this.selectedSegmentId);
+        const first = selected || pool[0];
         if (first) this.selectSegment(first);
         else this.selectedSegmentId = '';
         this.subtitleRefreshPending = false;

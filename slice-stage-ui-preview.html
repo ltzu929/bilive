@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bilive 切片流水线 · 阶段界面预览</title>
+  <style>
+    :root {
+      --ink: #1c1f23;
+      --ink-2: #3d444d;
+      --muted: #7a828c;
+      --paper: #f0f2f5;
+      --surface: #ffffff;
+      --line: #e4e7ec;
+      --line-strong: #cfd5dd;
+      --accent: #1677ff;
+      --accent-weak: #e6f4ff;
+      --keep: #389e0d;
+      --keep-weak: #f6ffed;
+      --warn: #d48806;
+      --warn-weak: #fffbe6;
+      --drop: #cf1322;
+      --drop-weak: #fff1f0;
+      --violet: #531dab;
+      --violet-weak: #f9f0ff;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.06);
+      --radius: 10px;
+      --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "Cascadia Code", "SF Mono", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      font-family: var(--font);
+      color: var(--ink);
+      background: var(--paper);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    button { font-family: inherit; cursor: pointer; }
+    button:focus-visible,
+    [role="tab"]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ========== Top pipeline rail ========== */
+    .topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .topbar-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 20px 0;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      min-width: 140px;
+    }
+    .brand strong { font-size: 15px; letter-spacing: 0.02em; }
+    .brand span { color: var(--muted); font-size: 12px; }
+
+    .worker-pill {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--keep-weak);
+      color: var(--keep);
+      font-size: 12px;
+      border: 1px solid #b7eb8f;
+    }
+    .worker-pill .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--keep);
+    }
+    .top-actions { display: flex; gap: 8px; }
+
+    .btn {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: #4096ff; color: #fff; border-color: #4096ff; }
+    .btn-danger { color: var(--drop); border-color: #ffa39e; }
+    .btn-danger:hover { background: var(--drop-weak); border-color: var(--drop); color: var(--drop); }
+    .btn-ghost { border-color: transparent; background: transparent; color: var(--ink-2); }
+    .btn-lg { padding: 10px 18px; font-size: 14px; font-weight: 600; border-radius: 8px; }
+    .btn-block { width: 100%; }
+
+    .stage-nav {
+      display: flex;
+      gap: 4px;
+      padding: 8px 12px 0;
+      overflow-x: auto;
+    }
+    .stage-tab {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--ink-2);
+      padding: 10px 14px 12px;
+      border-radius: 8px 8px 0 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      min-width: 120px;
+      border-bottom: 2px solid transparent;
+    }
+    .stage-tab:hover { background: var(--paper); }
+    .stage-tab[aria-selected="true"] {
+      color: var(--accent);
+      background: var(--accent-weak);
+      border-bottom-color: var(--accent);
+    }
+    .stage-tab .label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .stage-tab .step {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .stage-tab[aria-selected="true"] .step { color: var(--accent); }
+    .stage-tab .count {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .stage-tab[aria-selected="true"] .count { color: var(--accent); }
+    .stage-tab .arrow { color: var(--muted); margin-left: 4px; font-weight: 400; }
+
+    .stage-hint {
+      padding: 8px 20px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px dashed var(--line);
+      background: #fafbfc;
+    }
+
+    /* ========== Shell ========== */
+    .stage-root {
+      flex: 1;
+      padding: 16px 20px 28px;
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 1px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .tag-blue { background: var(--accent-weak); color: var(--accent); border-color: #91caff; }
+    .tag-green { background: var(--keep-weak); color: var(--keep); border-color: #b7eb8f; }
+    .tag-gold { background: var(--warn-weak); color: var(--warn); border-color: #ffe58f; }
+    .tag-red { background: var(--drop-weak); color: var(--drop); border-color: #ffa39e; }
+    .tag-purple { background: var(--violet-weak); color: var(--violet); border-color: #d3adf7; }
+    .tag-gray { background: #f5f5f5; color: var(--muted); border-color: var(--line); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .card-h {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+    }
+    .card-h .meta { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 12px; }
+    .card-b { padding: 14px; }
+
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+    }
+    .metric .k { color: var(--muted); font-size: 12px; }
+    .metric .v { font-size: 24px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .metric .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+    .empty {
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    /* ========== Stage 1: 录播 inventory ========== */
+    .s1-layout {
+      display: grid;
+      grid-template-columns: 220px 1fr 300px;
+      gap: 12px;
+      align-items: start;
+    }
+    .filter-list { display: flex; flex-direction: column; gap: 4px; }
+    .filter-item {
+      text-align: left;
+      border: 1px solid transparent;
+      background: transparent;
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--ink-2);
+    }
+    .filter-item:hover { background: var(--paper); }
+    .filter-item.active {
+      background: var(--accent-weak);
+      border-color: #91caff;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .filter-item .n { font-family: var(--mono); font-size: 12px; }
+
+    .rec-table { width: 100%; border-collapse: collapse; }
+    .rec-table th {
+      text-align: left;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .rec-table td {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: middle;
+    }
+    .rec-table tr:hover td { background: #fafbfc; }
+    .rec-table tr.selected td { background: var(--accent-weak); }
+    .rec-title { font-weight: 600; }
+    .rec-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+    .side-panel .kv {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 6px 8px;
+      font-size: 13px;
+    }
+    .side-panel .kv dt { color: var(--muted); }
+    .side-panel .kv dd { margin: 0; }
+
+    /* ========== Stage 2: 筛选爆点 ========== */
+    .s2-layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .queue-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .queue-item:hover { border-color: var(--accent); }
+    .queue-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-weak);
+    }
+    .queue-item .t { font-weight: 600; }
+    .queue-item .m { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .density-hero {
+      background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+      border-bottom: 1px solid var(--line);
+      padding: 16px 16px 8px;
+    }
+    .density-hero svg { width: 100%; height: 220px; display: block; }
+    .density-legend {
+      display: flex;
+      gap: 14px;
+      padding: 8px 4px 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .density-legend i {
+      display: inline-block;
+      width: 10px; height: 10px;
+      border-radius: 2px;
+      margin-right: 4px;
+      vertical-align: -1px;
+    }
+
+    .burst-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .burst-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--surface);
+    }
+    .burst-card .range { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+    .burst-card .score { font-size: 18px; font-weight: 650; }
+
+    .progress-bar {
+      height: 6px;
+      background: var(--paper);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-bar > span {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+      border-radius: 999px;
+    }
+
+    /* ========== Stage 3: AI判断 ========== */
+    .s3-layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .seg-card {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .seg-card:hover { border-color: var(--accent); }
+    .seg-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-weak);
+    }
+    .seg-card.need-human {
+      border-left: 3px solid var(--warn);
+    }
+    .seg-card .title { font-weight: 600; margin-bottom: 4px; }
+    .seg-card .scores {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .video-stage {
+      background: #111;
+      border-radius: var(--radius);
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+    .video-stage .play {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.7);
+      display: grid;
+      place-items: center;
+      background: rgba(0,0,0,0.35);
+      font-size: 22px;
+    }
+    .video-stage .cap {
+      position: absolute;
+      left: 12px; right: 12px; bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: rgba(255,255,255,0.85);
+    }
+    .video-stage .sub-mock {
+      position: absolute;
+      left: 10%; right: 10%;
+      bottom: 28%;
+      text-align: center;
+      font-size: 18px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+      font-weight: 600;
+    }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 12px;
+    }
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .score-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+    }
+    .score-box .n { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .score-box .l { font-size: 12px; color: var(--muted); }
+
+    .action-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 4px;
+    }
+
+    /* ========== Stage 4: 样片 ========== */
+    .s4-layout {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 12px;
+      align-items: start;
+    }
+    .sample-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .sample-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .sample-card .thumb {
+      aspect-ratio: 16/9;
+      background: linear-gradient(135deg, #1f2937, #0f172a);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+    .sample-card .thumb .ph { opacity: 0.7; font-size: 13px; }
+    .sample-card .body { padding: 12px; }
+    .sample-card .body .t { font-weight: 600; margin-bottom: 6px; }
+    .sample-card .prog { margin-top: 8px; }
+    .sample-card.failed .thumb { background: linear-gradient(135deg, #4c0519, #1f0410); }
+
+    /* ========== Stage 5: 字幕精修 + 上传 ========== */
+    .s5-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .s5-work {
+      display: grid;
+      grid-template-columns: 1.35fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .subtitle-row {
+      display: grid;
+      grid-template-columns: 36px 72px 1fr;
+      gap: 8px;
+      align-items: start;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+    }
+    .subtitle-row:hover { background: #fafbfc; }
+    .subtitle-row.active {
+      background: var(--accent-weak);
+      border-radius: 6px;
+    }
+    .subtitle-row .idx {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      padding-top: 6px;
+    }
+    .subtitle-row .time {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      padding-top: 6px;
+    }
+    .subtitle-row textarea {
+      width: 100%;
+      min-height: 36px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--ink);
+      background: var(--surface);
+    }
+    .subtitle-row textarea:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 0;
+      border-color: var(--accent);
+    }
+
+    .upload-gate {
+      margin-top: 12px;
+      border: 1px solid #91caff;
+      background: linear-gradient(180deg, var(--accent-weak), #fff);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+    .upload-gate h3 { margin: 0 0 6px; font-size: 15px; }
+    .upload-gate p { margin: 0 0 12px; color: var(--ink-2); font-size: 13px; }
+    .upload-actions {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr;
+      gap: 8px;
+    }
+
+    .rail-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .rail-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-weak);
+    }
+    .rail-item .t { font-weight: 600; font-size: 13px; }
+    .rail-item .m { margin-top: 4px; font-size: 12px; color: var(--muted); }
+
+    .note {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    @media (max-width: 1100px) {
+      .s1-layout, .s2-layout, .s3-layout, .s4-layout, .s5-layout, .s5-work, .verdict {
+        grid-template-columns: 1fr;
+      }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .burst-list, .sample-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .stage-tab, .btn, .queue-item, .seg-card, .rail-item {
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-row">
+        <div class="brand">
+          <strong>切片流水线</strong>
+          <span>阶段看板预览 · 非生产 UI</span>
+        </div>
+        <div class="top-actions">
+          <button class="btn" type="button" id="btn-refresh">刷新</button>
+          <button class="btn" type="button">唤醒 Worker</button>
+          <button class="btn btn-primary" type="button" id="btn-start">启动切片</button>
+        </div>
+        <div class="worker-pill" title="Windows 重任务节点">
+          <span class="dot"></span>Windows Worker · 空闲 · 待处理 2
+        </div>
+      </div>
+      <nav class="stage-nav" id="stage-nav" role="tablist" aria-label="流水线阶段"></nav>
+      <div class="stage-hint" id="stage-hint"></div>
+    </header>
+    <main class="stage-root" id="stage-root" role="tabpanel"></main>
+  </div>
+
+  <script>
+    const stages = [
+      {
+        id: "recordings",
+        step: "01",
+        label: "录播",
+        count: 12,
+        hint: "全量源场次库存：查看状态、启动切片、进入整场生命周期。不展示已进入后续阶段的单条切片细节。"
+      },
+      {
+        id: "burst",
+        step: "02",
+        label: "筛选爆点",
+        count: 3,
+        hint: "弹幕密度召回阶段：大图看爆点与候选窗，跟踪密度扫描进度。人工补标/失败可从这里进入工作台，但不阻塞自动 keep。"
+      },
+      {
+        id: "judge",
+        step: "03",
+        label: "AI判断",
+        count: 7,
+        hint: "MiMo 判断结果与需人工候选：自动 keep 会流向样片；review / 判断失败留在本板并标「需人工」。"
+      },
+      {
+        id: "sample",
+        step: "04",
+        label: "样片",
+        count: 2,
+        hint: "成片生产中：finalize / 烧录进度与失败恢复。成片一旦可预览，自动进入「字幕精修」。"
+      },
+      {
+        id: "subtitle",
+        step: "05",
+        label: "字幕精修",
+        count: 4,
+        hint: "末板主工作区：预览成片、精修字幕，最后由你决定是否上传。处理链路不会在中间停下来等确认。"
+      }
+    ];
+
+    const recordings = [
+      {
+        id: "t1",
+        room: "虚拟主播·阿铃",
+        title: "阿铃 · 2026-03-12 晚场",
+        date: "2026-03-12 20:01",
+        status: "done",
+        statusText: "流水线完成",
+        segments: { keep: 3, review: 1, drop: 2, judge_failed: 0 },
+        size: "4.2 GB",
+        selected: true
+      },
+      {
+        id: "t2",
+        room: "游戏主播·老周",
+        title: "老周 · 2026-03-12 排位",
+        date: "2026-03-12 19:10",
+        status: "processing",
+        statusText: "处理中 · AI判断",
+        segments: { keep: 1, review: 2, drop: 0, judge_failed: 1 },
+        size: "6.8 GB"
+      },
+      {
+        id: "t3",
+        room: "虚拟主播·阿铃",
+        title: "阿铃 · 2026-03-11 歌回",
+        date: "2026-03-11 21:00",
+        status: "todo",
+        statusText: "待处理",
+        segments: { keep: 0, review: 0, drop: 0, judge_failed: 0 },
+        size: "3.1 GB"
+      },
+      {
+        id: "t4",
+        room: "聊天主播·小满",
+        title: "小满 · 2026-03-10 杂谈",
+        date: "2026-03-10 22:15",
+        status: "failed",
+        statusText: "失败 · MiMo 超时",
+        segments: { keep: 0, review: 0, drop: 0, judge_failed: 2 },
+        size: "2.4 GB"
+      }
+    ];
+
+    const burstQueue = [
+      { id: "b1", title: "老周 · 2026-03-12 排位", state: "扫描中", progress: 62, meta: ["密度候选", "窗口 1/4"] },
+      { id: "b2", title: "阿铃 · 2026-03-11 歌回", state: "排队", progress: 0, meta: ["等待 Worker"] },
+      { id: "b3", title: "小满 · 2026-03-10 杂谈", state: "需人工", progress: 35, meta: ["上次失败", "可重试"] }
+    ];
+
+    const judgeItems = [
+      {
+        id: "j1",
+        title: "连麦互怼爆出名场面",
+        range: "01:12:04 - 01:14:20",
+        judge: "keep",
+        judgeText: "AI 建议保留",
+        quality: 0.86,
+        complete: 0.91,
+        conf: 0.88,
+        danmaku: 412,
+        needHuman: false,
+        note: "自动 keep · 成片生成中"
+      },
+      {
+        id: "j2",
+        title: "读弹幕读到破防",
+        range: "00:41:10 - 00:42:55",
+        judge: "review",
+        judgeText: "待人工复核",
+        quality: 0.62,
+        complete: 0.7,
+        conf: 0.55,
+        danmaku: 188,
+        needHuman: true,
+        note: "边界贴候选窗，建议看片后调区间或丢弃"
+      },
+      {
+        id: "j3",
+        title: "高能整活 · 键盘侠反杀",
+        range: "01:55:02 - 01:57:40",
+        judge: "judge_failed",
+        judgeText: "判断失败",
+        quality: null,
+        complete: null,
+        conf: null,
+        danmaku: 520,
+        needHuman: true,
+        note: "MiMo 输出非法 JSON，可重新分析"
+      },
+      {
+        id: "j4",
+        title: "日常闲聊过渡",
+        range: "00:05:00 - 00:06:10",
+        judge: "drop",
+        judgeText: "AI 建议丢弃",
+        quality: 0.31,
+        complete: 0.4,
+        conf: 0.72,
+        danmaku: 40,
+        needHuman: false,
+        note: "仅展示，不进入后续阶段"
+      }
+    ];
+
+    const samples = [
+      {
+        id: "sp1",
+        title: "连麦互怼爆出名场面",
+        state: "rendering",
+        stateText: "烧录字幕中",
+        progress: 74,
+        meta: "finalize · asr 完成 · ffmpeg 中",
+        failed: false
+      },
+      {
+        id: "sp2",
+        title: "开场高能 · 三分钟带飞",
+        state: "failed",
+        stateText: "渲染失败",
+        progress: 40,
+        meta: "ffmpeg 退出码 1 · 可重试",
+        failed: true
+      }
+    ];
+
+    const subtitleItems = [
+      {
+        id: "u1",
+        title: "昨夜高能集锦",
+        room: "阿铃",
+        status: "awaiting_publish",
+        statusText: "待你决定",
+        subtitles: [
+          { start: "00:00:02", end: "00:00:05", text: "来了来了，今天必须整点活。" },
+          { start: "00:00:06", end: "00:00:09", text: "弹幕说这波要寄，我不信。" },
+          { start: "00:00:10", end: "00:00:14", text: "等下，这个键位不对劲……" },
+          { start: "00:00:15", end: "00:00:19", text: "啊？还能这样反杀的吗？" },
+          { start: "00:00:20", end: "00:00:24", text: "直播间直接炸了，谢谢老板。" }
+        ],
+        active: true
+      },
+      {
+        id: "u2",
+        title: "键盘侠反杀现场",
+        room: "老周",
+        status: "subtitle_dirty",
+        statusText: "字幕待重烧",
+        subtitles: [],
+        active: false
+      },
+      {
+        id: "u3",
+        title: "读弹幕破防瞬间",
+        room: "阿铃",
+        status: "awaiting_publish",
+        statusText: "待你决定",
+        subtitles: [],
+        active: false
+      },
+      {
+        id: "u4",
+        title: "歌回安可片段",
+        room: "阿铃",
+        status: "staged",
+        statusText: "已允许发布",
+        subtitles: [],
+        active: false
+      }
+    ];
+
+    let currentStage = "recordings";
+    let selectedRecording = "t1";
+    let selectedBurst = "b1";
+    let selectedJudge = "j2";
+    let selectedSample = "sp1";
+    let selectedSubtitle = "u1";
+    let recordingFilter = "all";
+
+    const root = document.getElementById("stage-root");
+    const nav = document.getElementById("stage-nav");
+    const hint = document.getElementById("stage-hint");
+
+    function tag(text, kind) {
+      return `<span class="tag tag-${kind}">${text}</span>`;
+    }
+
+    function statusTag(status, text) {
+      const map = {
+        done: "green",
+        processing: "blue",
+        todo: "gray",
+        failed: "red",
+        keep: "green",
+        review: "gold",
+        judge_failed: "red",
+        drop: "gray",
+        awaiting_publish: "blue",
+        subtitle_dirty: "gold",
+        staged: "green",
+        rendering: "blue"
+      };
+      return tag(text, map[status] || "gray");
+    }
+
+    function renderNav() {
+      nav.innerHTML = stages.map((s, i) => {
+        const arrow = i < stages.length - 1 ? `<span class="arrow">→</span>` : "";
+        return `
+          <button class="stage-tab" role="tab" type="button"
+            id="tab-${s.id}"
+            aria-selected="${s.id === currentStage}"
+            data-stage="${s.id}">
+            <span class="label"><span class="step">${s.step}</span>${s.label}${arrow}</span>
+            <span class="count">${s.count} 项</span>
+          </button>`;
+      }).join("");
+      nav.querySelectorAll(".stage-tab").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          currentStage = btn.dataset.stage;
+          render();
+        });
+      });
+      const s = stages.find((x) => x.id === currentStage);
+      hint.textContent = s ? s.hint : "";
+    }
+
+    function renderRecordings() {
+      const filters = [
+        { id: "all", label: "全部场次", n: 12 },
+        { id: "todo", label: "待处理", n: 3 },
+        { id: "processing", label: "处理中", n: 2 },
+        { id: "failed", label: "失败", n: 1 },
+        { id: "done", label: "已完成", n: 6 }
+      ];
+      const rows = recordings.filter((r) => recordingFilter === "all" || r.status === recordingFilter);
+      const sel = recordings.find((r) => r.id === selectedRecording) || recordings[0];
+
+      return `
+        <div class="metrics">
+          <div class="metric"><div class="k">录播场次</div><div class="v">12</div><div class="s">Videos 目录已索引</div></div>
+          <div class="metric"><div class="k">待启动</div><div class="v">3</div><div class="s">尚未进入爆点召回</div></div>
+          <div class="metric"><div class="k">处理中</div><div class="v">2</div><div class="s">Worker 正在跑</div></div>
+          <div class="metric"><div class="k">待整场复核</div><div class="v">1</div><div class="s">源录播回收前需确认</div></div>
+        </div>
+        <div class="s1-layout">
+          <aside class="card">
+            <div class="card-h">筛选</div>
+            <div class="card-b filter-list">
+              ${filters.map((f) => `
+                <button type="button" class="filter-item ${f.id === recordingFilter ? "active" : ""}" data-filter="${f.id}">
+                  <span>${f.label}</span><span class="n">${f.n}</span>
+                </button>`).join("")}
+            </div>
+          </aside>
+          <section class="card">
+            <div class="card-h">源录播列表<span class="meta">按时间倒序 · 点击行查看详情</span></div>
+            <div class="card-b" style="padding:0; overflow:auto;">
+              <table class="rec-table">
+                <thead>
+                  <tr>
+                    <th>场次</th><th>状态</th><th>片段摘要</th><th>体积</th><th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows.map((r) => `
+                    <tr class="${r.id === selectedRecording ? "selected" : ""}" data-rec="${r.id}">
+                      <td>
+                        <div class="rec-title">${r.title}</div>
+                        <div class="rec-sub">${r.room} · ${r.date}</div>
+                      </td>
+                      <td>${statusTag(r.status, r.statusText)}</td>
+                      <td class="mono">
+                        keep ${r.segments.keep} · review ${r.segments.review}<br/>
+                        drop ${r.segments.drop} · failed ${r.segments.judge_failed}
+                      </td>
+                      <td class="mono">${r.size}</td>
+                      <td>
+                        <div class="row">
+                          <button class="btn" type="button" data-open="${r.id}">打开</button>
+                          ${r.status === "todo" || r.status === "failed"
+                            ? `<button class="btn btn-primary" type="button">启动切片</button>`
+                            : `<button class="btn" type="button">生命周期</button>`}
+                        </div>
+                      </td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <aside class="card side-panel">
+            <div class="card-h">场次详情</div>
+            <div class="card-b stack">
+              <div>
+                <strong>${sel.title}</strong>
+                <div class="muted" style="margin-top:4px;">${sel.room}</div>
+              </div>
+              <div class="row">${statusTag(sel.status, sel.statusText)}</div>
+              <dl class="kv">
+                <dt>录制时间</dt><dd>${sel.date}</dd>
+                <dt>源文件</dt><dd class="mono">Videos/…/${sel.id}.mp4</dd>
+                <dt>体积</dt><dd>${sel.size}</dd>
+                <dt>源回收</dt><dd>${sel.status === "done" ? "整场复核后可回收" : "处理中保留"}</dd>
+              </dl>
+              <div class="stack">
+                <button class="btn btn-primary btn-block" type="button">启动 / 继续处理</button>
+                <button class="btn btn-block" type="button">打开整场工作台</button>
+                <button class="btn btn-block" type="button">查看失败收件箱</button>
+              </div>
+              <p class="note">本板是库存入口。切片进入爆点/AI 后，细节到对应阶段板处理。</p>
+            </div>
+          </aside>
+        </div>`;
+    }
+
+    function densitySvg() {
+      const points = [0.12,0.15,0.18,0.22,0.2,0.25,0.4,0.72,0.88,0.7,0.45,0.3,0.28,0.35,0.55,0.92,0.85,0.5,0.32,0.22,0.18,0.2,0.24,0.3,0.28,0.22,0.4,0.65,0.8,0.55,0.3,0.2];
+      const w = 1000, h = 220, pad = 8;
+      const step = (w - pad * 2) / (points.length - 1);
+      const coords = points.map((p, i) => {
+        const x = pad + i * step;
+        const y = h - pad - p * (h - pad * 2);
+        return [x, y];
+      });
+      let d = `M ${coords[0][0]} ${h - pad}`;
+      coords.forEach(([x, y]) => { d += ` L ${x} ${y}`; });
+      d += ` L ${coords[coords.length - 1][0]} ${h - pad} Z`;
+      let line = `M ${coords[0][0]} ${coords[0][1]}`;
+      coords.forEach(([x, y], i) => { if (i) line += ` L ${x} ${y}`; });
+
+      const windows = [
+        { x1: 0.28, x2: 0.38, color: "#1677ff", label: "候选 A" },
+        { x1: 0.48, x2: 0.58, color: "#d48806", label: "候选 B" },
+        { x1: 0.72, x2: 0.88, color: "#389e0d", label: "候选 C · 当前" }
+      ];
+      const wins = windows.map((win) => {
+        const x = pad + win.x1 * (w - pad * 2);
+        const width = (win.x2 - win.x1) * (w - pad * 2);
+        return `
+          <rect x="${x}" y="${pad}" width="${width}" height="${h - pad * 2}"
+            fill="${win.color}" fill-opacity="0.08" stroke="${win.color}" stroke-opacity="0.45" stroke-dasharray="4 3"/>
+          <text x="${x + 6}" y="${pad + 16}" fill="${win.color}" font-size="12" font-family="Segoe UI, sans-serif">${win.label}</text>`;
+      }).join("");
+
+      return `
+        <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="弹幕密度与候选窗">
+          <path d="${d}" fill="#1677ff" fill-opacity="0.12"/>
+          <path d="${line}" fill="none" stroke="#1677ff" stroke-width="2"/>
+          ${wins}
+        </svg>`;
+    }
+
+    function renderBurst() {
+      const sel = burstQueue.find((b) => b.id === selectedBurst) || burstQueue[0];
+      return `
+        <div class="metrics">
+          <div class="metric"><div class="k">本阶段场次</div><div class="v">3</div><div class="s">扫描中 / 排队 / 需人工</div></div>
+          <div class="metric"><div class="k">候选窗</div><div class="v">6</div><div class="s">密度突增召回</div></div>
+          <div class="metric"><div class="k">当前进度</div><div class="v">${sel.progress}%</div><div class="s">${sel.state}</div></div>
+          <div class="metric"><div class="k">信号策略</div><div class="v" style="font-size:16px;">弹幕密度</div><div class="s">与生产链路一致</div></div>
+        </div>
+        <div class="s2-layout">
+          <aside class="card">
+            <div class="card-h">本板队列<span class="meta">场次粒度</span></div>
+            <div class="card-b">
+              ${burstQueue.map((b) => `
+                <button type="button" class="queue-item ${b.id === selectedBurst ? "active" : ""}" data-burst="${b.id}">
+                  <div class="t">${b.title}</div>
+                  <div class="m">
+                    ${statusTag(b.state === "扫描中" ? "processing" : b.state === "需人工" ? "review" : "todo", b.state)}
+                    <span>${b.progress}%</span>
+                  </div>
+                  <div class="m">${b.meta.map((m) => `<span>${m}</span>`).join("")}</div>
+                </button>`).join("")}
+              <p class="note">失败/补标从这里进工作台；自动任务继续跑不等人。</p>
+            </div>
+          </aside>
+          <section class="card">
+            <div class="card-h">
+              密度与爆点窗口
+              <span class="meta">${sel.title} · ${sel.state}</span>
+            </div>
+            <div class="density-hero">
+              ${densitySvg()}
+              <div class="density-legend">
+                <span><i style="background:#1677ff;opacity:.35"></i>弹幕密度</span>
+                <span><i style="background:#1677ff;opacity:.2"></i>候选窗 A</span>
+                <span><i style="background:#d48806;opacity:.2"></i>候选窗 B</span>
+                <span><i style="background:#389e0d;opacity:.2"></i>候选窗 C</span>
+              </div>
+            </div>
+            <div class="card-b stack">
+              <div class="row" style="justify-content:space-between;">
+                <strong>召回候选</strong>
+                <span class="muted mono">Worker 阶段：density → candidate</span>
+              </div>
+              <div class="burst-list">
+                <div class="burst-card">
+                  <div class="row" style="justify-content:space-between;">
+                    <strong>候选 A</strong>${tag("待 AI", "gray")}
+                  </div>
+                  <div class="range">00:41:08 — 00:43:02</div>
+                  <div class="score">0.72</div>
+                  <div class="muted">相对密度分</div>
+                </div>
+                <div class="burst-card">
+                  <div class="row" style="justify-content:space-between;">
+                    <strong>候选 B</strong>${tag("待 AI", "gray")}
+                  </div>
+                  <div class="range">01:11:50 — 01:14:40</div>
+                  <div class="score">0.81</div>
+                  <div class="muted">相对密度分</div>
+                </div>
+                <div class="burst-card">
+                  <div class="row" style="justify-content:space-between;">
+                    <strong>候选 C</strong>${tag("扫描中", "blue")}
+                  </div>
+                  <div class="range">01:54:40 — 01:58:10</div>
+                  <div class="score">0.94</div>
+                  <div class="muted">相对密度分</div>
+                </div>
+                <div class="burst-card">
+                  <div class="row" style="justify-content:space-between;">
+                    <strong>人工补标</strong>${tag("可选", "purple")}
+                  </div>
+                  <div class="range">在工作台用 I/O 标区间</div>
+                  <div class="score" style="font-size:14px;font-weight:600;">漏切 / 信号弱</div>
+                  <div class="muted">不进入自动闸门，但可生成候选</div>
+                </div>
+              </div>
+              <div>
+                <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+                  <span>密度扫描进度</span>
+                  <span class="mono">${sel.progress}%</span>
+                </div>
+                <div class="progress-bar"><span style="width:${sel.progress}%"></span></div>
+              </div>
+              <div class="action-bar">
+                <button class="btn" type="button">打开源录像工作台</button>
+                <button class="btn" type="button">重试本场扫描</button>
+                <button class="btn" type="button" disabled>送入 AI（自动）</button>
+              </div>
+              <p class="note">「送入 AI」默认禁用：生产里密度完成后自动调用 MiMo，无需在本板点确认。</p>
+            </div>
+          </section>
+        </div>`;
+    }
+
+    function renderJudge() {
+      const sel = judgeItems.find((j) => j.id === selectedJudge) || judgeItems[0];
+      return `
+        <div class="metrics">
+          <div class="metric"><div class="k">本板候选</div><div class="v">7</div><div class="s">含自动 keep 与需人工</div></div>
+          <div class="metric"><div class="k">需人工</div><div class="v">3</div><div class="s">review / 失败 / 补标</div></div>
+          <div class="metric"><div class="k">自动 keep</div><div class="v">2</div><div class="s">已流向样片/字幕</div></div>
+          <div class="metric"><div class="k">已丢弃</div><div class="v">2</div><div class="s">仅归档展示</div></div>
+        </div>
+        <div class="s3-layout">
+          <aside class="card">
+            <div class="card-h">判断结果<span class="meta">片段粒度</span></div>
+            <div class="card-b">
+              ${judgeItems.map((j) => `
+                <button type="button" class="seg-card ${j.id === selectedJudge ? "active" : ""} ${j.needHuman ? "need-human" : ""}" data-judge="${j.id}">
+                  <div class="row" style="justify-content:space-between;">
+                    <div class="title" style="margin:0;">${j.title}</div>
+                    ${statusTag(j.judge, j.judgeText)}
+                  </div>
+                  <div class="muted mono">${j.range}</div>
+                  <div class="scores">
+                    <span>Q ${j.quality ?? "-"}</span>
+                    <span>C ${j.complete ?? "-"}</span>
+                    <span>conf ${j.conf ?? "-"}</span>
+                    <span>弹幕 ${j.danmaku}</span>
+                  </div>
+                  ${j.needHuman ? `<div class="muted" style="margin-top:6px;">需人工</div>` : ""}
+                </button>`).join("")}
+              <p class="note">自动 keep 不要求你在本板点通过；它们会出现在样片/字幕板。</p>
+            </div>
+          </aside>
+          <section class="stack">
+            <div class="card">
+              <div class="card-h">
+                候选预览
+                <span class="meta">${sel.range}</span>
+              </div>
+              <div class="card-b stack">
+                <div class="video-stage">
+                  <div class="play">▶</div>
+                  <div class="sub-mock">${sel.needHuman ? "（人工复核片段）" : "（自动 keep 预览）"}</div>
+                  <div class="cap"><span>源录像 · ${sel.range}</span><span>${sel.title}</span></div>
+                </div>
+                <div class="verdict">
+                  <div class="stack">
+                    <div class="row">
+                      <strong>AI 结论</strong>
+                      ${statusTag(sel.judge, sel.judgeText)}
+                      ${sel.needHuman ? tag("需人工", "gold") : tag("自动流转", "green")}
+                    </div>
+                    <p class="muted" style="margin:0;">${sel.note}</p>
+                    <div class="score-grid">
+                      <div class="score-box"><div class="n">${sel.quality ?? "—"}</div><div class="l">质量分</div></div>
+                      <div class="score-box"><div class="n">${sel.complete ?? "—"}</div><div class="l">完整度</div></div>
+                      <div class="score-box"><div class="n">${sel.conf ?? "—"}</div><div class="l">置信度</div></div>
+                    </div>
+                  </div>
+                  <div class="stack">
+                    <div class="card" style="box-shadow:none;">
+                      <div class="card-h">人工动作</div>
+                      <div class="card-b stack">
+                        <div class="row">
+                          <label>入点 <input class="mono" value="41.0" style="width:80px;padding:6px;border:1px solid var(--line);border-radius:6px;"></label>
+                          <label>出点 <input class="mono" value="175.5" style="width:80px;padding:6px;border:1px solid var(--line);border-radius:6px;"></label>
+                        </div>
+                        <div class="action-bar">
+                          <button class="btn" type="button">保存边界</button>
+                          <button class="btn btn-danger" type="button">丢弃</button>
+                          <button class="btn" type="button">重新分析</button>
+                          <button class="btn btn-primary" type="button">送交生成样片</button>
+                        </div>
+                        <p class="note">自动 keep 不需要「送交」。review/失败才需要人工放行或丢弃。</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>`;
+    }
+
+    function renderSample() {
+      return `
+        <div class="metrics">
+          <div class="metric"><div class="k">生产中</div><div class="v">1</div><div class="s">字幕烧录 / 渲染</div></div>
+          <div class="metric"><div class="k">失败待修</div><div class="v">1</div><div class="s">保留在本板</div></div>
+          <div class="metric"><div class="k">今日已流入字幕板</div><div class="v">3</div><div class="s">可预览即自动进入</div></div>
+          <div class="metric"><div class="k">平均成片时长</div><div class="v" style="font-size:20px;">2m 18s</div><div class="s">最近 24h</div></div>
+        </div>
+        <div class="s4-layout">
+          <section class="card">
+            <div class="card-h">样片生产板<span class="meta">可预览后自动进入字幕精修</span></div>
+            <div class="card-b">
+              <div class="sample-grid">
+                ${samples.map((s) => `
+                  <article class="sample-card ${s.failed ? "failed" : ""}">
+                    <div class="thumb">
+                      <div class="ph">${s.failed ? "渲染失败" : "成片生成中…"}</div>
+                    </div>
+                    <div class="body">
+                      <div class="row" style="justify-content:space-between;">
+                        <div class="t">${s.title}</div>
+                        ${statusTag(s.state, s.stateText)}
+                      </div>
+                      <div class="muted mono">${s.meta}</div>
+                      <div class="prog">
+                        <div class="row" style="justify-content:space-between;margin-bottom:4px;">
+                          <span class="muted">阶段进度</span>
+                          <span class="mono">${s.progress}%</span>
+                        </div>
+                        <div class="progress-bar"><span style="width:${s.progress}%;background:${s.failed ? "var(--drop)" : "var(--accent)"}"></span></div>
+                      </div>
+                      <div class="action-bar" style="margin-top:10px;">
+                        ${s.failed
+                          ? `<button class="btn btn-primary" type="button">重试成片</button><button class="btn" type="button">失败详情</button>`
+                          : `<button class="btn" type="button" disabled>等待完成</button>`}
+                      </div>
+                    </div>
+                  </article>`).join("")}
+              </div>
+              ${samples.length ? "" : `<div class="empty">当前没有样片生产任务。自动 keep 完成后会短暂出现在这里。</div>`}
+            </div>
+          </section>
+          <aside class="card">
+            <div class="card-h">本板规则</div>
+            <div class="card-b stack">
+              <p style="margin:0;">样片板是<strong>生产进度板</strong>，不是长期库存。</p>
+              <ul class="muted" style="margin:0;padding-left:18px;">
+                <li>finalize / 烧录进行中 → 停留本板</li>
+                <li>失败 → 留在本板，可重试</li>
+                <li>成片可预览 → 自动进入字幕精修</li>
+              </ul>
+              <p class="note">若你希望样片板也长期展示「已生成可观看」，请在反馈里说明，可改成双板可见。</p>
+              <button class="btn btn-block" type="button">打开失败工作台</button>
+            </div>
+          </aside>
+        </div>`;
+    }
+
+    function renderSubtitle() {
+      const sel = subtitleItems.find((s) => s.id === selectedSubtitle) || subtitleItems[0];
+      const subs = sel.subtitles.length ? sel.subtitles : subtitleItems[0].subtitles;
+      return `
+        <div class="metrics">
+          <div class="metric"><div class="k">待你决定</div><div class="v">3</div><div class="s">可预览成片</div></div>
+          <div class="metric"><div class="k">字幕待重烧</div><div class="v">1</div><div class="s">修改后需 reburn</div></div>
+          <div class="metric"><div class="k">已允许发布</div><div class="v">1</div><div class="s">staged / 上传中</div></div>
+          <div class="metric"><div class="k">自动上传</div><div class="v" style="font-size:18px;">关闭</div><div class="s">与现网默认一致</div></div>
+        </div>
+        <div class="s5-layout">
+          <aside class="card">
+            <div class="card-h">末板队列<span class="meta">可预览成片</span></div>
+            <div class="card-b">
+              ${subtitleItems.map((item) => `
+                <button type="button" class="rail-item ${item.id === selectedSubtitle ? "active" : ""}" data-sub="${item.id}">
+                  <div class="row" style="justify-content:space-between;">
+                    <div class="t">${item.title}</div>
+                    ${statusTag(item.status, item.statusText)}
+                  </div>
+                  <div class="m">${item.room}</div>
+                </button>`).join("")}
+              <p class="note">这是你的主工作队列：精修字幕 → 决定上传。</p>
+            </div>
+          </aside>
+          <section class="s5-work">
+            <div class="card">
+              <div class="card-h">成片预览<span class="meta">${sel.title}</span></div>
+              <div class="card-b stack">
+                <div class="video-stage">
+                  <div class="play">▶</div>
+                  <div class="sub-mock">${subs[0]?.text || "示例字幕"}</div>
+                  <div class="cap"><span>最终成片 · 00:00:00 起</span><span>版本 1</span></div>
+                </div>
+                <div class="row">
+                  <button class="btn" type="button">源录像对照</button>
+                  <button class="btn" type="button">最终成片</button>
+                  <span class="muted mono">媒体可预览 · 已进入末板</span>
+                </div>
+                <dl class="kv" style="display:grid;grid-template-columns:88px 1fr;gap:6px 8px;">
+                  <dt class="muted">上传状态</dt><dd style="margin:0;">${sel.statusText}</dd>
+                  <dt class="muted">标题</dt><dd style="margin:0;">${sel.title}</dd>
+                  <dt class="muted">字幕</dt><dd style="margin:0;">${sel.subtitles.length ? sel.subtitles.length + " 行可编辑" : "当前成片字幕（示例展示）"}</dd>
+                </dl>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <div class="card-h">
+                  字幕精修
+                  <span class="meta">与预览同屏，不再左右拆散</span>
+                </div>
+                <div class="card-b" style="padding-top:4px;">
+                  ${subs.map((line, i) => `
+                    <div class="subtitle-row ${i === 0 ? "active" : ""}">
+                      <div class="idx">${i + 1}</div>
+                      <div class="time">${line.start}<br/>${line.end}</div>
+                      <textarea rows="2">${line.text}</textarea>
+                    </div>`).join("")}
+                  <div class="action-bar" style="margin-top:10px;">
+                    <button class="btn" type="button">新增字幕行</button>
+                    <button class="btn" type="button">保存字幕</button>
+                    <button class="btn" type="button">重新烧录</button>
+                  </div>
+                  <p class="note">保存字幕 ≠ 上传。重新烧录后仍在本板，等你决定。</p>
+                </div>
+              </div>
+              <div class="upload-gate">
+                <h3>是否上传？</h3>
+                <p>确认后将激活上传队列（staged → CDN/B站）。暂不上传会保留成片在本板，可稍后再决定。</p>
+                <div class="upload-actions">
+                  <button class="btn btn-lg" type="button">暂不上传</button>
+                  <button class="btn btn-primary btn-lg" type="button">确认上传</button>
+                </div>
+                <p class="note">生产语义对应现有「允许发布」；不会在 Dashboard 里直接执行重处理。</p>
+              </div>
+            </div>
+          </section>
+        </div>`;
+    }
+
+    function renderStageBody() {
+      switch (currentStage) {
+        case "recordings": return renderRecordings();
+        case "burst": return renderBurst();
+        case "judge": return renderJudge();
+        case "sample": return renderSample();
+        case "subtitle": return renderSubtitle();
+        default: return renderRecordings();
+      }
+    }
+
+    function bindStageEvents() {
+      root.querySelectorAll("[data-filter]").forEach((el) => {
+        el.addEventListener("click", () => { recordingFilter = el.dataset.filter; render(); });
+      });
+      root.querySelectorAll("[data-rec]").forEach((el) => {
+        el.addEventListener("click", (e) => {
+          if (e.target.closest("button")) return;
+          selectedRecording = el.dataset.rec; render();
+        });
+      });
+      root.querySelectorAll("[data-open]").forEach((el) => {
+        el.addEventListener("click", () => { selectedRecording = el.dataset.open; render(); });
+      });
+      root.querySelectorAll("[data-burst]").forEach((el) => {
+        el.addEventListener("click", () => { selectedBurst = el.dataset.burst; render(); });
+      });
+      root.querySelectorAll("[data-judge]").forEach((el) => {
+        el.addEventListener("click", () => { selectedJudge = el.dataset.judge; render(); });
+      });
+      root.querySelectorAll("[data-sub]").forEach((el) => {
+        el.addEventListener("click", () => { selectedSubtitle = el.dataset.sub; render(); });
+      });
+    }
+
+    function render() {
+      renderNav();
+      root.innerHTML = renderStageBody();
+      root.setAttribute("aria-labelledby", `tab-${currentStage}`);
+      bindStageEvents();
+    }
+
+    document.getElementById("btn-refresh").addEventListener("click", render);
+    document.getElementById("btn-start").addEventListener("click", () => {
+      currentStage = "burst";
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
