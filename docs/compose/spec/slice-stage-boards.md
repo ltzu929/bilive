@@ -3,7 +3,7 @@ feature: slice-stage-boards
 status: delivered
 updated: 2026-09-18
 branch: main
-commits: uncommitted-on-main-8ce9960
+commits: 8ce9960..9717500
 ---
 
 # 切片阶段看板界面
