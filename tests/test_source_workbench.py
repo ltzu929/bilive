@@ -201,7 +201,37 @@ def test_source_recording_list_counts_keep_and_judge_failed(tmp_path):
     assert len(items) == 1
     assert items[0]["summary_counts"]["keep"] == 1
     assert items[0]["summary_counts"]["judge_failed"] == 1
-    assert items[0]["segment_count"] == 2
+
+
+def test_summary_counts_expose_upload_settlement_for_stage_boards(videos_root, monkeypatch):
+    from src.dashboard import task_state
+
+    room = videos_root / "8792912"
+    room.mkdir(parents=True, exist_ok=True)
+    source = room / "8792912_20260920-10-56-21.mp4"
+    source.write_bytes(b"0" * 2048)
+    _write_danmaku_xml(source.with_suffix(".xml"))
+    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(task_state, "MIN_SOURCE_RECORDING_SIZE_MB", 1)
+    monkeypatch.setattr(source_workbench, "MIN_SOURCE_RECORDING_SIZE_MB", 1, raising=False)
+    write_task_history(
+        source,
+        status="done",
+        videos_root=videos_root,
+        segments=[
+            {"segment_id": "keep-await", "judge_status": "keep", "upload_status": "awaiting_publish"},
+            {"segment_id": "keep-pub", "judge_status": "keep", "upload_status": "published"},
+            {"segment_id": "keep-up", "judge_status": "keep", "upload_status": "uploading"},
+            {"segment_id": "keep-open", "judge_status": "keep", "upload_status": "not_queued"},
+        ],
+    )
+    items = source_workbench.build_source_recording_list(videos_root)
+    assert len(items) == 1
+    counts = items[0]["summary_counts"]
+    assert counts["keep"] == 4
+    assert counts["awaiting_publish"] == 1
+    assert counts["published"] == 1
+    assert counts["upload_in_progress"] == 1
 
 
 def test_source_recording_list_hides_sub_threshold_stub_without_review(

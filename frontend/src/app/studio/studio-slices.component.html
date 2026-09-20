@@ -59,6 +59,7 @@
       <div class="overview-heading"><strong>{{ progress.phase_label || '切片进度' }}</strong><span>{{ progress.current_slice_percent || 0 }}%</span></div>
       <nz-progress [nzPercent]="progress.current_slice_percent || 0" [nzStatus]="progress.status === 'error' ? 'exception' : 'active'"></nz-progress>
       <div class="overview-meta"><span>{{ progress.display_title || progress.source_file || '暂无切片任务' }}</span><span>{{ progress.message || '等待 Windows worker' }}</span></div>
+      <div class="muted overview-hint" *ngIf="progressHint">{{ progressHint }}</div>
     </div>
     <div class="overview-card metric-card"><span>录播</span><strong>{{ stageCounts.recordings }}</strong><small>全量场次</small></div>
     <div class="overview-card metric-card"><span>AI 需关注</span><strong>{{ stageCounts.judge }}</strong><small>review / 失败</small></div>
@@ -159,8 +160,8 @@
           <details class="missed-segment-panel" *ngIf="d.trash_status !== 'done'">
             <summary>人工补标漏切</summary>
             <div class="range-fields">
-              <label>入点<input nz-input type="number" min="0" [(ngModel)]="missedStartDraft" name="missedStart"></label>
-              <label>出点<input nz-input type="number" min="0" [(ngModel)]="missedEndDraft" name="missedEnd"></label>
+              <label>入点<input nz-input type="text" [ngModel]="missedStartDraftText" (ngModelChange)="updateMissedFromTimecode('start', $event)" name="missedStart" placeholder="0:00:00"></label>
+              <label>出点<input nz-input type="text" [ngModel]="missedEndDraftText" (ngModelChange)="updateMissedFromTimecode('end', $event)" name="missedEnd" placeholder="0:00:00"></label>
             </div>
             <div class="review-actions">
               <button nz-button nzSize="small" (click)="markMissedBoundary('start')" [disabled]="actionBusy || mediaMode !== 'source'">I 取当前时间</button>
@@ -199,6 +200,7 @@
               <nz-tag [nzColor]="statusColor(item.status)">{{ statusLabel(item.status) }}</nz-tag>
               <span>{{ recordingSummary(item) }}</span>
             </div>
+            <div class="muted queue-message" *ngIf="item.message">{{ item.message }}</div>
           </button>
           <nz-empty *ngIf="!stageRecordings.length" nzNotFoundContent="当前没有处于爆点召回阶段的场次"></nz-empty>
         </nz-spin>
@@ -224,12 +226,12 @@
                 <strong>{{ segment.title || '未命名候选' }}</strong>
                 <nz-tag [nzColor]="statusColor(segment.judge_status)">{{ statusLabel(segment.judge_status) }}</nz-tag>
               </div>
-              <div class="mono">{{ segment.start_seconds | number:'1.0-1' }}s - {{ segment.end_seconds | number:'1.0-1' }}s</div>
+              <div class="mono">{{ formatTimecode(segment.start_seconds) }} - {{ formatTimecode(segment.end_seconds) }}</div>
               <div class="muted">弹幕 {{ segment.danmaku_count ?? '-' }} · {{ segment.manual_origin ? '人工候选' : '密度召回' }}</div>
               <button nz-button nzSize="small" (click)="setStage('judge'); selectSegment(segment)">进入 AI 判断板</button>
             </div>
           </div>
-          <p class="muted">密度完成后 Worker 会自动送 MiMo；本板不做人工闸门。</p>
+          <p class="muted">密度图为 Dashboard 根据弹幕 XML 预览，不代表 Worker 已完成召回。密度完成后 Worker 会自动送 MiMo；本板不做人工闸门。</p>
         </nz-spin>
       </section>
     </div>
@@ -252,11 +254,11 @@
             <strong>{{ segment.title || '未命名候选' }}</strong>
             <nz-tag [nzColor]="statusColor(segment.judge_status)">{{ statusLabel(segment.judge_status) }}</nz-tag>
           </div>
-          <div class="mono">{{ segment.start_seconds | number:'1.0-1' }}s - {{ segment.end_seconds | number:'1.0-1' }}s</div>
+          <div class="mono">{{ formatTimecode(segment.start_seconds) }} - {{ formatTimecode(segment.end_seconds) }}</div>
           <div class="score-row">
-            <span>Q {{ segment.quality_score ?? '-' }}</span>
-            <span>C {{ segment.completeness_score ?? '-' }}</span>
-            <span>conf {{ segment.confidence ?? '-' }}</span>
+            <span>质量分 {{ segment.quality_score ?? '-' }}</span>
+            <span>完整度 {{ segment.completeness_score ?? '-' }}</span>
+            <span>置信度 {{ segment.confidence ?? '-' }}</span>
           </div>
           <span *ngIf="segment.judge_status === 'review' || segment.judge_status === 'judge_failed'" class="need-human-label">需人工</span>
         </button>
@@ -282,8 +284,8 @@
             </div>
             <div class="stack-actions">
               <div class="range-fields">
-                <label>入点<input nz-input type="number" [ngModel]="startDraft" (ngModelChange)="updateRange('start', $event)" name="judgeStart"></label>
-                <label>出点<input nz-input type="number" [ngModel]="endDraft" (ngModelChange)="updateRange('end', $event)" name="judgeEnd"></label>
+                <label>入点<input nz-input type="text" [ngModel]="startDraftText" (ngModelChange)="updateRangeFromTimecode('start', $event)" name="judgeStart" placeholder="0:00:00"></label>
+                <label>出点<input nz-input type="text" [ngModel]="endDraftText" (ngModelChange)="updateRangeFromTimecode('end', $event)" name="judgeEnd" placeholder="0:00:00"></label>
               </div>
               <button nz-button (click)="saveRange()" [disabled]="selectedActionBusy">保存边界</button>
               <button nz-button nzDanger (click)="scheduleDrop()" [disabled]="selectedActionBusy">丢弃</button>
@@ -304,11 +306,11 @@
         <div class="panel-title">样片生产 <span class="panel-meta">可预览后自动进入字幕精修</span></div>
         <div class="sample-grid" *ngIf="stageSegments.length; else noSamples">
           <article class="sample-card" *ngFor="let segment of stageSegments" [class.failed]="!!segment.failure || segment.upload_status === 'failed'">
-            <div class="sample-thumb">{{ segment.failure || segment.upload_status === 'failed' ? '渲染失败' : '成片生成中…' }}</div>
+            <div class="sample-thumb">{{ sampleThumbLabel(segment) }}</div>
             <div class="sample-body">
               <div class="row-between">
                 <strong>{{ segment.title || '未命名成片' }}</strong>
-                <nz-tag [nzColor]="statusColor(segment.action_state?.status || segment.judge_status)">{{ statusLabel(segment.action_state?.status || segment.judge_status) }}</nz-tag>
+                <nz-tag [nzColor]="statusColor(segment.upload_status || segment.action_state?.status || segment.judge_status)">{{ statusLabel(segment.upload_status || segment.action_state?.status || segment.judge_status) }}</nz-tag>
               </div>
               <div class="muted mono">{{ segment.action_state?.action || 'finalize' }} · {{ segmentJobMessage(segment) }}</div>
               <nz-progress [nzPercent]="segmentJobPercent(segment)" [nzStatus]="segment.failure || segment.upload_status === 'failed' ? 'exception' : 'active'"></nz-progress>
@@ -323,7 +325,7 @@
       </section>
       <aside class="panel card-panel side-panel">
         <div class="panel-title">本板规则</div>
-        <p>样片板展示 keep 且尚未具备可预览成片的片段，以及失败待修项。</p>
+        <p>样片板展示 keep 且尚未具备可预览成片的片段，以及失败待修项。已发布/上传中的片段不会留在本板。</p>
         <p class="muted">成片一旦可预览，会自动出现在「字幕精修」板。</p>
         <video #sourceVideo *ngIf="selectedMediaUrl" class="source-video" controls preload="none" [src]="selectedMediaUrl" (loadedmetadata)="positionVideo()"></video>
         <div class="stack-actions" *ngIf="selectedSegment">

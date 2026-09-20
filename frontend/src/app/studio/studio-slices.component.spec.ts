@@ -47,6 +47,33 @@ describe('Studio review behavior', () => {
     expect(component.groupedRecordings[0].items.map(x => x.task_id)).toEqual(['old', 'new', 'unknown']);
   });
 
+  it('formats and parses timecodes for boundary editing', () => {
+    expect(component.formatTimecode(2484)).toBe('0:41:24');
+    expect(component.formatTimecode(0)).toBe('0:00:00');
+    expect(component.parseTimecode('0:41:24')).toBe(2484);
+    expect(component.parseTimecode('41:24')).toBe(2484);
+    expect(component.parseTimecode('2484')).toBe(2484);
+  });
+
+  it('labels sample cards from real upload status instead of always generating', () => {
+    expect(component.sampleThumbLabel({
+      segment_id: 'p', judge_status: 'keep', upload_status: 'published',
+    } as StudioSegment)).toBe('已发布');
+    expect(component.sampleThumbLabel({
+      segment_id: 'r', judge_status: 'keep', action_state: {action: 'finalize', status: 'processing'},
+    } as StudioSegment)).toBe('成片生成中…');
+    expect(component.segmentJobMessage({
+      segment_id: 'p', judge_status: 'keep', upload_status: 'published',
+    } as StudioSegment)).toBe('已发布，无需再生成成片');
+  });
+
+  it('explains queue and MiMo progress lag on the overview card', () => {
+    component.progress = {status: 'queued', phase: 'queued'};
+    expect(component.progressHint).toContain('Windows Worker');
+    component.progress = {status: 'running', phase: 'mimo_wait', message: '等待 MiMo 返回'};
+    expect(component.progressHint).toContain('写入工作台');
+  });
+
   it('previews the actual final and requires an explicit source switch', () => {
     component.selectSegment(a);
     expect(component.selectedMediaUrl).toBe('/studio-api/media/final-a');

@@ -76,6 +76,90 @@
 - 涉及：成片阶段合成、模板资源目录、工作台预览（若做）。
 - 验收：至少 1 个可开关模板（如标题弹入）能稳定叠在自动成片上，且不改内容边界。
 
+#### 9. 切片流水线状态与审核 UI 可读性（Dashboard）
+- 状态：**代码已写在 main 工作区（2026-09-20），尚未 commit**；验证见下。实机后续问题见 #10。Pi 可能已跑 `bilive.18` 未提交构建。
+- 验证：`pytest -q` 674 passed；`compileall src tests` OK；`ng test` studio 规格（slice-stage + studio-slices）ChromeHeadless **35 SUCCESS**；`ng build --configuration development` PASS。全套 `ng test` 仍有历史 settings/notification 注入失败（PRE-EXISTING，与本改动无关）。
+- 背景（2026-09-20 实机反馈）：
+  1. 阶段板场次徽标只显示「已排队」，progress 可能显示「等待 MiMo 返回」或残留「切片处理完成」，看不出在等谁、卡在哪；密度图有数据也不代表 Worker 已处理。
+  2. progress 写「MiMo 返回 1 个可处理片段」时，本板场次仍是「0 候选」——Worker progress 与 task history 落盘有时差，segments 只在整场 `slice_only` 结束后写入，用户会以为结果丢了。
+  3. AI 判断列表用「Q 0.85 C 0.9 conf 0.9」等缩写，用户不知道含义；详情区虽有中文，列表卡仍看不懂。
+  4. 入点/出点显示裸秒数（如 `2484 - 2517` / 输入框 `2484`），无法对照播放器进度条；应显示 `HH:MM:SS`（或 `H:MM:SS`）。
+  5. 已上传/已发布的片段仍挂在 04 样片板：卡片文案却是「成片生成中… / 等待生成可预览成片」，与真实状态不符。根因：`segmentStage` 对 keep 只看 `final_media_id` + `preview_available`，不看 `upload_status ∈ {published,...}`；`stageCountFromSummary(sample)` 用 `keep - awaiting_publish`，已发布仍算 keep、又不是 awaiting_publish，会继续计入样片板。上传成功后本地成片清理（architecture：publish 后删本地 final）会让 `final_media_id` 变空，片段永久滞留样片板。样片卡 thumb 还硬编码了「成片生成中…」。
+- 目标：打开阶段板 / 判断板即可读懂在等什么、结果在哪、边界对应视频哪一段：
+  1. 状态说明：Windows Worker 未领取 / Worker 预检失败 / 已送 MiMo 等返回 / 解析中 / 人工复核；Worker 不可用时任务保留在队列的原因。
+  2. 进度对齐：progress 说「已返回 N 个」时，明确「尚未写入工作台」或直接展示已解析候选；history 落盘后自动刷新到 03/04 板。
+  3. 指标文案：列表与详情统一用中文（质量分 / 完整度 / 置信度），不用 Q/C/conf 缩写。
+  4. 时间码：候选区间、入点/出点输入框与密度图标注一律 `HH:MM:SS`；播放器当前时间可一键填入入/出点；内部存储仍用秒，只改展示与编辑交互。
+  5. 阶段归属：`upload_status` 为 published / 已进上传完成的片段不得留在样片板；可进「已完成」类列表或从工作台阶段板移除。样片卡文案按真实状态切换（生成中 / 待预览 / 已发布 / 失败），禁止统一「成片生成中」。
+- 涉及：
+  - 状态源：`src/burn/slice_progress.py`、`src/burn/slice_only.py` progress.message、`src/dashboard/task_state.py`；
+  - UI：`frontend/src/app/studio/studio-slices.component.*`（阶段徽标、progress 卡、判断列表 score-row、入出点 range-fields、密度图标签）；
+  - 时间格式化可在前端做，不必改后端秒字段 schema。
+  - 不改 Pi/Windows 边界与状态机。
+- 验收：
+  1. 用户无需对照代码/日志能说出「在等谁、下一步是什么」；
+  2. Worker 不可用时场次卡片有明确原因，而不是只有「已排队」；
+  3. 判断列表不出现未翻译缩写；
+  4. 入出点显示为 `H:MM:SS`，与播放器进度条时间可直接对照。
+  5. 已上传片段不再出现在 04 样片板；卡片状态与 upload/publish 一致，不再显示虚假的「成片生成中」。
+
+#### 10. 阶段看板实机 UX 缺口（2026-09-20 夜 · 明天优先）
+- 状态：**待实现（2026-09-21 开工）**
+- 背景：#9 代码已在 main 工作区实现并可能部署了 `bilive.18`，但 **尚未 git commit**；当晚实机审核又暴露下列问题。流水线/Worker 本身正常（finalize 可成功、字幕保存会落盘），主要是界面语义与操作路径让人「不知道按哪个 / 以为丢了 / 以为不能排队」。
+- 会话笔记：`memory/sessions/.../notes.md`（compose-next 恢复步骤也在笔记里）。
+
+**问题清单（按用户原话）**
+
+1. **URL 选中失效**  
+   - 现象：`/studio/slices?stage=burst&source_task_id=...` 顶部红条「选中的源录播已不在清单中，请重新选择」，同页却仍显示处理中场次。  
+   - 根因：`studio-slices.component.ts` `refresh()` 里 task_id 对不上时只清空选中，**不回落**到当前阶段板第一项；房间目录改名会改变 base64 `task_id`。  
+   - 期望：失效深链/过期 id → 自动选中 `stageRecordings[0]`（或 filtered 第一项）并静默纠正 URL；仅当清单真空时才报错。
+
+2. **「提交样片没反应」**  
+   - 现象：判断板点「送交生成样片」后界面仍像没动。  
+   - 事实：Windows `.bilive-jobs` 里两条 `finalize_segment` 均已 `done`（含 ASR 的一条约 5 分钟）；成功后片段进入字幕精修，不是样片板。  
+   - 期望：  
+     - 提交后明确 toast「已入队/处理中，约 X 分钟，完成进入字幕精修」；  
+     - job 完成自动刷新阶段列表与顶栏计数；  
+     - busy 时不要静默 `return`（`runSegmentAction`）。
+
+3. **字幕保存后「视频不见了」**  
+   - 现象：字幕刚保存、未点重新烧录，片段从 05 字幕精修消失。  
+   - 根因（后端预期行为）：`update_segment_subtitles` → `_invalidate_final_output` → `preview_available=false`、`upload_status=not_queued`、`subtitle_needs_burn=true`；前端 `segmentStage` 将其算进 **04 样片**。数据未丢。  
+   - 期望：`isKeep && subtitle_needs_burn && !hasFailure` **留在字幕精修板**，主操作「重新烧录」，并显示 `preview_reason`；保存 toast 更醒目，或保存后不自动换板。
+
+4. **样片板按钮太多，不知道按哪个**  
+   - 同屏：查看 / 重试成片 / 重新分析 / 重新渲染 / 去字幕精修板。  
+   - 事实：`重试成片` 与 `重新渲染` 都是 `render → finalize`（同一条重烧路径）；`重新分析` 是 `retry-judge`（重跑 MiMo，字幕待重烧时误点有害）；成片未好时「去字幕精修板」无意义。  
+   - 期望：**场景化单一主按钮**——字幕待重烧/待生成 →「重新烧录成片」；可预览 → 引导去字幕精修；「重新分析」降为次要/进阶。去掉重复按钮。
+
+5. **「怎么只能让一个视频重试成片？不能排队吗？」**  
+   - 事实：后端 `enqueue_action_job` 按 **segment** 查重，**不同片段可同时 pending**；Worker `claim_next_action_job` **串行**处理（有意设计：ffmpeg/ASR 重 + 跨进程锁）。  
+   - UI 根因：样片卡 `[disabled]="selectedActionBusy"`，而 `selectedActionBusy` 只看 **当前选中片段**，导致一个 busy → 所有卡片按钮变灰；`runSegmentAction` busy 时静默 return。  
+   - 期望：每卡 `segmentBusy(segment)`；点第二条时入队并提示「已排队，Worker 按序处理」；顶栏可显示 pending 任务数。
+
+6. **样片卡进度误导**  
+   - 现象：旧 job 显示 100% +「等待生成可预览成片」，与「字幕已改、待重烧」真实状态不符。  
+   - 期望：`subtitle_needs_burn` / `preview_available=false` 时文案改为「字幕已保存，待重新烧录」，不要用完成态进度条。
+
+7. **#9 收尾债（与上项一起做）**  
+   - main 未提交改动 + 无 `docs/compose/spec/slice-stage-status-ux.md`（或等价文档）；`wheel/blrec-...bilive.18`、install 脚本已指向 .18。  
+   - 明天 compose-next：补规格 → 修 1–6 → 验证 → 独立审查 → **用户确认后 commit**；部署是否重打包再问。
+
+- 涉及：
+  - `frontend/src/app/studio/slice-stage.ts` / `studio-slices.component.ts|html`（阶段推导、按钮、busy、回落）
+  - `src/dashboard/source_workbench.py`（字幕作废语义可维持，主要是 UI 阶段归属与文案）
+  - `src/dashboard/routes/segments.py` / `src/server/action_jobs.py`（排队语义已正确，补前端对齐与测试）
+  - 测试：`slice-stage.spec.ts`（needs_burn 留在 subtitle）、`studio-slices.component.spec.ts`（回落、per-card busy、排队提示）
+  - **不改** Pi/Windows 边界、`.bilive-jobs` 状态机、Worker 串行领取语义。
+- 验收：
+  1. 过期 `source_task_id` 打开爆点/样片板不再卡死红条，能落到当前板可用场次；
+  2. 送交成片后有明确进度反馈；完成后列表/计数自动更新；
+  3. 保存字幕后片段仍在字幕精修，一键「重新烧录」，不会「消失」；
+  4. 样片/字幕板同一场景只有一个主操作，无「重试成片=重新渲染」重复项；`重新分析` 不会成为字幕待重烧时的主按钮；
+  5. 对多个片段连续点重烧时，UI 表现为排队（可多条 pending），Worker 仍串行，不假装并行；
+  6. 与 #9 一并完成规格、测试与提交（提交前再次确认）。
+
 ## 明确不做 / 搁置
 
 | 项 | 原因 |
@@ -97,6 +181,7 @@
 
 ```text
 P0#2 ASR前置+字幕修正（已完成）→ P0#3 静音裁切
+→ P1#9 + P1#10 阶段看板状态反馈 + 实机 UX 缺口（明日优先；#9 改动在 main 未提交）
 → P1#4 封面+大字 → P1#5 效果 timeline → P1#6 边界二次裁决（按需）
 → P1#7 系统性优化提示词（样本够用后再动）
 → P1#8 叠层动画（远期，HTML/渲染路线先做 spike）

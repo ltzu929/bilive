@@ -42,6 +42,7 @@ import {
   filterSegmentsByStage,
   isSliceStageId,
   recordingInBurst,
+  sampleOutstandingCount,
 } from './slice-stage';
 
 type InspectorTab = 'content' | 'subtitles' | 'technical';
@@ -83,9 +84,13 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   qualityReasonDraft = '';
   startDraft = 0;
   endDraft = 0;
+  startDraftText = '0:00:00';
+  endDraftText = '0:00:00';
   rangeDirty = false;
   missedStartDraft = 0;
   missedEndDraft = 10;
+  missedStartDraftText = '0:00:00';
+  missedEndDraftText = '0:00:10';
   missedReason = 'mimo_missed';
   missedNote = '';
   subtitleFontName = 'Noto Sans SC';
@@ -202,8 +207,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       const num = (key: string) => Number(counts[key] || 0);
       if (this.activeStage === 'judge') return num('review') + num('judge_failed') > 0;
       if (this.activeStage === 'sample') {
-        return Math.max(0, num('keep') + num('manual_keep') - num('awaiting_publish')) > 0
-          || num('needs_repair') > 0;
+        return sampleOutstandingCount(counts) > 0 || num('needs_repair') > 0;
       }
       if (this.activeStage === 'subtitle') return num('awaiting_publish') > 0;
       return true;
@@ -459,7 +463,20 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
 
   get selectedRangeLabel(): string {
     if (!this.selectedSegment) return '-';
-    return `${this.startDraft.toFixed(1)}s - ${this.endDraft.toFixed(1)}s`;
+    return `${this.formatTimecode(this.startDraft)} - ${this.formatTimecode(this.endDraft)}`;
+  }
+
+  get progressHint(): string {
+    const phase = String(this.progress?.phase || '');
+    const message = String(this.progress?.message || '');
+    const status = String(this.progress?.status || '');
+    if (status === 'running' && (phase === 'mimo_wait' || phase === 'mimo_result' || message.includes('MiMo'))) {
+      return '候选在本场处理结束后写入工作台；期间本板可能仍显示 0 候选。';
+    }
+    if (status === 'queued' || phase === 'queued') {
+      return '任务已写入队列，等待 Windows Worker 领取；Worker 不可用时会一直保留。';
+    }
+    return '';
   }
 
   get selectedSegmentDuration(): number {
@@ -643,7 +660,27 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return 0;
   }
 
+  sampleThumbLabel(segment: StudioSegment): string {
+    if (segment.failure || segment.upload_status === 'failed') return '渲染失败';
+    const upload = String(segment.upload_status || '');
+    if (upload === 'published') return '已发布';
+    if (['queued', 'uploading', 'uploaded', 'publishing'].includes(upload)) {
+      return `上传中 · ${this.statusLabel(upload)}`;
+    }
+    const actionStatus = String(segment.action_state?.status || '');
+    if (['pending', 'processing', 'running', 'blocked'].includes(actionStatus)) {
+      return '成片生成中…';
+    }
+    if (segment.final_media_id) return '已有可预览成片';
+    return this.segmentJobMessage(segment);
+  }
+
   segmentJobMessage(segment: StudioSegment): string {
+    const upload = String(segment.upload_status || '');
+    if (upload === 'published') return '已发布，无需再生成成片';
+    if (['queued', 'uploading', 'uploaded', 'publishing'].includes(upload)) {
+      return `已进入上传流程：${this.statusLabel(upload)}`;
+    }
     const progress = segment.action_state?.progress;
     if (progress?.message) return progress.message;
     const status = String(segment.action_state?.status || '');
@@ -654,6 +691,32 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       return segment.failure?.summary || '成片失败，可重试';
     }
     return '等待生成可预览成片';
+  }
+
+  formatTimecode(seconds: number | undefined | null): string {
+    const total = Math.max(0, Math.floor(Number(seconds || 0)));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  parseTimecode(value: string | number): number {
+    if (typeof value === 'number') return Math.max(0, Number.isFinite(value) ? value : 0);
+    const raw = String(value || '').trim();
+    if (!raw) return 0;
+    if (!raw.includes(':')) return Math.max(0, Number(raw) || 0);
+    const parts = raw.split(':').map((part) => Number(part.trim()));
+    if (parts.some((part) => !Number.isFinite(part) || part < 0)) return 0;
+    if (parts.length >= 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0] || 0;
+  }
+
+  updateRangeFromTimecode(boundary: RangeBoundary, value: string): void {
+    if (boundary === 'start') this.startDraftText = value;
+    else this.endDraftText = value;
+    this.updateRange(boundary, this.parseTimecode(value), false);
   }
 
   selectSegment(segment: StudioSegment): void {
@@ -673,6 +736,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.qualityReasonDraft = segment.quality_reason || '';
     this.startDraft = Number(segment.start_seconds || 0);
     this.endDraft = Number(segment.end_seconds || 0);
+    this.startDraftText = this.formatTimecode(this.startDraft);
+    this.endDraftText = this.formatTimecode(this.endDraft);
     this.rangeDirty = false;
     const style = segment.subtitle_style || {};
     this.subtitleFontName = String(style.font_name || 'Noto Sans SC');
@@ -749,12 +814,16 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return 'segment-overlay-review';
   }
 
-  updateRange(boundary: RangeBoundary, value: number): void {
+  updateRange(boundary: RangeBoundary, value: number, syncText = true): void {
     const number = Math.max(0, Number(value || 0));
     if (boundary === 'start') {
       this.startDraft = Math.min(number, Math.max(0, this.endDraft - 0.1));
     } else {
       this.endDraft = Math.max(number, this.startDraft + 0.1);
+    }
+    if (syncText) {
+      this.startDraftText = this.formatTimecode(this.startDraft);
+      this.endDraftText = this.formatTimecode(this.endDraft);
     }
     this.rangeDirty = true;
     this.changeDetector.markForCheck();
@@ -840,6 +909,21 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       this.missedStartDraft = seconds;
       if (this.missedEndDraft <= seconds) this.missedEndDraft = seconds + 0.1;
     } else {
+      this.missedEndDraft = Math.max(seconds, this.missedStartDraft + 0.1);
+    }
+    this.missedStartDraftText = this.formatTimecode(this.missedStartDraft);
+    this.missedEndDraftText = this.formatTimecode(this.missedEndDraft);
+    this.changeDetector.markForCheck();
+  }
+
+  updateMissedFromTimecode(boundary: RangeBoundary, value: string): void {
+    const seconds = this.parseTimecode(value);
+    if (boundary === 'start') {
+      this.missedStartDraftText = value;
+      this.missedStartDraft = seconds;
+      if (this.missedEndDraft <= seconds) this.missedEndDraft = seconds + 0.1;
+    } else {
+      this.missedEndDraftText = value;
       this.missedEndDraft = Math.max(seconds, this.missedStartDraft + 0.1);
     }
     this.changeDetector.markForCheck();
@@ -1111,7 +1195,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     const labels: Record<string, string> = {
       all: '全部',
       ready: '待处理',
-      pending: '已排队',
+      pending: '排队中·等 Windows Worker',
       processing: '处理中',
       running: '处理中',
       done: '已完成',
@@ -1131,6 +1215,14 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       review_complete: '复核完成',
       trash_pending: '等待回收源录播',
       trash: '回收源录播',
+      not_queued: '未入上传队列',
+      queued: '排队上传',
+      uploading: '上传中',
+      uploaded: '已上传',
+      publishing: '投稿中',
+      published: '已发布',
+      mimo_wait: '等待 MiMo 返回',
+      mimo_result: '解析 MiMo 结果',
     };
     return labels[status || ''] || status || '未知';
   }
@@ -1151,10 +1243,15 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   statusColor(status: string | undefined): string {
-    if (['failed', 'judge_failed', 'queue_failed'].includes(status || '')) return 'error';
-    if (['done', 'keep', 'manual_keep', 'review_complete'].includes(status || '')) return 'success';
-    if (['pending', 'processing', 'running'].includes(status || '')) return 'processing';
-    if (status === 'review' || status === 'ready') return 'warning';
+    const value = status || '';
+    if (['failed', 'judge_failed', 'queue_failed'].includes(value)) return 'error';
+    if (['done', 'keep', 'manual_keep', 'review_complete', 'published', 'uploaded'].includes(value)) {
+      return 'success';
+    }
+    if (['pending', 'processing', 'running', 'uploading', 'publishing', 'queued', 'mimo_wait'].includes(value)) {
+      return 'processing';
+    }
+    if (['review', 'ready', 'awaiting_publish', 'staged'].includes(value)) return 'warning';
     return 'default';
   }
 

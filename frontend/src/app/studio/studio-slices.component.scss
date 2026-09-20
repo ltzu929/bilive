@@ -924,6 +924,7 @@ h1 {
 .queue-item.selected { border-color: #1677ff; box-shadow: 0 0 0 2px #e6f4ff; }
 .queue-item.need-human { border-left: 3px solid #d48806; }
 .queue-meta, .score-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; color: rgba(0, 0, 0, 0.45); font-size: 12px; }
+.queue-message, .overview-hint { margin-top: 4px; font-size: 12px; color: rgba(0, 0, 0, 0.45); }
 .need-human-label { color: #d48806; font-size: 12px; }
 
 .density-hero { border: 1px solid #f0f0f0; border-radius: 8px; padding: 8px; margin-bottom: 12px; background: #fafafa; }

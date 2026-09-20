@@ -887,7 +887,10 @@ def slice_only(video_path, **_slice_options):
             current_slice=0,
             total_slices=total_slices,
             current_slice_percent=100.0,
-            message=f"已并发发送 {total_slices} 个候选给 MiMo，请求并发数 {mimo_parallelism}",
+            message=(
+                f"已并发发送 {total_slices} 个候选给 MiMo，请求并发数 {mimo_parallelism}；"
+                f"等待模型返回（工作台候选要等本场处理结束）"
+            ),
             error="",
             diagnostics=diagnostics,
         )
@@ -999,7 +1002,10 @@ def slice_only(video_path, **_slice_options):
                 total_slices=total_slices,
                 current_slice_path=slice_path,
                 current_slice_percent=100.0,
-                message=f"已发送候选 {index}/{total_slices} 给 MiMo，等待判断结果",
+                message=(
+                    f"已发送候选 {index}/{total_slices} 给 MiMo，等待判断结果；"
+                    f"结果先记在 Worker 进度，整场结束后写入工作台"
+                ),
                 error="",
                 diagnostics=diagnostics,
             )
@@ -1048,7 +1054,8 @@ def slice_only(video_path, **_slice_options):
                 )
                 empty_result_source = results
             result_message = (
-                f"MiMo 返回 {len(results)} 个可处理片段"
+                f"MiMo 返回 {len(results)} 个可处理片段；正在质检/ASR/成片，"
+                f"整场结束后写入工作台"
                 if results
                 else _mimo_empty_result_message(empty_result_source)
             )

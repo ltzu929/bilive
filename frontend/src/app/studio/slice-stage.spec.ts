@@ -3,6 +3,7 @@ import {
   filterSegmentsByStage,
   isSliceStageId,
   recordingInBurst,
+  sampleOutstandingCount,
   segmentStage,
   stageCountFromSummary,
 } from './slice-stage';
@@ -61,6 +62,30 @@ describe('slice-stage derivation', () => {
     ).toBe('subtitle');
   });
 
+  it('keeps published keeps off the sample board even without a local final', () => {
+    expect(
+      segmentStage({
+        judge_status: 'keep',
+        upload_status: 'published',
+        action_state: { action: 'approve_publish', status: 'done' },
+      })
+    ).toBeNull();
+    expect(
+      segmentStage({
+        judge_status: 'keep',
+        upload_status: 'uploading',
+        final_media_id: '',
+      })
+    ).toBeNull();
+    expect(
+      segmentStage({
+        judge_status: 'keep',
+        upload_status: 'uploading',
+        final_media_id: 'media-2',
+      })
+    ).toBe('subtitle');
+  });
+
   it('treats processing or failed recordings as burst-board inventory', () => {
     expect(recordingInBurst({ status: 'processing' })).toBeTrue();
     expect(recordingInBurst({ status: 'failed' })).toBeTrue();
@@ -76,12 +101,20 @@ describe('slice-stage derivation', () => {
     expect(stageCountFromSummary({ awaiting_publish: 4 }, 'subtitle')).toBe(4);
   });
 
+  it('excludes published and in-flight uploads from sample outstanding counts', () => {
+    expect(sampleOutstandingCount({ keep: 2, published: 1 })).toBe(1);
+    expect(sampleOutstandingCount({ keep: 2, upload_in_progress: 2 })).toBe(0);
+    expect(sampleOutstandingCount({ keep: 1, manual_keep: 1, awaiting_publish: 1 })).toBe(1);
+    expect(stageCountFromSummary({ keep: 3, published: 1, upload_in_progress: 1 }, 'sample')).toBe(1);
+  });
+
   it('computes aggregate stage counts for the top rail', () => {
     const counts = computeStageCounts([
       { status: 'processing', summary_counts: { review: 1 } },
       { status: 'done', summary_counts: { keep: 2, awaiting_publish: 1, review: 1, judge_failed: 1 } },
+      { status: 'done', summary_counts: { keep: 1, published: 1 } },
     ]);
-    expect(counts.recordings).toBe(2);
+    expect(counts.recordings).toBe(3);
     expect(counts.burst).toBe(1);
     expect(counts.judge).toBe(3);
     expect(counts.sample).toBe(1);
@@ -92,8 +125,9 @@ describe('slice-stage derivation', () => {
     const segments = [
       { segment_id: 'drop', judge_status: 'drop' },
       { segment_id: 'review', judge_status: 'review' },
-      { segment_id: 'final', judge_status: 'keep', final_media_id: 'f' },
+      { segment_id: 'final', judge_status: 'keep', final_media_id: 'f', upload_status: 'awaiting_publish' },
       { segment_id: 'render', judge_status: 'keep', action_state: { status: 'processing' } },
+      { segment_id: 'published', judge_status: 'keep', upload_status: 'published' },
     ];
     expect(filterSegmentsByStage(segments, 'judge').map((item) => item.segment_id)).toEqual(['review']);
     expect(filterSegmentsByStage(segments, 'sample').map((item) => item.segment_id)).toEqual(['render']);

@@ -2374,13 +2374,27 @@ def _segment_candidate_path(root: Path, segment: dict[str, Any]) -> Path:
 
 
 def _summary_counts(segments: list[dict[str, Any]]) -> dict[str, int]:
-    counts = {key: 0 for key in (*SUMMARY_KEYS, "awaiting_publish", "needs_repair")}
+    counts = {
+        key: 0
+        for key in (
+            *SUMMARY_KEYS,
+            "awaiting_publish",
+            "needs_repair",
+            "published",
+            "upload_in_progress",
+        )
+    }
     for segment in segments:
         status = str(segment.get("judge_status") or "review")
         counts[status] = counts.get(status, 0) + 1
-        if segment.get("upload_status") == "awaiting_publish":
+        upload_status = str(segment.get("upload_status") or "")
+        if upload_status in {"awaiting_publish", "staged"}:
             counts["awaiting_publish"] += 1
-        if segment.get("failure") or segment.get("upload_status") == "failed":
+        elif upload_status == "published":
+            counts["published"] += 1
+        elif upload_status in {"queued", "uploading", "uploaded", "publishing"}:
+            counts["upload_in_progress"] += 1
+        if segment.get("failure") or upload_status == "failed":
             counts["needs_repair"] += 1
     return counts
 

@@ -66,6 +66,16 @@ export interface StageCounts {
 
 const ACTIVE_ACTION_STATUSES = new Set(['pending', 'processing', 'running', 'blocked']);
 const BURST_RECORDING_STATUSES = new Set(['pending', 'processing', 'running', 'failed']);
+/** 已进入或完成上传，不再属于样片生产。 */
+const SETTLED_UPLOAD_STATUSES = new Set([
+  'awaiting_publish',
+  'staged',
+  'queued',
+  'uploading',
+  'uploaded',
+  'publishing',
+  'published',
+]);
 
 export function segmentStage(segment: StageSegmentLike | null | undefined): SliceStageId | null {
   if (!segment) return null;
@@ -82,10 +92,17 @@ export function segmentStage(segment: StageSegmentLike | null | undefined): Slic
   const isKeep = judge === 'keep' || judge === 'manual_keep';
 
   if (isKeep) {
+    if (hasFailure) return 'sample';
+    if (upload === 'published') return null;
+    if (['queued', 'uploading', 'uploaded', 'publishing'].includes(upload)) {
+      return hasFinal && !previewBlocked ? 'subtitle' : null;
+    }
     if (ACTIVE_ACTION_STATUSES.has(actionStatus) && actionName !== 'approve_publish') {
       return 'sample';
     }
-    if (hasFailure) return 'sample';
+    if (upload === 'awaiting_publish' || upload === 'staged') {
+      return hasFinal && !previewBlocked ? 'subtitle' : 'sample';
+    }
     if (hasFinal && !previewBlocked) return 'subtitle';
     return 'sample';
   }
@@ -99,6 +116,19 @@ export function recordingInBurst(recording: StageRecordingLike | null | undefine
   const history = String(recording.history_status || '');
   if (BURST_RECORDING_STATUSES.has(status)) return true;
   return history === 'pending' || history === 'processing';
+}
+
+/** 样片板应展示的数量：keep 中尚未进入上传/发布闭环的部分。 */
+export function sampleOutstandingCount(
+  counts: Record<string, number> | null | undefined
+): number {
+  const num = (key: string) => Number((counts || {})[key] || 0);
+  const keep = num('keep') + num('manual_keep');
+  const settled =
+    num('awaiting_publish') +
+    num('published') +
+    num('upload_in_progress');
+  return Math.max(0, keep - settled);
 }
 
 export function stageCountFromRecordings(
@@ -121,10 +151,8 @@ export function stageCountFromSummary(
   switch (stage) {
     case 'judge':
       return num('review') + num('judge_failed');
-    case 'sample': {
-      const keep = num('keep') + num('manual_keep');
-      return Math.max(0, keep - num('awaiting_publish'));
-    }
+    case 'sample':
+      return sampleOutstandingCount(source);
     case 'subtitle':
       return num('awaiting_publish');
     case 'burst':
@@ -156,3 +184,5 @@ export function filterSegmentsByStage<T extends StageSegmentLike>(
 export function isSliceStageId(value: unknown): value is SliceStageId {
   return SLICE_STAGES.some((stage) => stage.id === value);
 }
+
+export { SETTLED_UPLOAD_STATUSES };
