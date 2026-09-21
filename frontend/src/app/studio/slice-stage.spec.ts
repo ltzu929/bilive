@@ -4,6 +4,8 @@ import {
   isSliceStageId,
   recordingInBurst,
   sampleOutstandingCount,
+  samplePrimaryAction,
+  segmentActionBusy,
   segmentStage,
   stageCountFromSummary,
 } from './slice-stage';
@@ -50,6 +52,67 @@ describe('slice-stage derivation', () => {
         preview_available: false,
       })
     ).toBe('sample');
+  });
+
+  it('keeps subtitle-needs-burn keeps on the subtitle board', () => {
+    expect(
+      segmentStage({
+        judge_status: 'keep',
+        preview_available: false,
+        subtitle_needs_burn: true,
+        upload_status: 'not_queued',
+      })
+    ).toBe('subtitle');
+    expect(
+      segmentStage({
+        judge_status: 'keep',
+        subtitle_needs_burn: true,
+        failure: { summary: 'burn failed' },
+      })
+    ).toBe('sample');
+    expect(
+      segmentStage({
+        judge_status: 'keep',
+        subtitle_needs_burn: true,
+        upload_status: 'published',
+      })
+    ).toBeNull();
+  });
+
+  it('derives a single sample-board primary action per scene', () => {
+    expect(
+      samplePrimaryAction({
+        judge_status: 'keep',
+        failure: { summary: 'ffmpeg failed' },
+      })
+    ).toEqual({ kind: 'render', label: '重试成片', action: 'render' });
+    expect(
+      samplePrimaryAction({
+        judge_status: 'keep',
+        action_state: { action: 'finalize', status: 'processing' },
+      }).kind
+    ).toBe('busy');
+    expect(
+      samplePrimaryAction({
+        judge_status: 'keep',
+        subtitle_needs_burn: true,
+      })
+    ).toEqual({ kind: 'reburn', label: '重新烧录成片', action: 'reburn' });
+    expect(
+      samplePrimaryAction({
+        judge_status: 'keep',
+        final_media_id: '',
+      }).action
+    ).toBe('render');
+    expect(
+      samplePrimaryAction({
+        judge_status: 'keep',
+        final_media_id: 'media-1',
+        preview_available: true,
+      }).kind
+    ).toBe('goto_subtitle');
+    expect(segmentActionBusy({ action_state: { status: 'pending' } })).toBeTrue();
+    expect(segmentActionBusy({ action_state: { status: 'done' } })).toBeFalse();
   });
 
   it('does not park approve_publish processing on the sample board when final exists', () => {
@@ -99,6 +162,16 @@ describe('slice-stage derivation', () => {
       stageCountFromSummary({ keep: 3, manual_keep: 1, awaiting_publish: 2 }, 'sample')
     ).toBe(2);
     expect(stageCountFromSummary({ awaiting_publish: 4 }, 'subtitle')).toBe(4);
+  });
+
+  it('counts subtitle needs-burn keeps on the subtitle badge, not sample', () => {
+    expect(
+      stageCountFromSummary({ keep: 2, subtitle_needs_burn: 1, awaiting_publish: 1 }, 'subtitle')
+    ).toBe(2);
+    expect(
+      stageCountFromSummary({ keep: 2, subtitle_needs_burn: 1, awaiting_publish: 1 }, 'sample')
+    ).toBe(0);
+    expect(sampleOutstandingCount({ keep: 3, subtitle_needs_burn: 2, awaiting_publish: 1 })).toBe(0);
   });
 
   it('excludes published and in-flight uploads from sample outstanding counts', () => {

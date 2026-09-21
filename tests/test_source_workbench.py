@@ -223,15 +223,22 @@ def test_summary_counts_expose_upload_settlement_for_stage_boards(videos_root, m
             {"segment_id": "keep-pub", "judge_status": "keep", "upload_status": "published"},
             {"segment_id": "keep-up", "judge_status": "keep", "upload_status": "uploading"},
             {"segment_id": "keep-open", "judge_status": "keep", "upload_status": "not_queued"},
+            {
+                "segment_id": "keep-burn",
+                "judge_status": "keep",
+                "upload_status": "not_queued",
+                "subtitle_needs_burn": True,
+            },
         ],
     )
     items = source_workbench.build_source_recording_list(videos_root)
     assert len(items) == 1
     counts = items[0]["summary_counts"]
-    assert counts["keep"] == 4
+    assert counts["keep"] == 5
     assert counts["awaiting_publish"] == 1
     assert counts["published"] == 1
     assert counts["upload_in_progress"] == 1
+    assert counts["subtitle_needs_burn"] == 1
 
 
 def test_source_recording_list_hides_sub_threshold_stub_without_review(

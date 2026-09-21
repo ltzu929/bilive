@@ -2382,6 +2382,7 @@ def _summary_counts(segments: list[dict[str, Any]]) -> dict[str, int]:
             "needs_repair",
             "published",
             "upload_in_progress",
+            "subtitle_needs_burn",
         )
     }
     for segment in segments:
@@ -2394,8 +2395,16 @@ def _summary_counts(segments: list[dict[str, Any]]) -> dict[str, int]:
             counts["published"] += 1
         elif upload_status in {"queued", "uploading", "uploaded", "publishing"}:
             counts["upload_in_progress"] += 1
-        if segment.get("failure") or upload_status == "failed":
+        has_failure = bool(segment.get("failure") or upload_status == "failed")
+        if has_failure:
             counts["needs_repair"] += 1
+        if (
+            segment.get("subtitle_needs_burn")
+            and status in {"keep", "manual_keep"}
+            and not has_failure
+            and upload_status != "published"
+        ):
+            counts["subtitle_needs_burn"] += 1
     return counts
 
 

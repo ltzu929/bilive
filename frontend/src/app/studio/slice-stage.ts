@@ -43,11 +43,49 @@ export interface StageSegmentLike {
   upload_status?: string;
   final_media_id?: string;
   preview_available?: boolean;
+  preview_reason?: string;
+  subtitle_needs_burn?: boolean;
   failure?: unknown;
   action_state?: {
     action?: string;
     status?: string;
   } | null;
+}
+
+export type SamplePrimaryAction =
+  | { kind: 'reburn'; label: string; action: 'reburn' }
+  | { kind: 'render'; label: string; action: 'render' }
+  | { kind: 'busy'; label: string; action: null }
+  | { kind: 'goto_subtitle'; label: string; action: null };
+
+const ACTIVE_ACTION_STATUS_VALUES = new Set(['pending', 'processing', 'running', 'blocked']);
+
+export function segmentActionBusy(segment: StageSegmentLike | null | undefined): boolean {
+  if (!segment) return false;
+  return ACTIVE_ACTION_STATUS_VALUES.has(String(segment.action_state?.status || ''));
+}
+
+export function samplePrimaryAction(segment: StageSegmentLike | null | undefined): SamplePrimaryAction {
+  if (!segment) {
+    return { kind: 'render', label: '生成成片', action: 'render' };
+  }
+  const upload = String(segment.upload_status || '');
+  const hasFailure = Boolean(segment.failure) || upload === 'failed';
+  if (hasFailure) {
+    return { kind: 'render', label: '重试成片', action: 'render' };
+  }
+  if (segmentActionBusy(segment)) {
+    return { kind: 'busy', label: '处理中', action: null };
+  }
+  if (segment.subtitle_needs_burn === true) {
+    return { kind: 'reburn', label: '重新烧录成片', action: 'reburn' };
+  }
+  const hasFinal = Boolean(segment.final_media_id);
+  const previewBlocked = segment.preview_available === false;
+  if (hasFinal && !previewBlocked) {
+    return { kind: 'goto_subtitle', label: '去字幕精修', action: null };
+  }
+  return { kind: 'render', label: '生成成片', action: 'render' };
 }
 
 export interface StageRecordingLike {
@@ -97,6 +135,8 @@ export function segmentStage(segment: StageSegmentLike | null | undefined): Slic
     if (['queued', 'uploading', 'uploaded', 'publishing'].includes(upload)) {
       return hasFinal && !previewBlocked ? 'subtitle' : null;
     }
+    // 字幕/样式修改后后端作废成片；留在字幕精修板，主操作为重新烧录。
+    if (segment.subtitle_needs_burn === true) return 'subtitle';
     if (ACTIVE_ACTION_STATUSES.has(actionStatus) && actionName !== 'approve_publish') {
       return 'sample';
     }
@@ -118,7 +158,7 @@ export function recordingInBurst(recording: StageRecordingLike | null | undefine
   return history === 'pending' || history === 'processing';
 }
 
-/** 样片板应展示的数量：keep 中尚未进入上传/发布闭环的部分。 */
+/** 样片板应展示的数量：keep 中尚未进入上传/发布闭环，且不在字幕待重烧的部分。 */
 export function sampleOutstandingCount(
   counts: Record<string, number> | null | undefined
 ): number {
@@ -127,7 +167,8 @@ export function sampleOutstandingCount(
   const settled =
     num('awaiting_publish') +
     num('published') +
-    num('upload_in_progress');
+    num('upload_in_progress') +
+    num('subtitle_needs_burn');
   return Math.max(0, keep - settled);
 }
 
@@ -154,7 +195,7 @@ export function stageCountFromSummary(
     case 'sample':
       return sampleOutstandingCount(source);
     case 'subtitle':
-      return num('awaiting_publish');
+      return num('awaiting_publish') + num('subtitle_needs_burn');
     case 'burst':
     case 'recordings':
     default:

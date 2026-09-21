@@ -326,7 +326,9 @@ describe('Studio review behavior', () => {
 
     expect(component.subtitleActionHint).toContain('Worker 当前不可用');
     expect(component.observationError).toBe('2235 unavailable');
-    expect(message.warning).toHaveBeenCalledWith('任务 bbbbbbbb 已入队，但 Worker 尚未接管');
+    expect(message.warning).toHaveBeenCalledWith(
+      '任务 bbbbbbbb 已入队，但 Worker 尚未接管；任务会保留在队列',
+    );
 
     api.getJob.and.returnValue(of({
       status: 'done',
@@ -369,5 +371,110 @@ describe('Studio review behavior', () => {
     component.refresh();
     expect(component.detail).toBeNull();
     expect(component.selectedMediaUrl).toBe('');
+  });
+
+  it('silently falls back when a stage deep-link task id is gone', () => {
+    component.selectedTaskId = 'missing-task';
+    component.selectedSegmentId = 'gone';
+    component.activeStage = 'burst';
+    const live = {task_id: 'live-1', room_id: '1', status: 'processing'};
+    component.recordings = [live];
+    api.getSourceRecordings = () => of([live]);
+    api.getSourceRecording = jasmine.createSpy().and.returnValue(of({
+      task_id: 'live-1',
+      room_id: '1',
+      segments: [],
+    }));
+
+    component.refresh();
+
+    expect(component.selectedTaskId).toBe('live-1');
+    expect(component.selectedSegmentId).toBe('');
+    expect(component.error).toBe('');
+  });
+
+  it('reports only when the current stage has no usable recording', () => {
+    component.selectedTaskId = 'missing-task';
+    component.recordings = [];
+    api.getSourceRecordings = () => of([]);
+    component.refresh();
+    expect(component.selectedTaskId).toBe('');
+    expect(component.error).toContain('暂无可用场次');
+  });
+
+  it('allows queueing another segment while one is processing', () => {
+    message.info = jasmine.createSpy('info');
+    api.segmentAction.and.returnValue(of({status: 'accepted', job_id: 'job-c'}));
+    api.getJob.and.returnValue(of({status: 'pending'}));
+    const busySegment: StudioSegment = {
+      segment_id: 'busy-1',
+      judge_status: 'keep',
+      action_state: {action: 'render', status: 'processing'},
+    };
+    const idleSegment: StudioSegment = {
+      segment_id: 'idle-1',
+      judge_status: 'keep',
+      final_media_id: '',
+    };
+    component.detail = {task_id: 'source', room_id: '1', segments: [busySegment, idleSegment]};
+
+    expect(component.segmentBusy(busySegment)).toBeTrue();
+    expect(component.segmentBusy(idleSegment)).toBeFalse();
+
+    (component as any).runSegmentAction('render', undefined, 'idle-1');
+
+    expect(api.segmentAction).toHaveBeenCalledWith('idle-1', 'render', undefined);
+    expect(message.info).toHaveBeenCalledWith(jasmine.stringMatching(/排队|已入队/));
+  });
+
+  it('does not silently ignore a busy segment action', () => {
+    message.info = jasmine.createSpy('info');
+    const busySegment: StudioSegment = {
+      segment_id: 'busy-1',
+      judge_status: 'keep',
+      action_state: {action: 'render', status: 'processing'},
+    };
+    component.detail = {task_id: 'source', room_id: '1', segments: [busySegment]};
+
+    (component as any).runSegmentAction('render', undefined, 'busy-1');
+
+    expect(api.segmentAction).not.toHaveBeenCalled();
+    expect(message.info).toHaveBeenCalledWith('该片段已有任务在排队或处理中');
+  });
+
+  it('keeps subtitle needs-burn segments on the subtitle board with reburn copy', () => {
+    const needsBurn: StudioSegment = {
+      segment_id: 'nb',
+      judge_status: 'keep',
+      subtitle_needs_burn: true,
+      preview_available: false,
+      preview_reason: '字幕已修改，请重新生成最终成片',
+      upload_status: 'not_queued',
+    };
+    component.detail = {task_id: 'source', room_id: '1', segments: [needsBurn]};
+    component.activeStage = 'subtitle';
+
+    expect(component.stageSegments.map((item) => item.segment_id)).toEqual(['nb']);
+    expect(component.sampleThumbLabel(needsBurn)).toBe('字幕已保存，待重新烧录');
+    expect(component.segmentJobMessage(needsBurn)).toContain('字幕');
+    expect(component.samplePrimary(needsBurn)).toEqual({
+      kind: 'reburn',
+      label: '重新烧录成片',
+      action: 'reburn',
+    });
+    expect(component.segmentJobPercent(needsBurn)).toBe(0);
+  });
+
+  it('announces finalize queueing toward the subtitle board', () => {
+    message.info = jasmine.createSpy('info');
+    api.segmentAction.and.returnValue(of({status: 'accepted', job_id: 'job-finalize'}));
+    api.getJob.and.returnValue(of({status: 'pending'}));
+    component.selectSegment(a);
+
+    component.finalizeSegment();
+
+    expect(message.info).toHaveBeenCalledWith(
+      '已入队生成样片，Worker 处理中（约数分钟）；完成后进入字幕精修',
+    );
   });
 });

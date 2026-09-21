@@ -78,6 +78,9 @@ export interface StudioSegment {
   end_seconds?: number;
   candidate_media_id?: string;
   final_media_id?: string;
+  preview_available?: boolean;
+  preview_reason?: string;
+  subtitle_needs_burn?: boolean;
   revision?: number;
   duplicate_of?: string;
   quality_score?: number;

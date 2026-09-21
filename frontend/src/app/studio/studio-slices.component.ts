@@ -38,11 +38,14 @@ import {
   SLICE_STAGES,
   SliceStageId,
   StageCounts,
+  SamplePrimaryAction,
   computeStageCounts,
   filterSegmentsByStage,
   isSliceStageId,
   recordingInBurst,
   sampleOutstandingCount,
+  samplePrimaryAction,
+  segmentActionBusy,
 } from './slice-stage';
 
 type InspectorTab = 'content' | 'subtitles' | 'technical';
@@ -209,7 +212,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
       if (this.activeStage === 'sample') {
         return sampleOutstandingCount(counts) > 0 || num('needs_repair') > 0;
       }
-      if (this.activeStage === 'subtitle') return num('awaiting_publish') > 0;
+      if (this.activeStage === 'subtitle') return num('awaiting_publish') + num('subtitle_needs_burn') > 0;
       return true;
     });
   }
@@ -565,6 +568,35 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     return this.selectedSegment?.publish_approval === 'approved' || ['queued', 'uploading', 'uploaded', 'publishing', 'published', 'failed'].includes(this.selectedSegment?.upload_status || '') || this.detailLoading || this.subtitleRefreshPending || this.draftConflict || this.busySegments.has(this.selectedSegmentId) || ['pending', 'processing', 'running', 'blocked'].includes(this.selectedActionStatus);
   }
 
+  segmentBusy(segment: StudioSegment | null | undefined): boolean {
+    if (!segment) return false;
+    return this.busySegments.has(segment.segment_id) || segmentActionBusy(segment);
+  }
+
+  get busySegmentCount(): number {
+    const ids = new Set<string>(this.busySegments);
+    for (const segment of this.detail?.segments || []) {
+      if (segmentActionBusy(segment) && segment.segment_id) ids.add(segment.segment_id);
+    }
+    return ids.size;
+  }
+
+  samplePrimary(segment: StudioSegment | null | undefined): SamplePrimaryAction {
+    return samplePrimaryAction(segment);
+  }
+
+  runSamplePrimary(segment: StudioSegment): void {
+    const primary = samplePrimaryAction(segment);
+    if (primary.kind === 'goto_subtitle') {
+      this.selectSegment(segment);
+      this.setStage('subtitle');
+      return;
+    }
+    if (!primary.action) return;
+    this.selectSegment(segment);
+    this.runSegmentAction(primary.action, undefined, segment.segment_id);
+  }
+
   get subtitlePosition() { return subtitlePosition(this.subtitleAlignment); }
 
   get subtitlePreviewShadow(): string {
@@ -593,14 +625,31 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         this.recordings = recordings;
         this.loading = false;
         if (!this.recordings.some((item) => item.task_id === this.selectedTaskId)) {
-          if (this.selectedTaskId) this.error = '选中的源录播已不在清单中，请重新选择';
-          this.selectedTaskId = this.selectedTaskId ? '' : this.filteredRecordings[0]?.task_id || '';
+          const previousTaskId = this.selectedTaskId;
+          const fallback = this.stageRecordings[0]?.task_id || this.filteredRecordings[0]?.task_id || '';
+          this.selectedTaskId = fallback;
           this.selectedSegmentId = '';
+          if (previousTaskId && !fallback) {
+            this.error = '当前阶段暂无可用场次，请切换阶段或刷新清单';
+          } else {
+            this.error = '';
+          }
+          this.syncSelectionUrl();
         }
         if (this.selectedTaskId) this.loadDetail(this.selectedTaskId);
         else this.clearDetail();
         this.changeDetector.markForCheck();
       });
+  }
+
+  private syncSelectionUrl(): void {
+    const url = new URL(window.location.href);
+    url.searchParams.set('stage', this.activeStage);
+    if (this.selectedTaskId) url.searchParams.set('source_task_id', this.selectedTaskId);
+    else url.searchParams.delete('source_task_id');
+    if (this.selectedSegmentId) url.searchParams.set('segment_id', this.selectedSegmentId);
+    else url.searchParams.delete('segment_id');
+    window.history.replaceState(window.history.state, '', url);
   }
 
   onRoomChanged(): void {
@@ -653,9 +702,10 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   segmentJobPercent(segment: StudioSegment): number {
+    if (segment.subtitle_needs_burn) return 0;
     const fromAction = Number(segment.action_state?.progress?.percent);
     if (Number.isFinite(fromAction)) return Math.max(0, Math.min(100, fromAction));
-    if (String(segment.action_state?.status || '') === 'done') return 100;
+    if (String(segment.action_state?.status || '') === 'done' && segment.preview_available !== false && !segment.subtitle_needs_burn) return 100;
     if (segment.failure || segment.upload_status === 'failed') return 0;
     return 0;
   }
@@ -667,11 +717,15 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     if (['queued', 'uploading', 'uploaded', 'publishing'].includes(upload)) {
       return `上传中 · ${this.statusLabel(upload)}`;
     }
+    if (segment.subtitle_needs_burn) return '字幕已保存，待重新烧录';
     const actionStatus = String(segment.action_state?.status || '');
     if (['pending', 'processing', 'running', 'blocked'].includes(actionStatus)) {
       return '成片生成中…';
     }
-    if (segment.final_media_id) return '已有可预览成片';
+    if (segment.preview_available === false && !actionStatus) {
+      return segment.preview_reason || '待重新生成成片';
+    }
+    if (segment.final_media_id && segment.preview_available !== false) return '已有可预览成片';
     return this.segmentJobMessage(segment);
   }
 
@@ -681,11 +735,17 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     if (['queued', 'uploading', 'uploaded', 'publishing'].includes(upload)) {
       return `已进入上传流程：${this.statusLabel(upload)}`;
     }
+    if (segment.subtitle_needs_burn) {
+      return segment.preview_reason || '字幕已保存，待重新烧录';
+    }
     const progress = segment.action_state?.progress;
     if (progress?.message) return progress.message;
     const status = String(segment.action_state?.status || '');
     if (['pending', 'processing', 'running', 'blocked'].includes(status)) {
       return this.jobPhaseLabel(progress?.phase) || '等待 Windows Worker';
+    }
+    if (segment.preview_available === false) {
+      return segment.preview_reason || '待重新生成成片';
     }
     if (segment.failure || segment.upload_status === 'failed') {
       return segment.failure?.summary || '成片失败，可重试';
@@ -1456,10 +1516,19 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     payload?: Record<string, unknown>,
     segmentId = this.selectedSegment?.segment_id
   ): void {
-    if (!segmentId || this.busySegments.has(segmentId) || this.selectedActionBusy) return;
+    if (!segmentId) return;
+    const target = this.detail?.segments?.find((segment) => segment.segment_id === segmentId)
+      || (this.selectedSegment?.segment_id === segmentId ? this.selectedSegment : undefined);
+    if (this.busySegments.has(segmentId) || segmentActionBusy(target)) {
+      this.message.info('该片段已有任务在排队或处理中');
+      this.changeDetector.markForCheck();
+      return;
+    }
     const taskId = this.selectedTaskId;
     const key = `${taskId}:${segmentId}`;
     const submitted = this.draftValues();
+    const anyOtherBusy = Array.from(this.busySegments).some((id) => id !== segmentId)
+      || (this.detail?.segments || []).some((segment) => segment.segment_id !== segmentId && segmentActionBusy(segment));
     this.busySegments.add(segmentId);
     this.api.segmentAction(segmentId, action, payload).pipe(
       timeout(SEGMENT_ACTION_TIMEOUT_MS),
@@ -1502,9 +1571,21 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
           );
           if (this.workerTriggerUnavailable) {
             this.observationError = workerMessage || 'Windows Worker 当前不可用，任务已保留在队列';
-            this.message.warning(`任务 ${jobId.slice(0, 8)} 已入队，但 Worker 尚未接管`);
+            this.message.warning(`任务 ${jobId.slice(0, 8)} 已入队，但 Worker 尚未接管；任务会保留在队列`);
+          } else if (action === 'finalize') {
+            this.message.info('已入队生成样片，Worker 处理中（约数分钟）；完成后进入字幕精修');
+          } else if (action === 'reburn' || action === 'render') {
+            this.message.info(
+              anyOtherBusy
+                ? '已排队，Windows Worker 按序处理'
+                : '已入队重新生成成片，Worker 按序处理',
+            );
           } else {
-            this.message.info(`已提交 Windows Worker，任务 ${jobId.slice(0, 8)}`);
+            this.message.info(
+              anyOtherBusy
+                ? `已排队，Windows Worker 按序处理（任务 ${jobId.slice(0, 8)}）`
+                : `已提交 Windows Worker，任务 ${jobId.slice(0, 8)}`,
+            );
           }
           this.waitForJob(jobId, segmentId, action);
           return;
@@ -1513,7 +1594,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
           segmentId,
           action,
           action === 'subtitles'
-            ? '字幕已保存，旧成片已失效；请点击重新烧录'
+            ? '字幕已保存，片段仍在字幕精修；请点「重新烧录」生成成片'
             : '操作已保存',
         );
       },
@@ -1603,6 +1684,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     }
     if (action === 'reburn' && !isError) this.subtitleRefreshPending = true;
     if (isError) this.message.error(message);
+    else if (action === 'subtitles' && !isError) this.message.warning(message);
     else this.message.success(message);
     this.refresh();
     this.changeDetector.markForCheck();
