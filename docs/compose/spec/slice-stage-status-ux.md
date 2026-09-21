@@ -3,7 +3,7 @@ feature: slice-stage-status-ux
 status: delivered
 updated: 2026-09-21
 branch: main
-commits: 83b7530..(working tree pending user-confirmed commit)
+commits: 83b7530c45583d2e316bdca477df79f1db229d23..2c3b43b45661c383eacdc76478b14e98c732f637
 ---
 
 # 阶段看板实机 UX（P1#10 + #9 规格收尾）
@@ -19,7 +19,7 @@ commits: 83b7530..(working tree pending user-confirmed commit)
 - 字幕保存后片段「消失」根因是前端阶段归属，不是数据丢失；后端 `subtitle_needs_burn` / `preview_reason` 已存在，只补前端消费与计数。
 - 顶栏徽章不能只靠 `awaiting_publish`；列表 API 需新增 `subtitle_needs_burn` summary 键，否则 board membership 与 inventory 再次脱节。
 - `segmentBusy`（本地∪服务端）与 `segmentActionBusy`（纯函数，仅 action_state）职责不同，不要合并。
-- 实现落在 main（用户确认）；部署/wheel 重打包未做，提交与是否再部署需用户确认。
+- 实现落在 main（用户确认）；实现提交 `2c3b43b`；部署/wheel 重打包未做。
 
 ## [S1] Problem
 
