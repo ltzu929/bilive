@@ -78,7 +78,7 @@ async def test_eagle_source_recordings_api_returns_lightweight_index(
             "source_name": source.name,
             "room_id": "22384516",
             "room_name": "22384516",
-            "recorded_at": "2026-06-02 12:56:49",
+            "recorded_at": "2026-06-02 20:56:49",
             "source_size_mb": 0.0,
             "status": "done",
             "segment_count": 3,

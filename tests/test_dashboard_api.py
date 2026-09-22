@@ -1152,8 +1152,8 @@ async def test_slice_progress_api_enriches_current_recording_display(
 
     body = response.json()
     assert body["room_name"] == "呜米"
-    assert body["recorded_at"] == "2026-06-17 14:23:25"
-    assert body["display_title"] == "呜米 · 2026-06-17 14:23:25"
+    assert body["recorded_at"] == "2026-06-17 22:23:25"
+    assert body["display_title"] == "呜米 · 2026-06-17 22:23:25"
     assert body["source_file"] == source.name
     expected_rel_path = "22384516/22384516_20260617-14-23-25.mp4"
     expected_task_id = base64.urlsafe_b64encode(

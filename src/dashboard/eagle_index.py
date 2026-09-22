@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -108,7 +109,15 @@ def _recorded_at(source_name: str) -> str:
     if not match:
         return ""
     raw_date = match.group("date")
-    return (
-        f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]} "
-        f"{match.group('hour')}:{match.group('minute')}:{match.group('second')}"
+    value = (
+        datetime(
+            int(raw_date[:4]),
+            int(raw_date[4:6]),
+            int(raw_date[6:8]),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            int(match.group("second")),
+        )
+        + timedelta(hours=8)
     )
+    return value.strftime("%Y-%m-%d %H:%M:%S")

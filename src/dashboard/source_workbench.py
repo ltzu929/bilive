@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timedelta
 from functools import wraps
 from src.server.action_jobs import action_submission_lock
 from collections import Counter
@@ -2483,10 +2484,29 @@ def _recorded_at(source_name: str) -> str:
     if not match:
         match = re.search(r"(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})", source_name)
         if match:
-            return f"{match[1]} {match[2]}:{match[3]}:{match[4]}"
+            value = (
+                datetime(
+                    int(match[1][0:4]),
+                    int(match[1][5:7]),
+                    int(match[1][8:10]),
+                    int(match[2]),
+                    int(match[3]),
+                    int(match[4]),
+                )
+                + timedelta(hours=8)
+            )
+            return value.strftime("%Y-%m-%d %H:%M:%S")
         return ""
     date = match.group("date")
-    return (
-        f"{date[:4]}-{date[4:6]}-{date[6:8]} "
-        f"{match.group('hour')}:{match.group('minute')}:{match.group('second')}"
+    value = (
+        datetime(
+            int(date[:4]),
+            int(date[4:6]),
+            int(date[6:8]),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            int(match.group("second")),
+        )
+        + timedelta(hours=8)
     )
+    return value.strftime("%Y-%m-%d %H:%M:%S")

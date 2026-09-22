@@ -10,6 +10,7 @@ re-exports for back-compat (see that module's import block).
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timedelta
 import mimetypes
 import os
 import re
@@ -315,10 +316,19 @@ def _recording_time_label(source_name: str) -> str:
     if not match:
         return ""
     date = match.group("date")
-    return (
-        f"{date[0:4]}-{date[4:6]}-{date[6:8]} "
-        f"{match.group('hour')}:{match.group('minute')}:{match.group('second')}"
+    # Filename timestamps are UTC (recorder host clock); display as UTC+8.
+    value = (
+        datetime(
+            int(date[0:4]),
+            int(date[4:6]),
+            int(date[6:8]),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            int(match.group("second")),
+        )
+        + timedelta(hours=8)
     )
+    return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def build_slice_diagnostics(

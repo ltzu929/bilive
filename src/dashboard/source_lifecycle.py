@@ -293,9 +293,9 @@ def retention_fields(
     warning = current_time >= started + RETENTION_WARNING_DAYS * 86400
     expired = current_time >= deadline
     return {
-        "retention_deadline": datetime.fromtimestamp(
-            deadline, timezone.utc
-        ).isoformat(timespec="seconds"),
+        "retention_deadline": (
+            datetime.fromtimestamp(deadline, timezone.utc) + timedelta(hours=8)
+        ).strftime("%Y-%m-%d %H:%M:%S"),
         "retention_warning": bool(warning and not completed and not review_ready),
         "retention_expired": bool(expired and not completed),
         "trash_eligible": bool(

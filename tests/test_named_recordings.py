@@ -24,7 +24,7 @@ async def test_named_mp4_rooms_list_detail_and_media(videos_root, make_room, das
         assert len(rows) == 1
         row = rows[0]
         assert row["room_name"] == "咩栗"
-        assert row["recorded_at"] == "2026-09-08 10:55:57"
+        assert row["recorded_at"] == "2026-09-08 18:55:57"
         assert row["source_rel_path"] == f"{room.name}/{source.name}"
         response = await client.get(f"/api/source-recordings/{row['task_id']}")
         assert response.status_code == 200
