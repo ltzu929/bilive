@@ -55,6 +55,40 @@ describe('Studio review behavior', () => {
     expect(component.parseTimecode('2484')).toBe(2484);
   });
 
+  it('treats a chart drag as a missed-segment draft only when long enough', () => {
+    component.missedSelectionActive = true;
+    component.missedStartDraft = 10;
+    component.missedEndDraft = 10.5;
+    expect(component.hasMissedSelection).toBeFalse();
+    component.missedEndDraft = 25;
+    expect(component.hasMissedSelection).toBeTrue();
+    component.clearMissedSelection();
+    expect(component.hasMissedSelection).toBeFalse();
+    expect(component.missedSelectionActive).toBeFalse();
+    expect(component.missedStartDraftText).toBe('0:00:00');
+  });
+
+  it('keeps chart selection growing leftward without inverting the range', () => {
+    component.detail = {
+      task_id: 'source',
+      room_id: '1',
+      source_media_id: 'source-media',
+      segments: [],
+      density_points: [{start_seconds: 0, end_seconds: 100, normalized: 0.5}],
+    } as any;
+    component.densityChart = {
+      nativeElement: {getBoundingClientRect: () => ({left: 0, width: 100})},
+    } as any;
+    component.beginChartSelect({clientX: 50, preventDefault() {}} as any);
+    expect(component.missedStartDraft).toBeCloseTo(50, 1);
+    expect(component.missedSelectionActive).toBeTrue();
+    component.onRangeDrag({clientX: 20} as any);
+    expect(component.missedStartDraft).toBeCloseTo(20, 1);
+    expect(component.missedEndDraft).toBeGreaterThan(component.missedStartDraft);
+    component.endRangeDrag();
+    expect(component.chartSelecting).toBeFalse();
+  });
+
   it('labels sample cards from real upload status instead of always generating', () => {
     expect(component.sampleThumbLabel({
       segment_id: 'p', judge_status: 'keep', upload_status: 'published',

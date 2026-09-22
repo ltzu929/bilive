@@ -96,6 +96,8 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   missedEndDraftText = '0:00:10';
   missedReason = 'mimo_missed';
   missedNote = '';
+  chartSelecting = false;
+  missedSelectionActive = false;
   subtitleFontName = 'Noto Sans SC';
   subtitleFontSize = 20;
   subtitleMarginV = 60;
@@ -895,9 +897,57 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
     this.dragMaxEnd = this.densityMaxEnd;
   }
 
+  beginChartSelect(event: PointerEvent): void {
+    if (!this.densityChart) return;
+    event.preventDefault();
+    const seconds = this.chartSecondsFromEvent(event);
+    this.chartSelecting = true;
+    this.missedSelectionActive = true;
+    this.missedStartDraft = seconds;
+    this.missedEndDraft = seconds + 0.1;
+    this.missedStartDraftText = this.formatTimecode(this.missedStartDraft);
+    this.missedEndDraftText = this.formatTimecode(this.missedEndDraft);
+    this.changeDetector.markForCheck();
+  }
+
+  private chartSecondsFromEvent(event: PointerEvent): number {
+    const bounds = this.densityChart!.nativeElement.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(bounds.width, 1)));
+    return ratio * this.densityMaxEnd;
+  }
+
+  get hasMissedSelection(): boolean {
+    return this.missedSelectionActive && this.missedEndDraft - this.missedStartDraft >= 1;
+  }
+
+  clearMissedSelection(): void {
+    this.chartSelecting = false;
+    this.missedSelectionActive = false;
+    this.missedStartDraft = 0;
+    this.missedEndDraft = 10;
+    this.missedStartDraftText = '0:00:00';
+    this.missedEndDraftText = '0:00:10';
+    this.missedNote = '';
+    this.changeDetector.markForCheck();
+  }
+
   @HostListener('document:pointermove', ['$event'])
   onRangeDrag(event: PointerEvent): void {
-    if (!this.dragBoundary || !this.densityChart) return;
+    if (!this.densityChart) return;
+    if (this.chartSelecting) {
+      const seconds = this.chartSecondsFromEvent(event);
+      if (seconds < this.missedStartDraft) {
+        this.missedEndDraft = this.missedStartDraft + 0.1;
+        this.missedStartDraft = seconds;
+      } else {
+        this.missedEndDraft = Math.max(seconds, this.missedStartDraft + 0.1);
+      }
+      this.missedStartDraftText = this.formatTimecode(this.missedStartDraft);
+      this.missedEndDraftText = this.formatTimecode(this.missedEndDraft);
+      this.changeDetector.markForCheck();
+      return;
+    }
+    if (!this.dragBoundary) return;
     const bounds = this.densityChart.nativeElement.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(bounds.width, 1)));
     this.updateRange(this.dragBoundary, ratio * this.dragMaxEnd);
@@ -906,6 +956,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   @HostListener('document:pointerup')
   endRangeDrag(): void {
     this.dragBoundary = null;
+    this.chartSelecting = false;
   }
 
   seekTo(seconds: number, video?: HTMLVideoElement): void {
@@ -1013,6 +1064,7 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
         }
         this.actionBusy = false;
         this.message.success('已记录漏切候选');
+        this.clearMissedSelection();
         this.loadDetail(this.selectedTaskId);
         this.changeDetector.markForCheck();
       },

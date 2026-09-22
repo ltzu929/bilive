@@ -424,6 +424,31 @@ h1 {
   pointer-events: none;
 }
 
+.missed-select-overlay {
+  fill: rgba(114, 46, 209, 0.22);
+  stroke: #722ed1;
+  stroke-width: 0.7;
+  stroke-dasharray: 1.2 0.8;
+  pointer-events: none;
+}
+
+.chart-missed-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed #b37feb;
+  border-radius: 6px;
+  background: #f9f0ff;
+  font-size: 12px;
+
+  select {
+    min-width: 120px;
+  }
+}
+
 .range-handle {
   fill: #096dd9;
   cursor: ew-resize;

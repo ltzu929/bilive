@@ -209,16 +209,29 @@
         <div class="panel-title">密度与候选窗 <span class="panel-meta">{{ detail ? recordingTitle(detail) : '选择场次' }}</span></div>
         <nz-spin [nzSpinning]="detailLoading">
           <div class="density-hero">
-            <svg #densityChart class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图">
+            <svg #densityChart class="density-chart" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="弹幕密度图" (pointerdown)="beginChartSelect($event)">
               <path class="density-area" [attr.d]="densityPath"></path>
               <ng-container *ngFor="let segment of detail?.segments || []">
-                <rect [attr.x]="densityX(segment.start_seconds || 0)" y="3" [attr.width]="densityWidth(segment.start_seconds || 0, segment.end_seconds || 0)" height="34" [ngClass]="densitySegmentClass(segment)" (click)="selectSegment(segment)"></rect>
+                <rect [attr.x]="densityX(segment.start_seconds || 0)" y="3" [attr.width]="densityWidth(segment.start_seconds || 0, segment.end_seconds || 0)" height="34" [ngClass]="densitySegmentClass(segment)" (pointerdown)="$event.stopPropagation()" (click)="selectSegment(segment); $event.stopPropagation()"></rect>
               </ng-container>
               <ng-container *ngIf="selectedSegment">
                 <rect class="selected-range-overlay" [attr.x]="densityX(startDraft)" y="1.5" [attr.width]="densityWidth(startDraft, endDraft)" height="37"></rect>
               </ng-container>
+              <rect *ngIf="hasMissedSelection" class="missed-select-overlay" [attr.x]="densityX(missedStartDraft)" y="1.5" [attr.width]="densityWidth(missedStartDraft, missedEndDraft)" height="37"></rect>
             </svg>
-            <div class="density-legend"><span>弹幕密度</span><span>候选区间可点击</span></div>
+            <div class="density-legend"><span>弹幕密度</span><span>拖拽框选可补标漏切</span></div>
+          </div>
+          <div class="chart-missed-panel" *ngIf="hasMissedSelection">
+            <strong>补标漏切</strong>
+            <span class="mono">{{ missedStartDraftText }} - {{ missedEndDraftText }}</span>
+            <select nz-input [(ngModel)]="missedReason" name="chartMissedReason">
+              <option value="mimo_missed">MiMo 漏切</option>
+              <option value="boundary_incomplete">边界不完整</option>
+              <option value="low_danmaku_signal">弹幕信号弱</option>
+              <option value="other">其他</option>
+            </select>
+            <button nz-button nzType="primary" nzSize="small" (click)="addMissedSegment()" [disabled]="actionBusy">生成人工候选</button>
+            <button nz-button nzSize="small" (click)="clearMissedSelection()">清除</button>
           </div>
           <div class="burst-cards">
             <div class="burst-card" *ngFor="let segment of detail?.segments || []">
