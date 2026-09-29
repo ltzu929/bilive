@@ -59,6 +59,7 @@ def test_load_remote_worker_config_reads_toml_command(tmp_path):
             "http://127.0.0.1:2235/api/worker/stop",
         ],
         wake_command=["schtasks.exe", "/Run", "/TN", "BiliveWorkerApi"],
+        force_stop_command=["schtasks.exe", "/End", "/TN", "BiliveWorkerApi"],
         timeout=8.0,
     )
 
@@ -452,3 +453,59 @@ def test_wake_remote_worker_decodes_windows_command_output_safely():
     assert result["status"] == "idle"
     assert calls[0][1]["encoding"] == "utf-8"
     assert calls[0][1]["errors"] == "replace"
+
+
+def test_wake_remote_worker_force_stops_zombie_task_and_restarts():
+    """A hung worker keeps the scheduled task Running, so /Run is refused.
+
+    Wake must clear the zombie with /End and start the task again.
+    """
+    calls = []
+    replies = iter(
+        [
+            Result(1, stderr="connection failed"),  # status unavailable
+            Result(1, stderr="ERROR: The task is currently running."),  # /Run
+            Result(0, stdout="SUCCESS: terminated"),  # /End
+            Result(0, stdout="SUCCESS"),  # /Run retry
+            Result(0, stdout='{"status":"idle","pending_tasks":0}'),  # status
+        ]
+    )
+    now = [0.0]
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return next(replies)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    config = RemoteWorkerConfig(
+        enabled=True,
+        command=["ssh", "win", "curl.exe", "run"],
+        status_command=["ssh", "win", "curl.exe", "status"],
+        wake_command=["ssh", "win", "schtasks.exe", "/Run", "/TN", "BiliveWorkerApi"],
+        force_stop_command=[
+            "ssh",
+            "win",
+            "schtasks.exe",
+            "/End",
+            "/TN",
+            "BiliveWorkerApi",
+        ],
+        timeout=8,
+        startup_timeout=30,
+        poll_interval=1,
+    )
+
+    result = wake_remote_worker(
+        config,
+        runner=run,
+        monotonic=lambda: now[0],
+        sleeper=sleep,
+    )
+
+    assert result["status"] == "idle"
+    assert calls[1] == config.wake_command
+    assert calls[2] == config.force_stop_command
+    assert calls[3] == config.wake_command
+    assert calls[4] == config.status_command

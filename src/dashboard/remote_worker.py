@@ -24,6 +24,7 @@ class RemoteWorkerConfig:
     status_command: list[str] = field(default_factory=list)
     stop_command: list[str] = field(default_factory=list)
     wake_command: list[str] = field(default_factory=list)
+    force_stop_command: list[str] = field(default_factory=list)
     timeout: float = DEFAULT_TIMEOUT
     stop_timeout: float = DEFAULT_STOP_TIMEOUT
     startup_timeout: float = 30.0
@@ -58,6 +59,12 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
         os.environ.get(
             "BILIVE_REMOTE_WORKER_WAKE_COMMAND",
             section.get("wake_command", []),
+        )
+    )
+    force_stop_command = _command_from_value(
+        os.environ.get(
+            "BILIVE_REMOTE_WORKER_FORCE_STOP_COMMAND",
+            section.get("force_stop_command", []),
         )
     )
     timeout = _as_timeout(
@@ -128,6 +135,11 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
             target,
             ["schtasks.exe", "/Run", "/TN", task_name],
         )
+    if should_build and task_name and not force_stop_command:
+        force_stop_command = _ssh_prefixed(
+            target,
+            ["schtasks.exe", "/End", "/TN", task_name],
+        )
 
     return RemoteWorkerConfig(
         enabled=enabled,
@@ -135,6 +147,7 @@ def load_remote_worker_config(config_path: str | Path | None = None) -> RemoteWo
         status_command=status_command,
         stop_command=stop_command,
         wake_command=wake_command,
+        force_stop_command=force_stop_command,
         timeout=timeout,
         stop_timeout=stop_timeout,
         startup_timeout=startup_timeout,
@@ -191,12 +204,49 @@ def wake_remote_worker(
             "message": str(exc),
         }
     if started.returncode != 0:
-        return {
-            "mode": "remote",
-            "enabled": True,
-            "status": "unavailable",
-            "message": (started.stderr or started.stdout or "").strip(),
-        }
+        # A hung worker keeps the scheduled task "Running", so /Run is
+        # refused. Clear the zombie once, then start again.
+        if not cfg.force_stop_command:
+            return {
+                "mode": "remote",
+                "enabled": True,
+                "status": "unavailable",
+                "message": (started.stderr or started.stdout or "").strip(),
+            }
+        try:
+            runner(
+                cfg.force_stop_command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=cfg.timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            started = runner(
+                cfg.wake_command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=cfg.timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                "mode": "remote",
+                "enabled": True,
+                "status": "unavailable",
+                "message": str(exc),
+            }
+        if started.returncode != 0:
+            return {
+                "mode": "remote",
+                "enabled": True,
+                "status": "unavailable",
+                "message": (started.stderr or started.stdout or "").strip(),
+            }
 
     deadline = monotonic() + cfg.startup_timeout
     while monotonic() < deadline:

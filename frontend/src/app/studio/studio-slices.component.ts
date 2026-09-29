@@ -1389,10 +1389,11 @@ export class StudioSlicesComponent implements OnInit, OnDestroy {
   }
 
   canConfirmNoContent(): boolean {
+    const state = String(this.detail?.review_state || '');
     return Boolean(
       this.detail &&
       !this.detail.segments?.length &&
-      this.detail.review_state === 'source_review' &&
+      (state === 'source_review' || state === 'unprocessed') &&
       this.canCompleteReview()
     );
   }

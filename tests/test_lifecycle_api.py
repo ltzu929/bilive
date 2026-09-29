@@ -3,20 +3,28 @@ from src.burn.task_history import write_task_history
 import pytest
 
 
-def _recording(videos_root, *, segments=None, room_dir="22384516", source_name=None):
+def _recording(
+    videos_root,
+    *,
+    segments=None,
+    room_dir="22384516",
+    source_name=None,
+    processed=True,
+):
     room = videos_root / room_dir
     room.mkdir(parents=True)
     name = source_name or "22384516_20260602-12-56-49.mp4"
     source = room / name
     source.write_bytes(b"source")
     source.with_suffix(".xml").write_text("<i/>", encoding="utf-8")
-    source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
-    write_task_history(
-        source,
-        status="done",
-        videos_root=videos_root,
-        segments=list(segments or []),
-    )
+    if processed:
+        source.with_suffix(".mp4.done").write_text("{}", encoding="utf-8")
+        write_task_history(
+            source,
+            status="done",
+            videos_root=videos_root,
+            segments=list(segments or []),
+        )
     return source
 
 
@@ -91,6 +99,37 @@ async def test_review_complete_trash_supports_named_room_directory(
     state = read_recording_state(videos, task_id)
     assert state["review_state"] == "trash_pending"
     assert state["room_id"] == "22384516"
+
+
+@pytest.mark.anyio
+async def test_unprocessed_recording_can_confirm_no_content_and_queue_trash(
+    tmp_path,
+    dashboard_client,
+):
+    """Unprocessed sources (no .done) can be recycled after explicit no-content."""
+    from src.dashboard.source_lifecycle import read_recording_state
+
+    videos = tmp_path / "Videos"
+    source = _recording(videos, processed=False)
+
+    async with dashboard_client(
+        videos,
+        remote_worker_trigger=lambda pending: {"status": "accepted"},
+    ) as client:
+        listing = await client.get("/api/source-recordings")
+        task_id = listing.json()[0]["task_id"]
+        completed = await client.post(
+            f"/api/source-recordings/{task_id}/review-complete",
+            json={"confirmed_no_content": True},
+        )
+
+    assert completed.status_code == 200
+    body = completed.json()
+    assert body["review_state"] == "trash_pending"
+    assert body["trash_job"]["status"] == "accepted"
+    assert source.with_suffix(".mp4.done").is_file()
+    state = read_recording_state(videos, task_id)
+    assert state["review_completion"]["confirmed_no_content"] is True
 
 
 @pytest.mark.anyio

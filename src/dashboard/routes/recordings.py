@@ -24,7 +24,7 @@ from src.dashboard.source_lifecycle import (
     set_trash_job_state,
 )
 from src.server.action_jobs import action_submission_lock
-from src.dashboard.task_state import resolve_task_id
+from src.dashboard.task_state import mark_done_task, resolve_task_id
 from src.server.action_jobs import SegmentActionConflict
 
 
@@ -237,11 +237,18 @@ def complete_source_review(
                 "status": "already_pending",
             }
         data = payload if isinstance(payload, dict) else {}
+        confirmed_no_content = data.get("confirmed_no_content") is True
         prepared = wb.prepare_source_review_completion(
             ctx.store.videos_root,
             task_id,
-            confirmed_no_content=data.get("confirmed_no_content") is True,
+            confirmed_no_content=confirmed_no_content,
         )
+        if confirmed_no_content and not prepared.get("segments"):
+            # Unprocessed sources have no .done marker yet; write one so the
+            # trash plan does not treat the recording as still mid-task.
+            source, _, _ = _recording_source(ctx, task_id)
+            if not source.with_suffix(".mp4.done").is_file():
+                mark_done_task(ctx.store.videos_root, task_id)
         trash = _queue_trash(ctx, task_id)
         prepared["trash_job"] = trash
         prepared["review_state"] = "trash_pending"
