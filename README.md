@@ -1,5 +1,9 @@
 # Bilive
 
+> 本项目已于 2026-10-02 停用并保存到 GitHub，仅作为历史源码与安装包归档。
+> 下方部署和运维说明保留供历史查阅，不代表当前运行状态；不要按旧步骤重新启用服务。
+> 退役范围与数据保留说明见 [退役记录](docs/retirement-2026-10-02.md)。
+
 ## Native Angular Studio
 
 The production browser entry is the upstream Angular/ng-zorro shell served by
